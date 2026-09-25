@@ -222,6 +222,7 @@ func (s *Store) UpsertMediaItem(m MediaItem) error {
 }
 
 // PutBlob 写入块文件并登记。
+// blob_id 在**明文**上校验；落盘的是密文（L4a′）；blobs.size 记明文长度。
 func (s *Store) PutBlob(blobID string, data []byte, itemID string, seq int) error {
 	if !protocol.IsBlobID(blobID) {
 		return fmt.Errorf("store: invalid blob id %q", blobID)
@@ -229,40 +230,61 @@ func (s *Store) PutBlob(blobID string, data []byte, itemID string, seq int) erro
 	if got := protocol.BlobID(data); got != blobID {
 		return fmt.Errorf("store: blob id mismatch: %s != %s", got, blobID)
 	}
+	enc, err := s.Encrypt(data)
+	if err != nil {
+		return fmt.Errorf("store: encrypt blob %s: %w", blobID, err)
+	}
 	p := s.BlobPath(blobID)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(p, data, 0o644); err != nil {
+	if err := os.WriteFile(p, enc, 0o644); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`INSERT INTO blobs(blob_id,size,item_id,seq,created_at) VALUES(?,?,?,?,?)
+	_, err = s.db.Exec(`INSERT INTO blobs(blob_id,size,item_id,seq,created_at) VALUES(?,?,?,?,?)
 		ON CONFLICT(blob_id) DO UPDATE SET item_id=excluded.item_id, seq=excluded.seq`,
 		blobID, int64(len(data)), itemID, seq, nowUTC())
 	return err
 }
 
-// HasBlob 返回块是否存在及其大小。
+// HasBlob 返回块是否存在及其**明文**大小。
+// size 必须取自 blobs 表：磁盘文件是密文，比明文多 28 字节（nonce 12 + tag 16），
+// 用 os.Stat 会让 HEAD /v1/blob/:id 的 Content-Length 多 28，改变既定接口语义。
 func (s *Store) HasBlob(blobID string) (bool, int64, error) {
 	if !protocol.IsBlobID(blobID) {
 		return false, 0, fmt.Errorf("store: invalid blob id %q", blobID)
 	}
-	fi, err := os.Stat(s.BlobPath(blobID))
-	if errors.Is(err, os.ErrNotExist) {
+	var size int64
+	err := s.db.QueryRow(`SELECT size FROM blobs WHERE blob_id=?`, blobID).Scan(&size)
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, 0, nil
 	}
 	if err != nil {
 		return false, 0, err
 	}
-	return true, fi.Size(), nil
+	if _, err := os.Stat(s.BlobPath(blobID)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, 0, nil
+		}
+		return false, 0, err
+	}
+	return true, size, nil
 }
 
-// GetBlobBytes 读取块文件内容。
+// GetBlobBytes 读取块文件并解密，返回明文。
 func (s *Store) GetBlobBytes(blobID string) ([]byte, error) {
 	if !protocol.IsBlobID(blobID) {
 		return nil, fmt.Errorf("store: invalid blob id %q", blobID)
 	}
-	return os.ReadFile(s.BlobPath(blobID))
+	raw, err := os.ReadFile(s.BlobPath(blobID))
+	if err != nil {
+		return nil, err
+	}
+	plain, err := s.Decrypt(raw)
+	if err != nil {
+		return nil, fmt.Errorf("store: decrypt blob %s: %w", blobID, err)
+	}
+	return plain, nil
 }
 
 // GetItem 读取目录条目。
