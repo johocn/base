@@ -20,14 +20,15 @@ type Options struct {
 
 // Server 是节点 HTTP 服务。
 type Server struct {
-	st  *store.Store
-	opt Options
-	pub string
+	st            *store.Store
+	opt           Options
+	pub           string
+	escrowLimiter *ipLimiter
 }
 
 // New 构造服务；配置了私钥时同时推导出公钥（用于 /v1/pubkey 与验签）。
 func New(st *store.Store, opt Options) (*Server, error) {
-	s := &Server{st: st, opt: opt}
+	s := &Server{st: st, opt: opt, escrowLimiter: newIPLimiter(10, 10)}
 	if opt.SignKeyHex != "" {
 		kp, err := protocol.KeyPairFromSeed(opt.SignKeyHex)
 		if err != nil {
