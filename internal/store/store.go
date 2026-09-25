@@ -171,12 +171,16 @@ func (s *Store) UpsertArticle(a Article) error {
 		a.ItemID, "article", "article", a.Title, a.SourceRev, a.ContentHash, "articles", "public", "active", updated); err != nil {
 		return fmt.Errorf("store: upsert item: %w", err)
 	}
+	bodyEnc, err := s.encText(a.BodyMD)
+	if err != nil {
+		return fmt.Errorf("store: encrypt body_md: %w", err)
+	}
 	if _, err := tx.Exec(`INSERT INTO articles(item_id,title,digest,published_at,tags_json,body_md,content_hash,source_rev)
 		VALUES(?,?,?,?,?,?,?,?)
 		ON CONFLICT(item_id) DO UPDATE SET
 			title=excluded.title, digest=excluded.digest, published_at=excluded.published_at,
 			tags_json=excluded.tags_json, body_md=excluded.body_md, content_hash=excluded.content_hash, source_rev=excluded.source_rev`,
-		a.ItemID, a.Title, a.Digest, a.PublishedAt, a.TagsJSON, a.BodyMD, a.ContentHash, a.SourceRev); err != nil {
+		a.ItemID, a.Title, a.Digest, a.PublishedAt, a.TagsJSON, bodyEnc, a.ContentHash, a.SourceRev); err != nil {
 		return fmt.Errorf("store: upsert article: %w", err)
 	}
 	return tx.Commit()
@@ -371,6 +375,11 @@ func (s *Store) GetArticle(itemID string) (Article, bool, error) {
 	if err != nil {
 		return Article{}, false, err
 	}
+	body, err := s.decText(a.BodyMD)
+	if err != nil {
+		return Article{}, false, fmt.Errorf("store: decrypt body_md %s: %w", itemID, err)
+	}
+	a.BodyMD = body
 	return a, true, nil
 }
 
@@ -395,6 +404,11 @@ func (s *Store) ListArticles(ids []string) (map[string]Article, error) {
 		if err := rows.Scan(&a.ItemID, &a.Title, &a.Digest, &a.PublishedAt, &a.TagsJSON, &a.BodyMD, &a.ContentHash, &a.SourceRev); err != nil {
 			return nil, err
 		}
+		body, err := s.decText(a.BodyMD)
+		if err != nil {
+			return nil, fmt.Errorf("store: decrypt body_md %s: %w", a.ItemID, err)
+		}
+		a.BodyMD = body
 		out[a.ItemID] = a
 	}
 	return out, rows.Err()
