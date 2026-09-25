@@ -1,0 +1,73 @@
+{
+  "cases": [
+    {
+      "content_version": 7,
+      "entries": 3,
+      "manifest": {
+        "pack_id": "96b69128d3b6ae074630227b46090bb8",
+        "schema_version": 1,
+        "issuer": "base-node-1",
+        "issued_at": "2026-01-02T03:04:05Z",
+        "content_version": 7,
+        "entries": [
+          {
+            "item_id": "article:demo-1",
+            "source": "article",
+            "type": "article",
+            "title": "演示一",
+            "source_rev": "rev-1",
+            "content_hash": "af7d2109429d7850f7ae542da6b0d83403846119fc160ed8060cc3814f676a48",
+            "sqlite_table": "articles",
+            "dist_class": "public"
+          },
+          {
+            "item_id": "article:demo-2",
+            "source": "article",
+            "type": "article",
+            "title": "演示二",
+            "source_rev": "rev-1",
+            "content_hash": "e85d3ded48b7d7bc97f293e71d0db9ffb01b4a523f71c3a33e0e3d806f456505",
+            "sqlite_table": "articles",
+            "dist_class": "public"
+          },
+          {
+            "item_id": "cover:demo-1",
+            "source": "article",
+            "type": "cover",
+            "title": "封面",
+            "source_rev": "rev-1",
+            "content_hash": "4eaad8ed6c82085cb8e9d91dbacb4f1e3d6d0cc252f6e6be60d461976dc5ee12",
+            "sqlite_table": "media_meta",
+            "chunks": [
+              {
+                "blob_id": "4eaad8ed6c82085cb8e9d91dbacb4f1e",
+                "size": 18,
+                "seq": 0
+              }
+            ],
+            "dist_class": "public"
+          }
+        ],
+        "tombstone": [
+          {
+            "item_id": "article:retired",
+            "revoked_rev": 2
+          }
+        ],
+        "merkle_root": "e9654d2f40a60e95b3118c11d8a1f3374769d3b7a3b8d46ebdc733a333254ecb",
+        "signature": "713688f809cda495741ecf214d02c803697acc596630d23e42bb483558df6fb64483c0feca4ef7d3976690e8edb7f039118283d8c479e0ee6c3f8e625af6a80b"
+      },
+      "manifest_sha256": "5151c4e2259058e9577ec2a4192425cd1b45ee65aaaa59827314e53d1b7fae56",
+      "merkle_root": "e9654d2f40a60e95b3118c11d8a1f3374769d3b7a3b8d46ebdc733a333254ecb",
+      "name": "sample_pack_v7",
+      "pack_id": "96b69128d3b6ae074630227b46090bb8",
+      "pack_sha256": "8852cbd874e13873d3806c6a511ec93f01bd6ec958f72fe241fd2ada94b81109",
+      "sign_bytes": "{\"content_version\":7,\"entries\":[{\"content_hash\":\"af7d2109429d7850f7ae542da6b0d83403846119fc160ed8060cc3814f676a48\",\"dist_class\":\"public\",\"item_id\":\"article:demo-1\",\"source\":\"article\",\"source_rev\":\"rev-1\",\"sqlite_table\":\"articles\",\"title\":\"演示一\",\"type\":\"article\"},{\"content_hash\":\"e85d3ded48b7d7bc97f293e71d0db9ffb01b4a523f71c3a33e0e3d806f456505\",\"dist_class\":\"public\",\"item_id\":\"article:demo-2\",\"source\":\"article\",\"source_rev\":\"rev-1\",\"sqlite_table\":\"articles\",\"title\":\"演示二\",\"type\":\"article\"},{\"chunks\":[{\"blob_id\":\"4eaad8ed6c82085cb8e9d91dbacb4f1e\",\"seq\":0,\"size\":18}],\"content_hash\":\"4eaad8ed6c82085cb8e9d91dbacb4f1e3d6d0cc252f6e6be60d461976dc5ee12\",\"dist_class\":\"public\",\"item_id\":\"cover:demo-1\",\"source\":\"article\",\"source_rev\":\"rev-1\",\"sqlite_table\":\"media_meta\",\"title\":\"封面\",\"type\":\"cover\"}],\"issued_at\":\"2026-01-02T03:04:05Z\",\"issuer\":\"base-node-1\",\"merkle_root\":\"e9654d2f40a60e95b3118c11d8a1f3374769d3b7a3b8d46ebdc733a333254ecb\",\"pack_id\":\"96b69128d3b6ae074630227b46090bb8\",\"schema_version\":1,\"tombstone\":[{\"item_id\":\"article:retired\",\"revoked_rev\":2}]}"
+    }
+  ],
+  "key": {
+    "pub_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "seed_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+  },
+  "version": 1
+}
