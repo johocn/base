@@ -1,0 +1,12 @@
+{
+  "name": "base",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/protocol-ts"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}
