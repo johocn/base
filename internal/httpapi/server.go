@@ -44,6 +44,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/pubkey", s.handlePubkey)
 	mux.HandleFunc("GET /v1/catalog", s.handleCatalog)
+	mux.HandleFunc("GET /v1/manifest/{pack_id}", s.handleManifest)
+	mux.HandleFunc("GET /v1/pack/{pack_id}", s.handlePack)
+	mux.HandleFunc("GET /v1/blob/{blob_id}", s.handleBlob)
+	mux.HandleFunc("HEAD /v1/blob/{blob_id}", s.handleBlobHead)
 	return withCommon(mux)
 }
 
