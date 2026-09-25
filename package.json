@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "workspaces": [
-    "packages/protocol-ts"
+    "packages/protocol-ts",
+    "apps/mobile"
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",
