@@ -5,6 +5,10 @@
       "style": { "navigationBarTitleText": "内容" }
     },
     {
+      "path": "pages/article/article",
+      "style": { "navigationBarTitleText": "文章" }
+    },
+    {
       "path": "pages/setting/setting",
       "style": { "navigationBarTitleText": "设置" }
     }
