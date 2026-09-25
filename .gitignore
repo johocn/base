@@ -1,0 +1,7 @@
+data/
+dist/
+node_modules/
+*.exe
+*.tmp.sqlite
+apps/mobile/unpackage/
+apps/mobile/dist/
