@@ -1,15 +1,21 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bytesToHex } from "@noble/hashes/utils";
 import { describe, expect, it } from "vitest";
 
 import {
+  ALG_ED25519,
   blobId,
   canonicalize,
+  deriveIdentityId,
   derivePackId,
+  emptyBodySha256,
+  isIdentityId,
   keyPairFromSeed,
   manifestBlobIds,
   merkleRoot,
+  requestSignBytes,
   sha256Hex,
   sign,
   signBytes,
@@ -115,5 +121,66 @@ describe("manifest.json", () => {
     const bad = JSON.parse(JSON.stringify(c.manifest)) as Manifest;
     bad.entries[0].title = "被改";
     expect(verifyManifest(bad, load("manifest.json").key.pub_hex)).toBe(false);
+  });
+});
+
+describe("identity.json", () => {
+  const f = load("identity.json");
+  it("version 与用例数", () => {
+    expect(f.version).toBe(1);
+    expect(f.cases.length).toBeGreaterThanOrEqual(2);
+  });
+  for (const c of f.cases) {
+    it(c.name, () => {
+      expect(keyPairFromSeed(c.seed_hex).pubHex).toBe(c.pub_hex);
+      expect(c.alg).toBe(ALG_ED25519);
+      expect(deriveIdentityId(c.pub_hex)).toBe(c.id);
+      expect(isIdentityId(c.id)).toBe(true);
+    });
+  }
+  it("大小写归一 + 拒绝非法长度", () => {
+    const c = f.cases[0];
+    expect(deriveIdentityId(c.pub_hex.toUpperCase())).toBe(c.id);
+    expect(() => deriveIdentityId("9d61b19d")).toThrow(/32 字节公钥/);
+    expect(isIdentityId(c.id + "0")).toBe(false);
+    expect(isIdentityId(c.id.toUpperCase())).toBe(false);
+  });
+});
+
+describe("reqsig.json", () => {
+  const f = load("reqsig.json");
+  it("version、用例数与密钥", () => {
+    expect(f.version).toBe(1);
+    expect(f.cases.length).toBeGreaterThanOrEqual(2);
+    expect(keyPairFromSeed(f.seed_hex).pubHex).toBe(f.pub_hex);
+  });
+  for (const c of f.cases) {
+    it(c.name, () => {
+      const bytes = requestSignBytes({
+        method: c.method,
+        path: c.path,
+        query: c.query,
+        bodySha256: c.body_sha256,
+        ts: c.ts,
+        nonce: c.nonce,
+      });
+      expect(bytesToHex(bytes)).toBe(bytesToHex(utf8(c.sign_bytes)));
+      expect(verify(f.pub_hex, bytes, c.signature_hex)).toBe(true);
+    });
+  }
+  it("无请求体的固定 body_sha256", () => {
+    expect(emptyBodySha256()).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  });
+  it("篡改任一字段后签名不再成立", () => {
+    const c = f.cases[0];
+    const bytes = requestSignBytes({
+      method: c.method,
+      path: c.path,
+      query: c.query,
+      bodySha256: c.body_sha256,
+      ts: c.ts,
+      nonce: "ffffffffffffffffffffffffffffffff",
+    });
+    expect(verify(f.pub_hex, bytes, c.signature_hex)).toBe(false);
   });
 });
