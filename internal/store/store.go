@@ -1,6 +1,7 @@
 package store
 
 import (
+	"crypto/cipher"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -21,8 +22,11 @@ const (
 
 // Store 是内容库（SQLite + 块文件目录）访问层。
 type Store struct {
-	db      *sql.DB
-	dataDir string
+	db           *sql.DB
+	dataDir      string
+	storeKey     []byte
+	storeKeyPath string
+	aead         cipher.AEAD
 }
 
 // Item 是目录条目（catalog 的数据来源）。
@@ -89,12 +93,29 @@ type PackRecord struct {
 }
 
 // Open 打开/创建数据目录下的内容库。
-func Open(dataDir string) (*Store, error) {
+func Open(dataDir string, opts ...Option) (*Store, error) {
+	cfg := openConfig{}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(&cfg); err != nil {
+			return nil, err
+		}
+	}
 	if err := os.MkdirAll(filepath.Join(dataDir, "blobs"), 0o755); err != nil {
 		return nil, fmt.Errorf("store: mkdir blobs: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Join(dataDir, "packs"), 0o755); err != nil {
 		return nil, fmt.Errorf("store: mkdir packs: %w", err)
+	}
+	key, keyPath, err := loadStoreKey(dataDir, cfg)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := newAEAD(key)
+	if err != nil {
+		return nil, err
 	}
 	dbPath := filepath.Join(dataDir, "base.db")
 	dsn := "file:" + filepath.ToSlash(dbPath) + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
@@ -103,7 +124,7 @@ func Open(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	st := &Store{db: db, dataDir: dataDir}
+	st := &Store{db: db, dataDir: dataDir, storeKey: key, storeKeyPath: keyPath, aead: aead}
 	for _, stmt := range schemaStatements {
 		if _, err := db.Exec(stmt); err != nil {
 			_ = db.Close()

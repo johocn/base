@@ -8,7 +8,7 @@ import (
 
 func openTemp(t *testing.T) *Store {
 	t.Helper()
-	st, err := Open(t.TempDir())
+	st, err := Open(t.TempDir(), WithStoreKey(testKeyHex))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
