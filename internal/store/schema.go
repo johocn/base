@@ -106,4 +106,13 @@ var schemaStatements = []string{
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_auth_nonces_seen_at ON auth_nonces(seen_at)`,
+
+	`CREATE TABLE IF NOT EXISTS events(
+		event_id    TEXT PRIMARY KEY,
+		id          TEXT NOT NULL,
+		type        TEXT NOT NULL,
+		body_json   TEXT NOT NULL,
+		created_at  INTEGER NOT NULL,
+		received_at INTEGER NOT NULL
+	)`,
 }
