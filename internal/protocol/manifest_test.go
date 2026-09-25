@@ -132,6 +132,7 @@ func TestManifestJSONOmitsEmptyChunks(t *testing.T) {
 	}
 	imgOnly := m
 	imgOnly.Entries = []Entry{m.Entries[0]}
+	imgOnly.Tombstone = nil
 	raw, err = json.Marshal(imgOnly)
 	if err != nil {
 		t.Fatal(err)
