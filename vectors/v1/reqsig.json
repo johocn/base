@@ -1,0 +1,29 @@
+{
+  "cases": [
+    {
+      "name": "get_me_no_body",
+      "method": "GET",
+      "path": "/v1/me",
+      "query": "",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ts": 1790000000000,
+      "nonce": "00112233445566778899aabbccddeeff",
+      "sign_bytes": "{\"body_sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"method\":\"GET\",\"nonce\":\"00112233445566778899aabbccddeeff\",\"path\":\"/v1/me\",\"query\":\"\",\"ts\":1790000000000}",
+      "signature_hex": "4ecfffcd67d05aa2c73d0da8c241829d340ce1faa13bc24f02d79395f907841ea675fa078bfdfbd362e10fd134e63c850db4d465373bfb1a1b28a93000424205"
+    },
+    {
+      "name": "put_escrow_with_query_and_body",
+      "method": "PUT",
+      "path": "/v1/identity/escrow/alice",
+      "query": "force=1",
+      "body_sha256": "957865b8d8171e35547063457c27c3127ee6c921446420c3bb4801b5f6ab2b7d",
+      "ts": 1790000000123,
+      "nonce": "ffeeddccbbaa99887766554433221100",
+      "sign_bytes": "{\"body_sha256\":\"957865b8d8171e35547063457c27c3127ee6c921446420c3bb4801b5f6ab2b7d\",\"method\":\"PUT\",\"nonce\":\"ffeeddccbbaa99887766554433221100\",\"path\":\"/v1/identity/escrow/alice\",\"query\":\"force=1\",\"ts\":1790000000123}",
+      "signature_hex": "cd687210778ee332891cd9cd6fa605760dd19d7b1e83c0d720864e2a0d3bbdc0c1cd2055b422ea1f791b38ebcc70966a00af1332d839ae733ab72c6c7aef9e01"
+    }
+  ],
+  "pub_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+  "seed_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+  "version": 1
+}

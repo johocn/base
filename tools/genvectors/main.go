@@ -32,6 +32,9 @@ func main() {
 	if err := writeIdentity(*out); err != nil {
 		fail(err)
 	}
+	if err := writeRequestSig(*out); err != nil {
+		fail(err)
+	}
 }
 
 func writeMerkle(out string) error {
@@ -169,6 +172,59 @@ func writeIdentity(out string) error {
 		})
 	}
 	return writeJSON(filepath.Join(out, "identity.json"), map[string]any{"version": 1, "cases": cases})
+}
+
+// writeRequestSig 产出请求签名黄金向量：固定请求元组 → 期望待签字节 + 期望签名。
+func writeRequestSig(out string) error {
+	kp, err := protocol.KeyPairFromSeed(testSeed)
+	if err != nil {
+		return err
+	}
+	type reqCase struct {
+		Name         string `json:"name"`
+		Method       string `json:"method"`
+		Path         string `json:"path"`
+		Query        string `json:"query"`
+		BodySHA256   string `json:"body_sha256"`
+		TS           int64  `json:"ts"`
+		Nonce        string `json:"nonce"`
+		SignBytes    string `json:"sign_bytes"`
+		SignatureHex string `json:"signature_hex"`
+	}
+	metas := []struct {
+		name string
+		m    protocol.RequestMeta
+	}{
+		{"get_me_no_body", protocol.RequestMeta{
+			Method: "GET", Path: "/v1/me", Query: "",
+			BodySHA256: protocol.EmptyBodySHA256(),
+			TS:         1790000000000, Nonce: "00112233445566778899aabbccddeeff",
+		}},
+		{"put_escrow_with_query_and_body", protocol.RequestMeta{
+			Method: "PUT", Path: "/v1/identity/escrow/alice", Query: "force=1",
+			BodySHA256: protocol.SHA256Hex([]byte(`{"id":"aa"}`)),
+			TS:         1790000000123, Nonce: "ffeeddccbbaa99887766554433221100",
+		}},
+	}
+	cases := make([]reqCase, 0, len(metas))
+	for _, it := range metas {
+		sb, err := protocol.RequestSignBytes(it.m)
+		if err != nil {
+			return err
+		}
+		sig, err := protocol.Sign(testSeed, sb)
+		if err != nil {
+			return err
+		}
+		cases = append(cases, reqCase{
+			Name: it.name, Method: it.m.Method, Path: it.m.Path, Query: it.m.Query,
+			BodySHA256: it.m.BodySHA256, TS: it.m.TS, Nonce: it.m.Nonce,
+			SignBytes: string(sb), SignatureHex: sig,
+		})
+	}
+	return writeJSON(filepath.Join(out, "reqsig.json"), map[string]any{
+		"version": 1, "seed_hex": kp.SeedHex, "pub_hex": kp.PubHex, "cases": cases,
+	})
 }
 
 func writeJSON(path string, doc any) error {
