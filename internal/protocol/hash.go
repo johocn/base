@@ -22,12 +22,15 @@ func BlobID(b []byte) string {
 }
 
 // IsBlobID 校验 id 是否为合法的 32 字符小写十六进制。
-func IsBlobID(id string) bool {
-	if len(id) != 32 {
+func IsBlobID(id string) bool { return isHex32(id) }
+
+// isHex32 判断 s 是否为 32 字符小写十六进制；blob_id 与身份 id 共用同一形状约束。
+func isHex32(s string) bool {
+	if len(s) != 32 {
 		return false
 	}
-	for i := 0; i < len(id); i++ {
-		c := id[i]
+	for i := 0; i < len(s); i++ {
+		c := s[i]
 		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') {
 			continue
 		}

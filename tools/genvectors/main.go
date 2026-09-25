@@ -29,6 +29,9 @@ func main() {
 	if err := writeManifest(*out); err != nil {
 		fail(err)
 	}
+	if err := writeIdentity(*out); err != nil {
+		fail(err)
+	}
 }
 
 func writeMerkle(out string) error {
@@ -136,6 +139,36 @@ func writeManifest(out string) error {
 		"key": map[string]any{"seed_hex": testSeed, "pub_hex": kp.PubHex},
 		"cases": []any{case0},
 	})
+}
+
+// writeIdentity 产出身份 id 黄金向量：固定种子 → 期望公钥 → 期望 id。
+func writeIdentity(out string) error {
+	seeds := []struct{ name, seed string }{
+		{"rfc8032_test1", testSeed},
+		{"second_key", "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7"},
+	}
+	type identityCase struct {
+		Name    string `json:"name"`
+		SeedHex string `json:"seed_hex"`
+		PubHex  string `json:"pub_hex"`
+		Alg     string `json:"alg"`
+		ID      string `json:"id"`
+	}
+	cases := make([]identityCase, 0, len(seeds))
+	for _, s := range seeds {
+		kp, err := protocol.KeyPairFromSeed(s.seed)
+		if err != nil {
+			return err
+		}
+		id, err := protocol.IdentityID(kp.PubHex)
+		if err != nil {
+			return err
+		}
+		cases = append(cases, identityCase{
+			Name: s.name, SeedHex: kp.SeedHex, PubHex: kp.PubHex, Alg: protocol.AlgEd25519, ID: id,
+		})
+	}
+	return writeJSON(filepath.Join(out, "identity.json"), map[string]any{"version": 1, "cases": cases})
 }
 
 func writeJSON(path string, doc any) error {

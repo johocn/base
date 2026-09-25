@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "name": "rfc8032_test1",
+      "seed_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+      "pub_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "alg": "ed25519",
+      "id": "21fe31dfa154a261626bf854046fd227"
+    },
+    {
+      "name": "second_key",
+      "seed_hex": "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+      "pub_hex": "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+      "alg": "ed25519",
+      "id": "dac073e0123bdea59dd9b3bda9cf6037"
+    }
+  ],
+  "version": 1
+}
