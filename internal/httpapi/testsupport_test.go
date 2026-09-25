@@ -46,6 +46,11 @@ func (inprocTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if h == nil {
 		return nil, fmt.Errorf("测试未登记的进程内节点: %s", req.URL.Host)
 	}
+	// 真实 server 里 r.Body 恒非 nil（无体请求为 http.NoBody）；客户端请求可能是 nil。
+	// 这里补齐，使中间件「读体算 body_sha256」的行为与线上一致。
+	if req.Body == nil {
+		req.Body = http.NoBody
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec.Result(), nil
