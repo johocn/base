@@ -15,7 +15,7 @@
 | 事实 | 结论 |
 |---|---|
 | Go 工具链 | 已安装；`GOPROXY=https://goproxy.cn,direct` |
-| **第三方网络过滤驱动** | 会拦截 `%TEMP%\go-build*` 与 `dist` 下**新复制**的可执行文件。凡依赖回环 HTTP 的测试，必须先 `go test -c -o dist/<name>.exe` 再执行该 exe；直接在 `go test` 里跑 httptest 可能被拦 |
+| **本机同进程回环 TCP 不可用（2026-09-26 实测）** | Go **同进程** listen+dial 100% 超时（`127.0.0.1` / `0.0.0.0` / `::1` 均试过，报 `connectex ... did not properly respond`）；**跨进程**正常（两个独立 exe 互连 OK）；PowerShell 同进程正常；Go 无外网。故 `httptest.NewServer`（服务端与客户端同进程）在本机不可用，且 `go test -c -o dist/x.exe` 另存再跑**同样无效（已证伪）**。**所有 HTTP 测试一律 socket-free**：见 Task 0 的进程内分发基建；TLS 握手断言用 `net.Pipe()` + `tls.Server`/`tls.Client` |
 | `.ps1` 含中文 | 必须带 UTF-8 BOM |
 | `data/` 现状 | 仓库内只有 `data/packs/*/manifest.json`；**没有** `data/base.db` 与 `data/blobs/` → L4a′ 上线无历史明文迁移负担 |
 | `internal/store` 现有表 | `meta` / `items` / `articles` / `segments` / `quizzes` / `media_meta` / `blobs` / `packs` / `tombstones` |
@@ -125,6 +125,7 @@
 ## 任务依赖顺序
 
 ```
+Task 0（测试去 socket 化，让基线转绿——所有后续 Task 的前置）
 Task 1（TLS spike，阻塞 Task 12 的最终形态）
 Task 2 → Task 3 → Task 4        （协议层，双实现对齐）
 Task 5 → Task 6 → Task 7 → Task 8  （存储层）
@@ -135,6 +136,119 @@ Task 15                          （端到端验收与文档回填）
 ```
 
 Task 1 可与 Task 2-11 并行；Task 12 必须等 Task 1 结论。
+---
+
+## Task 0: 测试去 socket 化（前置基建，先让基线转绿）
+
+**为什么必须先做：** 本机 Go 无法完成**同进程回环 TCP**（见「已核实的环境事实」），而 `internal/httpapi` 与 `tools/migrate` 的测试全部是 `httptest.NewServer`（服务端与客户端在同一进程）。当前 `go test ./...` 有 11 个测试是红的，且**在本计划动手之前就是红的**。不先修掉，后续每个 Task 的「跑测试」步骤都没有可信基线，无法区分「新代码写坏了」与「基线本来就红」。
+
+**做法：** **不动 29 处调用点**，只在两处替换默认传输——把 `http.DefaultTransport` 换成一个按 Host 查表、直接调用 handler 的进程内 `RoundTripper`。请求不再经过 socket，`ts.URL` 继续当普通字符串使用，所有既有断言（状态码、响应头、body、Content-Length、CORS 预检、HEAD 无 body）语义全部不变。
+
+**Files:**
+- Create: `internal/httpapi/testsupport_test.go`
+- Create: `tools/migrate/testsupport_test.go`
+- Modify: `internal/httpapi/httpapi_test.go:65,77,128`（helper 返回类型 + 2 处建服务）
+- Modify: `internal/httpapi/web_test.go:95`（1 处建服务）
+- Modify: `tools/migrate/strapi_test.go:56,142`（2 处建服务）
+
+- [ ] **Step 1: 建进程内分发基建（httpapi）**
+
+新建 `internal/httpapi/testsupport_test.go`：
+
+```go
+package httpapi
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+)
+
+// 本机 Go 无法完成同进程回环 TCP（listen 与 dial 在同一进程内 100% 超时，
+// 跨进程正常；见计划「已核实的环境事实」），故 httptest.NewServer 在本机不可用。
+// 这里把默认传输换成进程内分发：请求按 Host 查表直接送进 handler，不经过 socket。
+// 调用点继续把 inprocServer.URL 当普通字符串拼接，断言逻辑不变。
+func init() {
+	http.DefaultTransport = inprocTransport{}
+}
+
+// inprocServer 是 httptest.Server 的进程内替代物：只提供 URL 与 Close。
+type inprocServer struct {
+	URL string
+}
+
+func (s *inprocServer) Close() {}
+
+var (
+	inprocMu    sync.Mutex
+	inprocTable = map[string]http.Handler{}
+	inprocSeq   int
+)
+
+func newInprocServer(h http.Handler) *inprocServer {
+	inprocMu.Lock()
+	inprocSeq++
+	host := fmt.Sprintf("node-%d.test", inprocSeq)
+	inprocTable[host] = h
+	inprocMu.Unlock()
+	return &inprocServer{URL: "http://" + host}
+}
+
+type inprocTransport struct{}
+
+func (inprocTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	inprocMu.Lock()
+	h := inprocTable[req.URL.Host]
+	inprocMu.Unlock()
+	if h == nil {
+		return nil, fmt.Errorf("测试未登记的进程内节点: %s", req.URL.Host)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Result(), nil
+}
+```
+
+- [ ] **Step 2: 改 `internal/httpapi` 的 3 处建服务**
+
+`httpapi_test.go` 第 65 行 helper 签名改为：
+
+```go
+func newTestServer(t *testing.T) (*store.Store, packexport.Result, *inprocServer) {
+```
+
+`httpapi_test.go` 第 77 行、第 128 行，以及 `web_test.go` 第 95 行：
+
+```go
+	ts := newInprocServer(srv.Handler())
+```
+
+`t.Cleanup(ts.Close)` 不用改（`*inprocServer` 有 `Close()` 方法）。这两个文件里的 `"net/http/httptest"` 导入随之不再被使用，删掉该导入行。
+
+- [ ] **Step 3: 跑 httpapi 测试**
+
+Run: `go test ./internal/httpapi/ -count=1`
+Expected: 全部 PASS（改动前有 9 个 FAIL）
+
+- [ ] **Step 4: 建进程内分发基建（migrate）**
+
+新建 `tools/migrate/testsupport_test.go`，内容与 Step 1 同构，仅 `package` 改为 `main`；`strapi_test.go` 第 56、142 行的 `httptest.NewServer(...)` 改为 `newInprocServer(...)`，并删掉 `strapi_test.go` 中不再使用的 `"net/http/httptest"` 导入。
+
+`Options{BaseURL: srv.URL}` 不必改：`Run` 内部自建 `http.Client`，其 `Transport` 为 nil → 走 `http.DefaultTransport`，已被替换为进程内分发。
+
+- [ ] **Step 5: 全仓库转绿**
+
+Run: `go test ./... -count=1`
+Expected: 全部 `ok`（改动前 `internal/httpapi` 与 `tools/migrate` 为 FAIL）
+
+- [ ] **Step 6: 提交**
+
+```bash
+git -C e:/code/base add internal/httpapi/testsupport_test.go internal/httpapi/httpapi_test.go internal/httpapi/web_test.go tools/migrate/testsupport_test.go tools/migrate/strapi_test.go
+git -C e:/code/base commit -m "test: 测试改走进程内分发，绕开本机同进程回环 TCP 限制"
+```
+
 ---
 
 ## Task 1: 客户端自签 TLS 可行性 spike（风险前置，阻塞 Task 12 最终形态）
