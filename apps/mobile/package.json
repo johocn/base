@@ -6,6 +6,7 @@
     "dev:h5": "uni",
     "build:h5": "uni build",
     "build:app": "uni build -p app",
+    "dev:app": "uni -p app",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
