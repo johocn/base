@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "empty",
+      "input_utf8": "",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "blob_id": "e3b0c44298fc1c149afbf4c8996fb924"
+    },
+    {
+      "name": "hello",
+      "input_utf8": "hello",
+      "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+      "blob_id": "2cf24dba5fb0a30e26e83b2ac5b9e29e"
+    },
+    {
+      "name": "abc",
+      "input_utf8": "abc",
+      "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      "blob_id": "ba7816bf8f01cfea414140de5dae2223"
+    },
+    {
+      "name": "chinese",
+      "input_utf8": "分布式学习系统",
+      "sha256": "85803cdcabee08bdaf7f30d347a1911242a37dea29ffc18352ffa37beb703a50",
+      "blob_id": "85803cdcabee08bdaf7f30d347a19112"
+    }
+  ]
+}
