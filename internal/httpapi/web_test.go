@@ -3,7 +3,6 @@ package httpapi
 import (
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -92,7 +91,7 @@ func TestArticlePageEscapesHTML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("httpapi.New: %v", err)
 	}
-	ts := httptest.NewServer(srv.Handler())
+	ts := newInprocServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
 	code, body := getText(t, ts.URL+"/a/article:evil")

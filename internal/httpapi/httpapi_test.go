@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -62,7 +61,7 @@ func seedStore(t *testing.T, st *store.Store) packexport.Result {
 	return res
 }
 
-func newTestServer(t *testing.T) (*store.Store, packexport.Result, *httptest.Server) {
+func newTestServer(t *testing.T) (*store.Store, packexport.Result, *inprocServer) {
 	t.Helper()
 	st, err := store.Open(t.TempDir())
 	if err != nil {
@@ -74,7 +73,7 @@ func newTestServer(t *testing.T) (*store.Store, packexport.Result, *httptest.Ser
 	if err != nil {
 		t.Fatalf("httpapi.New: %v", err)
 	}
-	ts := httptest.NewServer(srv.Handler())
+	ts := newInprocServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return st, res, ts
 }
@@ -125,7 +124,7 @@ func TestPubkeyAbsentOnDistributionNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(srv.Handler())
+	ts := newInprocServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	resp, err := http.Get(ts.URL + "/v1/pubkey")
 	if err != nil {

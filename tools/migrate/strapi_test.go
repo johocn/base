@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -14,7 +13,7 @@ import (
 var pngBytes = []byte("\x89PNG\r\n\x1a\n0123456789")
 
 // fixture 同时覆盖两种响应形态：列表为裸数组，详情为 {data:{...}} 包裹。
-func newFixture(t *testing.T) *httptest.Server {
+func newFixture(t *testing.T) *inprocServer {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/zhao-website/v1/articles", func(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +52,7 @@ func newFixture(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(pngBytes)
 	})
-	srv := httptest.NewServer(mux)
+	srv := newInprocServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -139,7 +138,7 @@ func TestRunRequiresBaseURL(t *testing.T) {
 }
 
 func TestRunEmptySourceIsSuccess(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newInprocServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte("[]"))
 	}))
