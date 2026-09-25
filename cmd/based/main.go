@@ -18,6 +18,8 @@ func main() {
 		fmt.Println("based " + version)
 	case "import-md":
 		must(runImportMD(args[1:]))
+	case "export":
+		must(runExport(args[1:]))
 	default:
 		usage()
 		os.Exit(2)
@@ -25,7 +27,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: based <version|import-md> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: based <version|import-md|export> [flags]")
 }
 
 func must(err error) {
