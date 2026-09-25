@@ -3,6 +3,7 @@ package store
 // schemaStatements 是内容库的建表语句（按序执行，幂等）。
 // 注意：pack.sqlite 只用其中 articles/segments/quizzes/media_meta/meta 五张表，
 // 导出侧在 internal/packexport 里有同样的五张表 DDL（列顺序必须一致）。
+// escrow.priv_cipher 是客户端密文，节点只存不解释（不派生密钥、不解密、不校验密码）。
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 
@@ -77,4 +78,32 @@ var schemaStatements = []string{
 		item_id     TEXT PRIMARY KEY,
 		revoked_rev INTEGER NOT NULL
 	)`,
+
+	`CREATE TABLE IF NOT EXISTS identities(
+		id           TEXT PRIMARY KEY,
+		alg          TEXT NOT NULL,
+		pubkey       TEXT NOT NULL,
+		created_at   INTEGER NOT NULL,
+		last_seen_at INTEGER NOT NULL DEFAULT 0
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS escrow(
+		username    TEXT PRIMARY KEY,
+		id          TEXT NOT NULL,
+		alg         TEXT NOT NULL,
+		salt        TEXT NOT NULL,
+		kdf_json    TEXT NOT NULL,
+		enc_nonce   TEXT NOT NULL,
+		priv_cipher TEXT NOT NULL,
+		updated_at  INTEGER NOT NULL
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS auth_nonces(
+		id      TEXT NOT NULL,
+		nonce   TEXT NOT NULL,
+		seen_at INTEGER NOT NULL,
+		PRIMARY KEY(id, nonce)
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_auth_nonces_seen_at ON auth_nonces(seen_at)`,
 }
