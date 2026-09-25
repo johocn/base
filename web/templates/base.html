@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<style>
+:root { color-scheme: light dark; }
+body { margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; line-height: 1.75; }
+header { padding: 14px 18px; border-bottom: 1px solid #e5e5e5; font-weight: 600; }
+header a { text-decoration: none; color: inherit; }
+main { max-width: 720px; margin: 0 auto; padding: 18px; }
+ul.items { list-style: none; padding: 0; margin: 0; }
+ul.items li { padding: 12px 0; border-bottom: 1px solid #eee; }
+ul.items a { text-decoration: none; font-size: 17px; }
+.meta { color: #888; font-size: 13px; }
+.tag { display: inline-block; font-size: 12px; color: #666; border: 1px solid #ddd; border-radius: 10px; padding: 0 8px; margin-left: 6px; }
+.cover img { max-width: 100%; border-radius: 8px; }
+footer { padding: 18px; text-align: center; color: #999; font-size: 12px; }
+</style>
+</head>
+<body>
+<header><a href="/">base · 分布式学习节点</a></header>
+<main>{{template "content" .}}</main>
+<footer>{{.Issuer}} · 匿名可读 · 内容可自由复制分发</footer>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{{define "content"}}
+<h1>内容目录</h1>
+{{if .Items}}
+<ul class="items">
+{{range .Items}}
+	<li>
+		<a href="/a/{{.ItemID}}">{{.Title}}</a>
+		<div class="meta">{{.ItemID}} · {{.Type}} · {{.Rev}}</div>
+	</li>
+{{end}}
+</ul>
+{{else}}
+<p>暂无公开内容。</p>
+{{end}}
+{{end}}
