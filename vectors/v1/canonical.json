@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "cases": [
+    { "name": "empty_object", "input": {}, "expected": "{}" },
+    { "name": "empty_array", "input": [], "expected": "[]" },
+    { "name": "key_order", "input": { "b": 1, "a": "x", "c": true }, "expected": "{\"a\":\"x\",\"b\":1,\"c\":true}" },
+    { "name": "nested", "input": { "z": [3, 2, 1], "a": { "y": null, "x": "" } }, "expected": "{\"a\":{\"x\":\"\",\"y\":null},\"z\":[3,2,1]}" },
+    { "name": "escapes", "input": { "s": "line\n\ttab\"quote\\slash" }, "expected": "{\"s\":\"line\\n\\ttab\\\"quote\\\\slash\"}" },
+    { "name": "control_chars", "input": { "s": "\u0001\u001f\u0008\u000c\u000d" }, "expected": "{\"s\":\"\\u0001\\u001f\\b\\f\\r\"}" },
+    { "name": "unicode_raw", "input": { "s": "中文 😀 é" }, "expected": "{\"s\":\"中文 😀 é\"}" },
+    { "name": "minus_zero", "input": { "n": -0, "m": -12 }, "expected": "{\"m\":-12,\"n\":0}" },
+    { "name": "empty_key", "input": { "": 1 }, "expected": "{\"\":1}" },
+    { "name": "deep", "input": { "a": [{ "b": [1, { "c": 2 }] }] }, "expected": "{\"a\":[{\"b\":[1,{\"c\":2}]}]}" }
+  ]
+}
