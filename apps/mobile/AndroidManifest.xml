@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  F1（总纲 §12.2）：客户端↔节点走明文 HTTP。Android 9+（API 28）起系统默认封锁明文流量，
+  不放行则 http://<节点 IP> 的请求会被直接拒绝（CLEARTEXT communication to ... not permitted）。
+  本文件由 HBuilderX **云端打包**时与默认清单合并（CLI 构建不参与），故必须放在 HBuilderX 打开的
+  项目根目录（apps/mobile），而不是 src/ 或 dist/。package 需与云打包的 Android 包名一致
+  （见 src/manifest.json 的 app-plus.distribute.android.packagename）。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.johocn.base">
+    <application
+        android:usesCleartextTraffic="true"
+        tools:replace="android:usesCleartextTraffic" />
+</manifest>

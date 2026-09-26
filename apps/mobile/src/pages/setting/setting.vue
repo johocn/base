@@ -3,7 +3,7 @@
     <text class="title">节点设置</text>
     <view class="field">
       <text class="label">节点地址</text>
-      <input v-model="baseUrl" class="input" placeholder="https://node.example.com" />
+      <input v-model="baseUrl" class="input" placeholder="http://118.190.217.242" />
     </view>
     <view class="field">
       <text class="label">节点公钥（hex64）</text>
