@@ -17,10 +17,13 @@ ul.items a { text-decoration: none; font-size: 17px; }
 .tag { display: inline-block; font-size: 12px; color: #666; border: 1px solid #ddd; border-radius: 10px; padding: 0 8px; margin-left: 6px; }
 .cover img { max-width: 100%; border-radius: 8px; }
 footer { padding: 18px; text-align: center; color: #999; font-size: 12px; }
+.pair { padding: 10px 18px; border-bottom: 1px solid #e5e5e5; font-size: 13px; color: #555; }
+.pair code { user-select: all; }
 </style>
 </head>
 <body>
 <header><a href="/">base · 分布式学习节点</a></header>
+{{if .PairingCode}}<div class="pair">节点配对码 <code>{{.PairingCode}}</code> · 指纹 <code>{{.Fingerprint}}</code></div>{{end}}
 <main>{{template "content" .}}</main>
 <footer>{{.Issuer}} · 匿名可读 · 内容可自由复制分发</footer>
 </body>

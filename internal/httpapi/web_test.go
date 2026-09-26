@@ -119,3 +119,40 @@ func TestArticlePageMissingIs404(t *testing.T) {
 		t.Fatalf("cover 条目当文章页的状态 = %d, want 404", code)
 	}
 }
+
+// TestPagesShowPairingCode 覆盖 Task 13 的配对码展示。
+// 本机本地 TCP 出站被阻断（见项目记忆），无法用浏览器/curl 做人工验收，故断言改在进程内分发上做。
+func TestPagesShowPairingCode(t *testing.T) {
+	const code, fp = "AAAA-BBBB-CCCC-DDDD", "3e3f61d9b4c09638586fb091285b3722659e14e99da07cd1cdd6b7c261c62e78"
+
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	seedStore(t, st)
+	srv, err := New(st, Options{Issuer: "base-node-1", SignKeyHex: testSeed, Version: "test", PairingCode: code, FingerprintHex: fp})
+	if err != nil {
+		t.Fatalf("httpapi.New: %v", err)
+	}
+	ts := newInprocServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	for _, path := range []string{"/", "/a/article:aaa"} {
+		status, body := getText(t, ts.URL+path)
+		if status != http.StatusOK {
+			t.Fatalf("%s 状态 = %d", path, status)
+		}
+		for _, want := range []string{`class="pair"`, "节点配对码", code, fp} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s 缺少 %q\n%s", path, want, body)
+			}
+		}
+	}
+
+	// 未启用 TLS 的节点（两个字段都为空）不应渲染配对码区块。
+	_, _, plain := newTestServer(t)
+	if _, body := getText(t, plain.URL+"/"); strings.Contains(body, `class="pair"`) {
+		t.Fatalf("未启用 TLS 的节点不应展示配对码：\n%s", body)
+	}
+}

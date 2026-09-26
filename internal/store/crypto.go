@@ -126,6 +126,57 @@ func (s *Store) StoreKeyHex() string { return hex.EncodeToString(s.storeKey) }
 // StoreKeyPath 返回密钥文件路径；密钥来自参数/环境变量时返回空串。
 func (s *Store) StoreKeyPath() string { return s.storeKeyPath }
 
+// StoreKeyStatus 报告当前配置下的密钥状态，**不创建任何文件**（供 CLI 只读查询）。
+// path 为密钥来源文件路径；密钥来自参数/环境变量时为空串。hexKey 仅在 exists=true 时非空。
+func StoreKeyStatus(dataDir string, opts ...Option) (path, hexKey string, exists bool, err error) {
+	cfg := openConfig{}
+	for _, opt := range opts {
+		if err := opt(&cfg); err != nil {
+			return "", "", false, err
+		}
+	}
+
+	if cfg.storeKeySet {
+		k, err := parseStoreKey(cfg.storeKeyHex)
+		if err != nil {
+			return "", "", false, err
+		}
+		return "", hex.EncodeToString(k), true, nil
+	}
+	if v := strings.TrimSpace(os.Getenv(envStoreKey)); v != "" {
+		k, err := parseStoreKey(v)
+		if err != nil {
+			return "", "", false, err
+		}
+		return "", hex.EncodeToString(k), true, nil
+	}
+	if f := strings.TrimSpace(os.Getenv(envStoreKeyFile)); f != "" {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return f, "", false, fmt.Errorf("store: read %s=%s: %w", envStoreKeyFile, f, err)
+		}
+		k, err := parseStoreKey(string(b))
+		if err != nil {
+			return f, "", false, err
+		}
+		return f, hex.EncodeToString(k), true, nil
+	}
+
+	p := defaultStoreKeyPath(dataDir)
+	b, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return p, "", false, nil
+	}
+	if err != nil {
+		return p, "", false, fmt.Errorf("store: read store key %s: %w", p, err)
+	}
+	k, err := parseStoreKey(string(b))
+	if err != nil {
+		return p, "", false, err
+	}
+	return p, hex.EncodeToString(k), true, nil
+}
+
 // Encrypt 返回 nonce(12) || ciphertext || tag(16)。
 func (s *Store) Encrypt(plain []byte) ([]byte, error) {
 	nonce := make([]byte, gcmNonceSize)

@@ -24,6 +24,10 @@ func main() {
 		err = runServe(os.Args[2:])
 	case "pubkey":
 		err = runPubkey(os.Args[2:])
+	case "store-key":
+		err = runStoreKey(os.Args[2:])
+	case "tls-cert":
+		err = runTLSCert(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -32,7 +36,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: based <version|import-md|export|serve|pubkey> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: based <version|import-md|export|serve|pubkey|store-key|tls-cert> [flags]")
 }
 
 func must(err error) {

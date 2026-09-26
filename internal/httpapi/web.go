@@ -18,10 +18,12 @@ var (
 )
 
 type pageData struct {
-	Title   string
-	Issuer  string
-	Items   []pageItem
-	Article *pageArticle
+	Title       string
+	Issuer      string
+	PairingCode string
+	Fingerprint string
+	Items       []pageItem
+	Article     *pageArticle
 }
 
 type pageItem struct {
@@ -48,7 +50,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	data := pageData{Title: "内容目录", Issuer: s.opt.Issuer}
+	data := pageData{
+		Title:       "内容目录",
+		Issuer:      s.opt.Issuer,
+		PairingCode: s.opt.PairingCode,
+		Fingerprint: s.opt.FingerprintHex,
+	}
 	for _, it := range items {
 		if it.DistClass != "public" || it.Type != "article" {
 			continue
@@ -79,7 +86,7 @@ func (s *Server) handleArticlePage(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "文章正文不存在")
 		return
 	}
-	data := pageData{Title: art.Title, Issuer: s.opt.Issuer, Article: &pageArticle{
+	data := pageData{Title: art.Title, Issuer: s.opt.Issuer, PairingCode: s.opt.PairingCode, Fingerprint: s.opt.FingerprintHex, Article: &pageArticle{
 		ItemID:      art.ItemID,
 		Title:       art.Title,
 		Digest:      art.Digest,

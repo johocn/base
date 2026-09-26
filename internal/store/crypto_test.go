@@ -248,3 +248,66 @@ func TestEncTextPrefixAndLegacyPlaintext(t *testing.T) {
 		t.Fatal("坏 base64 未报错")
 	}
 }
+
+func TestStoreKeyStatus(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envStoreKey, "")
+	t.Setenv(envStoreKeyFile, "")
+
+	// 1. 无密钥文件：只报告路径，不创建文件。
+	path, keyHex, exists, err := StoreKeyStatus(dir)
+	if err != nil {
+		t.Fatalf("StoreKeyStatus: %v", err)
+	}
+	if path != defaultStoreKeyPath(dir) {
+		t.Fatalf("path = %s, want %s", path, defaultStoreKeyPath(dir))
+	}
+	if exists || keyHex != "" {
+		t.Fatalf("密钥不应存在，got exists=%v hex=%q", exists, keyHex)
+	}
+	if _, err := os.Stat(defaultStoreKeyPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("StoreKeyStatus 不得创建密钥文件")
+	}
+
+	// 2. 已有密钥文件。
+	if err := os.WriteFile(defaultStoreKeyPath(dir), []byte(testKeyHex+"\n"), 0o600); err != nil {
+		t.Fatalf("预置密钥: %v", err)
+	}
+	path, keyHex, exists, err = StoreKeyStatus(dir)
+	if err != nil {
+		t.Fatalf("StoreKeyStatus: %v", err)
+	}
+	if !exists || keyHex != testKeyHex || path != defaultStoreKeyPath(dir) {
+		t.Fatalf("got path=%s exists=%v hex=%s", path, exists, keyHex)
+	}
+
+	// 3. 环境变量注入：无文件路径。
+	envKey := strings.Repeat("ab", 32)
+	t.Setenv(envStoreKey, envKey)
+	path, keyHex, exists, err = StoreKeyStatus(dir)
+	if err != nil {
+		t.Fatalf("StoreKeyStatus(env): %v", err)
+	}
+	if !exists || keyHex != envKey || path != "" {
+		t.Fatalf("got path=%q exists=%v hex=%s", path, exists, keyHex)
+	}
+	t.Setenv(envStoreKey, "")
+
+	// 4. 代码注入：无文件路径。
+	path, keyHex, exists, err = StoreKeyStatus(dir, WithStoreKey(testKeyHex))
+	if err != nil {
+		t.Fatalf("StoreKeyStatus(opt): %v", err)
+	}
+	if !exists || keyHex != testKeyHex || path != "" {
+		t.Fatalf("got path=%q exists=%v hex=%s", path, exists, keyHex)
+	}
+
+	// 5. 坏密钥文件：报错而不是静默当不存在。
+	badDir := t.TempDir()
+	if err := os.WriteFile(defaultStoreKeyPath(badDir), []byte("not-hex"), 0o600); err != nil {
+		t.Fatalf("预置坏密钥: %v", err)
+	}
+	if _, _, _, err := StoreKeyStatus(badDir); err == nil {
+		t.Fatal("坏密钥文件应报错")
+	}
+}
