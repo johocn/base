@@ -4,8 +4,11 @@ package peersync
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/johocn/base/internal/httpapi"
@@ -75,4 +78,45 @@ func (c Config) do(ctx context.Context, hc *http.Client, method, url string, bod
 		req.Header.Set("X-Base-Node-Key", c.NodeKey)
 	}
 	return hc.Do(req)
+}
+
+// issuerPubKey 是 BASE_ISSUER_PUBKEYS 的元素（册子 §6.1）。
+type issuerPubKey struct {
+	Issuer       string `json:"issuer"`
+	PublicKeyHex string `json:"public_key_hex"`
+}
+
+// ParseIssuerPubKeys 解析签发方公钥信任表：issuer → 公钥 hex64。
+// 这是**唯一**的信任来源：不做 TOFU、不调 /v1/pubkey（册子 §6.1、风险 3）。
+// 空串 → 空表（缓存节点若手工起服务但没配信任表，ImportPack 会在验签处拒绝整包并告警）。
+func ParseIssuerPubKeys(raw string) (map[string]string, error) {
+	out := map[string]string{}
+	if strings.TrimSpace(raw) == "" {
+		return out, nil
+	}
+	var list []issuerPubKey
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil, fmt.Errorf("BASE_ISSUER_PUBKEYS 不是合法 JSON 数组: %w", err)
+	}
+	for i, e := range list {
+		issuer := strings.TrimSpace(e.Issuer)
+		if issuer == "" {
+			return nil, fmt.Errorf("BASE_ISSUER_PUBKEYS[%d]: issuer 不能为空", i)
+		}
+		pub := strings.ToLower(strings.TrimSpace(e.PublicKeyHex))
+		if len(pub) != 64 || !isLowerHex(pub) {
+			return nil, fmt.Errorf("BASE_ISSUER_PUBKEYS[%d]: public_key_hex 必须是 64 位小写 hex", i)
+		}
+		out[issuer] = pub
+	}
+	return out, nil
+}
+
+func isLowerHex(s string) bool {
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
