@@ -78,6 +78,58 @@ func TestSyncPeerConvergesBlobSetsAndRegistersReplicas(t *testing.T) {
 	}
 }
 
+// 墓碑会把条目的 media_meta 一并删掉：已撤回的块在本地已无归属，
+// 即便邻居仍在 inventory 里声明它，也不得拉回——否则会落成 item_id 为空的孤儿登记并永久残留（验收 7）。
+func TestSyncPeerSkipsTombstonedBlobsStillHeldByNeighbor(t *testing.T) {
+	src, dst, url, cfg := nodePair(t)
+
+	first, err := cfg.SyncPeer(context.Background(), dst, Peer{URL: url}, 1)
+	if err != nil {
+		t.Fatalf("SyncPeer 1: %v", err)
+	}
+	if first.Fetched != 1 {
+		t.Fatalf("首轮应补齐 1 块，got %+v", first)
+	}
+	ids, err := dst.ListAllBlobIDs()
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("dst 块集合 = %v err=%v", ids, err)
+	}
+	id := ids[0]
+
+	// 缓存节点应用墓碑（版本与源节点持平，模拟源节点尚未签发新版本的收敛窗口）
+	v := first.ContentVersion
+	applied, err := dst.ImportPack(v, nil, []protocol.Tombstone{{ItemID: "cover:aaa", RevokedRev: int(v)}})
+	if err != nil {
+		t.Fatalf("ImportPack: %v", err)
+	}
+	for _, b := range applied.RemovedBlobs {
+		if err := dst.DeleteBlobFile(b); err != nil {
+			t.Fatalf("DeleteBlobFile: %v", err)
+		}
+	}
+	if srcIDs, _ := src.ListAllBlobIDs(); len(srcIDs) != 1 {
+		t.Fatalf("源节点应仍持有该块，got %v", srcIDs)
+	}
+
+	second, err := cfg.SyncPeer(context.Background(), dst, Peer{URL: url}, 2)
+	if err != nil {
+		t.Fatalf("SyncPeer 2: %v", err)
+	}
+	if second.Equal {
+		t.Fatalf("源节点仍持块 → 集合应不等，got %+v", second)
+	}
+	if second.Missing != 0 || second.Fetched != 0 {
+		t.Fatalf("已撤回的块不得被拉回，got %+v", second)
+	}
+	after, err := dst.ListAllBlobIDs()
+	if err != nil || len(after) != 0 {
+		t.Fatalf("dst 块集合应保持为空，got %v err=%v", after, err)
+	}
+	if _, err := dst.GetBlobBytes(id); err == nil {
+		t.Fatalf("块 %s 的文件不应被重新落地", id)
+	}
+}
+
 func TestRunOnceKeepsGoingAfterPeerFailure(t *testing.T) {
 	_, dst, url, cfg := nodePair(t)
 	logs := []string{}

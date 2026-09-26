@@ -83,6 +83,11 @@ func (c Config) SyncPeer(ctx context.Context, st *store.Store, p Peer, now int64
 		}
 	}
 
+	// 归属来自 media_meta 的声明块序列：此刻这些块还没进 blobs 表，只有 media_meta 知道它们属于谁。
+	idx, err := st.MediaChunkIndex()
+	if err != nil {
+		return res, err
+	}
 	local := make(map[string]struct{}, len(localIDs))
 	for _, id := range localIDs {
 		local[id] = struct{}{}
@@ -91,9 +96,16 @@ func (c Config) SyncPeer(ctx context.Context, st *store.Store, p Peer, now int64
 	missing := []BlobSize{}
 	for _, b := range inv.Blobs {
 		neighbor[b.BlobID] = struct{}{}
-		if _, ok := local[b.BlobID]; !ok {
-			missing = append(missing, BlobSize{BlobID: b.BlobID, Size: b.Size})
+		if _, ok := local[b.BlobID]; ok {
+			continue
 		}
+		// 只补齐「本地仍声明归属」的块（册子 §7.2 步骤 5）：
+		// 墓碑会把条目的 media_meta 一并删掉，已撤回的块在本地已无归属；
+		// 若照邻居 inventory 拉回，会落成 item_id 为空的孤儿登记并永久残留（验收 7）。
+		if _, ok := idx[b.BlobID]; !ok {
+			continue
+		}
+		missing = append(missing, BlobSize{BlobID: b.BlobID, Size: b.Size})
 	}
 	for _, id := range localIDs {
 		if _, ok := neighbor[id]; !ok {
@@ -103,11 +115,6 @@ func (c Config) SyncPeer(ctx context.Context, st *store.Store, p Peer, now int64
 	res.Missing = len(missing)
 
 	if len(missing) > 0 {
-		// 归属来自 media_meta 的声明块序列：此刻这些块还没进 blobs 表，只有 media_meta 知道它们属于谁
-		idx, err := st.MediaChunkIndex()
-		if err != nil {
-			return res, err
-		}
 		fr, err := c.FetchBlobs(ctx, p, missing, func(blobID string, data []byte) error {
 			ref := idx[blobID]
 			return st.PutBlob(blobID, data, ref.ItemID, ref.Seq)
