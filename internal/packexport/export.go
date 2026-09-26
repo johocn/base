@@ -106,7 +106,9 @@ func Export(st *store.Store, opt Options) (Result, error) {
 			SourceRev: it.SourceRev, ContentHash: it.ContentHash, SQLiteTable: it.SQLiteTable, DistClass: it.DistClass,
 		}
 		if it.SQLiteTable == "media_meta" {
-			refs, err := st.ListBlobsForItem(it.ItemID)
+			// 块序列以 media_meta 的声明为准（下标即 seq）：块级去重后 blobs 行会变少，
+			// 用它填 chunks 会与 chunk_hashes_json 长度不一致（契约 §4.1、验收 3）。
+			refs, err := st.DeclaredChunks(it.ItemID)
 			if err != nil {
 				return Result{}, err
 			}

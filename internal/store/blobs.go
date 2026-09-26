@@ -122,6 +122,34 @@ func (s *Store) MediaChunkIndex() (map[string]BlobRef, error) {
 	return out, rows.Err()
 }
 
+// DeclaredChunks 返回条目在 media_meta 里声明的块序列：下标即 seq，长度 = ceil(size / chunk_size)。
+//
+// 为什么不能改用 blobs 表：块按 blob_id 天然去重（契约 §4.1），同一字节出现在多个位置时
+// blobs 只留一行，长度会小于声明块数——而 manifest.entries[].chunks[] 必须与
+// chunk_hashes_json 逐位一致（册子 §4.1、验收 3），故导出侧的唯一真源是声明块序列。
+func (s *Store) DeclaredChunks(itemID string) ([]BlobRef, error) {
+	_, size, _, chunkSize, hashes, ok, err := s.GetMediaMeta(itemID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("store: media_meta 缺少条目 %s", itemID)
+	}
+	out := make([]BlobRef, 0, len(hashes))
+	for seq, raw := range hashes {
+		id := normalizeChunkID(raw)
+		if !protocol.IsBlobID(id) {
+			return nil, fmt.Errorf("store: media_meta %s 第 %d 块的 id %q 不是 blob_id", itemID, seq, raw)
+		}
+		sz := chunkSize
+		if rest := size - int64(seq)*chunkSize; rest > 0 && rest < sz {
+			sz = rest
+		}
+		out = append(out, BlobRef{BlobID: id, Seq: seq, Size: sz})
+	}
+	return out, nil
+}
+
 // normalizeChunkID 把 chunk_hashes_json 里声明的块 id 归一为 32 字符 blob_id。
 // 存量封面路径（tools/migrate/strapi.go 的 importCover）写的是 sha256 的 64 字符全量，
 // 其前 32 字符就是真正的 blob_id；视频导入路径（internal/importer/video.go）写的就是 blob_id 本身。

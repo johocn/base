@@ -2,10 +2,13 @@ package packexport
 
 import (
 	"database/sql"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/johocn/base/internal/importer"
 	"github.com/johocn/base/internal/protocol"
 	"github.com/johocn/base/internal/store"
 )
@@ -211,5 +214,76 @@ func TestExportEmptyStore(t *testing.T) {
 	wantMerkle, _ := protocol.MerkleRoot(nil)
 	if res.MerkleRoot != wantMerkle {
 		t.Fatalf("空库 merkle = %s, want %s", res.MerkleRoot, wantMerkle)
+	}
+}
+
+// 块级去重（契约 §4.1）下，entries[].chunks[] 仍必须与 chunk_hashes_json 逐位一致（验收 3）：
+// 2.5 MiB 全零视频的块 0 与块 1 同字节，blobs 只落一行，若照 blobs 填 chunks 会少一块、
+// 且 size 之和不等于条目 size，接收方校验 len(hashes) != len(chunks) 会整包拒收。
+func TestExportKeepsDeclaredChunkCountUnderDedup(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	path := filepath.Join(t.TempDir(), "zeros.mp4")
+	if err := os.WriteFile(path, make([]byte, 2621440), 0o600); err != nil {
+		t.Fatalf("写视频: %v", err)
+	}
+	if _, err := importer.ImportVideo(st, importer.VideoOptions{Path: path, Slug: "zeros"}); err != nil {
+		t.Fatalf("ImportVideo: %v", err)
+	}
+	itemID := "lesson:zeros"
+	res, err := Export(st, fixedOptions(st))
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	var entry *protocol.Entry
+	for i := range res.Manifest.Entries {
+		if res.Manifest.Entries[i].ItemID == itemID {
+			entry = &res.Manifest.Entries[i]
+		}
+	}
+	if entry == nil {
+		t.Fatalf("manifest 缺少 %s", itemID)
+	}
+	if len(entry.Chunks) != 3 {
+		t.Fatalf("chunks = %d, want 3（去重不得改变声明块数）: %+v", len(entry.Chunks), entry.Chunks)
+	}
+	var sum int64
+	for _, c := range entry.Chunks {
+		sum += c.Size
+	}
+	if sum != 2621440 {
+		t.Fatalf("chunks size 之和 = %d, want 2621440", sum)
+	}
+	if entry.Chunks[0].BlobID != entry.Chunks[1].BlobID {
+		t.Fatalf("块 0/1 应同 id（全零视频）: %+v", entry.Chunks)
+	}
+	if entry.Chunks[0].BlobID == entry.Chunks[2].BlobID {
+		t.Fatalf("块 2 与块 0 不应同 id: %+v", entry.Chunks)
+	}
+
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(res.PackPath)+"?mode=ro")
+	if err != nil {
+		t.Fatalf("open pack: %v", err)
+	}
+	defer db.Close()
+	var chunkJSON string
+	if err := db.QueryRow(`SELECT chunk_hashes_json FROM media_meta WHERE item_id=?`, itemID).Scan(&chunkJSON); err != nil {
+		t.Fatalf("读 pack.media_meta: %v", err)
+	}
+	var hashes []string
+	if err := json.Unmarshal([]byte(chunkJSON), &hashes); err != nil {
+		t.Fatalf("chunk_hashes_json: %v", err)
+	}
+	if len(hashes) != len(entry.Chunks) {
+		t.Fatalf("chunk_hashes_json=%d 与 chunks=%d 不一致", len(hashes), len(entry.Chunks))
+	}
+	for i, h := range hashes {
+		if h != entry.Chunks[i].BlobID {
+			t.Fatalf("第 %d 位块 id 不一致: %s != %s", i, h, entry.Chunks[i].BlobID)
+		}
 	}
 }
