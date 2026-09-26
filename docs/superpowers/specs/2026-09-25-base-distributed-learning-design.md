@@ -271,8 +271,11 @@ manifest 中**没有**权限标签、用户范围、过期时间。`dist_class` 
 data/base.db            # 内容库 / 索引 / 事件 / 副本登记 / 身份公钥登记 / 托管私钥密文
 data/blobs/xx/yy/<id>   # 块文件
 data/packs/<pack_id>/   # 已发布包（manifest.json + pack.sqlite）
-data/store.key          # L4a′ 节点静态加密密钥（0600；可由 BASE_STORE_KEY 替代）
+data/tls/node.crt|key   # 节点自签证书与私钥（§12.2）
+data.key                # L4a′ 节点静态加密密钥（0600）——data 的兄弟文件，**不在 data 目录内**
 ```
+
+`data.key` 刻意放在 `data/` 之外：备份脚本、对象存储同步、`cp -r data` 都不应连密钥一起拷走。代价与残余风险（备份**整个安装目录**仍可解密）见 §12.1.1。
 
 ### 7.3 接口
 
@@ -374,6 +377,7 @@ data/store.key          # L4a′ 节点静态加密密钥（0600；可由 BASE_S
   - **开关默认值**：默认关闭。首次进入设置页时提示并建议开启。
   - **开关切换**：开启 = 全量重写本地库到新加密库 + 校验 + 旧文件安全删除；关闭 = 反向迁移。切换必须**可中断、可回滚**，中断后以「哪份校验通过用哪份」裁决。
   - **密钥来源**：由本机私钥派生，不新增独立口令。因此**私钥丢失 = 本地库不可读**。
+  - **S1 期实际取值（2026-09-26 回填）**：私钥本机密文已落地，KEK 暂为 `kek_source = "device"`——随机 32 字节存应用私有存储（键 `identity.device_kek`），**与密文同库**。**残余风险**：不抗 root/越狱的本地读取，此层只挡应用沙箱外的普通读取。上述「由私钥派生」的目标形态属 spike（#4），落地后**只替换 `deviceKek()` 一个实现**，`saveLocalIdentity` / `loadLocalIdentity` 的调用契约不变。
   - **必须提供的退路**：私钥导出/备份（助记词或二维码），以及「重装后重新从节点下载 ① 类内容」的降级路径。
 
 ### 8.3 下载与离线
@@ -472,16 +476,18 @@ data/store.key          # L4a′ 节点静态加密密钥（0600；可由 BASE_S
 
 **算法与粒度**：
 
-- AES-256-GCM。
+- AES-256-GCM；封装格式统一为 `nonce(12B) || ciphertext || tag(16B)`，TS 与 Go 两侧由 `vectors/v1/aead.json` 逐字节锁死。
 - `data/blobs/<h0..1>/<h2..3>/<blob_id>`：逐文件加密封装，随机 nonce 前置存放。
-- `data/base.db` 正文列：`articles.body_md` / `segments.text` / `quizzes.question_json` 逐列加密封装。
+- `data/base.db` 正文列：本期只加密 `articles.body_md`（值以 `enc:v1:` 前缀 + base64 存，便于识别历史明文行）；`segments` / `quizzes` 本期只有 DDL、无读写路径，A 阶段（课程体系）引入写入路径时同步接入同一套 `encText` / `decText` 并补验收。
 
 **落点（唯一改动位置）**：`internal/store` 一层做透明加解密——写时封装、读时拆封。`internal/httpapi` / `internal/packexport` / `internal/sync` **零改动**。属 P0 已实现代码的复用改造，**不删除**。
 
 **密钥**：
 
 - **独立密钥，不派生自签名私钥**（解耦：签名私钥丢失不应连带全库不可读）。
-- 来源：`BASE_STORE_KEY`（env）或 `data/store.key`（0600）；部署脚本生成，首次启动打印**离线恢复码**。
+- 来源（四级优先级）：代码/测试注入 `WithStoreKey` → `BASE_STORE_KEY`（env，hex64）→ `BASE_STORE_KEY_FILE`（文件路径）→ 默认文件 **`data.key`**（`data` 目录的兄弟文件，0600），末者不存在则**首启自动生成**。
+- **密钥文件必须在 `data` 目录之外**：`cp -r data` / 只备份 `data` 不应连密钥一起拷走。**残余风险**：备份**整个安装目录**仍可解密——只有把密钥经 env 注入（`BASE_STORE_KEY` / `BASE_STORE_KEY_FILE`）且不入镜像才能根除。
+- 启动日志只回显密钥前 8 个 hex；完整密钥用 `based store-key show -data <dir>` 按需取（把完整 hex 写进日志等于留在日志文件与运维平台上）。
 - 丢失后果：缓存节点可反熵重拉；**权威源节点 = 内容不可读**，只能靠恢复码。
 
 **硬约束**：

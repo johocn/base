@@ -6526,3 +6526,26 @@ git -C e:/code/base commit -m "test: S1 端到端验收与规格回填"
 | 既有 CORS | `withCommon` 只**扩大**允许的方法与头，不删除既有值 |
 | 既有测试 | `store_test.go` 的 `openTemp` 由 `Open(t.TempDir())` 改为注入固定测试密钥（Task 6），行为不变 |
 | `internal/packexport` / `internal/sync` | 零改动；`pack` 不复制 blob 字节，故无密文外溢 |
+
+---
+
+## 执行记录（2026-09-26，Task 0–15 全部落地）
+
+本计划 15 个 Task 已全部实现并提交。以下是**与计划原文的偏离项**（计划代码照抄会编译不过或断言必假，均已按实际契约修正）：
+
+| 位置 | 计划原文 | 实际做法与原因 |
+|---|---|---|
+| Task 12 `ClientTLSConfig` | `ClientTLSConfig(info, fp) *tls.Config` | 改为 `ClientTLSConfig(own TLSInfo, peerFingerprintHex string) (*tls.Config, error)`：对端 `RequireAnyClientCert` 会直接拒绝不带证书的客户端，故必须加载本节点证书；生产证书可能加载失败，故返回 error |
+| Task 13 子命令 flag | `fs.Parse(args)` 后取 `fs.Arg(0)` 当子命令 | Go 的 flag 包遇首个非 flag 参数即停止解析，`store-key show -data x` 的 `-data` 会被静默忽略并泄漏式地在仓库根生成 `data.key`。改为先取 `args[0]` 为子命令、再 `fs.Parse(args[1:])`，并拒绝多余位置参数 |
+| Task 14 签名头 nonce | 测试断言 `toHaveLength(24)` | 服务端契约是 `X-Base-Nonce 必须是 16 字节 hex`（32 hex 字符），故断言改为 32；GCM 的 12 字节 nonce 与它不是一回事 |
+| Task 15 Go 向量测试 | 断言 `Encrypt` 的 `ct‖tag` 等于向量的 `ct‖tag` | GCM 密文与 nonce 绑定，`Encrypt` 自带随机 nonce，该断言必假。改为：同 nonce 下 `st.aead.Seal` 逐字节对齐向量；`Encrypt` 只锁长度与往返；再正向把 TS 的 `nonce‖ct‖tag` 喂给 `Decrypt` |
+| Task 15 验收 1 | 事件体 `{"type":"ping","body":{}}` | `handleEventPost` 要求 `event_id`（16 字节 hex）与 `created_at > 0`，故补 `eventBody()` helper |
+| Task 15 验收 6 / 8 | 断言 `code` 字段 | 这两个错误由既有 `writeError` 输出，按契约 §3.3 只有 `{"error": ...}`；带 `code` 的只有 `writeAuthErr` 的验签类错误 |
+| Task 15 验收 11 | `defaultStoreKeyPath(n.data)` + 用 `WithStoreKey` 起的节点 | ① `defaultStoreKeyPath` 是 `store` 包私有函数，跨包改用公开的 `StoreKeyStatus`；② `WithStoreKey` 不落密钥文件，故该用例单独 `Open` 走「首启自动生成」路径，并自行清理兄弟文件 |
+| Task 15 验收 13 | `n.st.PutBlob(blobID, plain)` | `PutBlob(blobID, data, itemID, seq)` 是四参数 |
+| Task 15 Step 7 | `httptest.NewServer(srv.Handler())` | 本机同进程回环 TCP 不可用（见「已核实的环境事实」），改用 `newInprocServer` |
+| Task 15 Step 10 双节点验收 | 起两个 serve + `tls-cert show` | 已执行（`dist/based.exe`，18081/18082）：配对码 `FAJS-EFKQ-O76F-73E5` ≠ `2ALR-75AI-QQAZ-IMEO`，`nodeA.key` / `nodeB.key` 均在仓库根、不在 `nodeA/` / `nodeB/` 内 |
+| Task 1 spike | 需真机/ROM 验证客户端自签 TLS | **未执行**（本机无可验设备）→ 已按修正 3 只实现确定能做的部分，并在册子 §6.1 诚实标注结论未定、三条退路仍有效 |
+| Task 15 Step 11/12 回填 | 6 条 + 3 条 | 另修同源残留：册子 §3.2 重复句、§11 红线重复编号 2、§7.1「首启打印离线恢复码」（实际只回显前 8 hex，全量走 `based store-key show`）、§12 已确认项与总纲 §12.1.1 加密范围（只 `articles.body_md`） |
+
+**验证**：`go build ./...` + `go test ./...` 全包 ok（含 10 个 `TestS1Acceptance*` 与 `TestAEADGoldenVector`）；`npx vitest run apps/mobile packages/protocol-ts` 73/73 PASS；`npm run typecheck` 无错。

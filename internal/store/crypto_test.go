@@ -2,6 +2,8 @@ package store
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -309,5 +311,90 @@ func TestStoreKeyStatus(t *testing.T) {
 	}
 	if _, _, _, err := StoreKeyStatus(badDir); err == nil {
 		t.Fatal("坏密钥文件应报错")
+	}
+}
+
+// TestAEADGoldenVector 消费 vectors/v1/aead.json：TS 侧 aead.ts 与 Go 侧 Encrypt/Decrypt
+// 必须是同一种封装格式，否则跨语言读不了对方的密文（修正 7）。
+// 失败时改代码，不许改向量——向量是两侧的共同契约。
+func TestAEADGoldenVector(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "vectors", "v1", "aead.json"))
+	if err != nil {
+		t.Fatalf("读黄金向量: %v", err)
+	}
+	var v struct {
+		KeyHex        string `json:"key_hex"`
+		NonceHex      string `json:"nonce_hex"`
+		PlaintextHex  string `json:"plaintext_hex"`
+		CiphertextHex string `json:"ciphertext_hex"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("解析黄金向量: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(defaultStoreKeyPath(dir), []byte(v.KeyHex+"\n"), 0o600); err != nil {
+		t.Fatalf("预置密钥: %v", err)
+	}
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	if got := st.StoreKeyHex(); got != v.KeyHex {
+		t.Fatalf("密钥 = %s, want %s", got, v.KeyHex)
+	}
+
+	nonce, err := hex.DecodeString(v.NonceHex)
+	if err != nil {
+		t.Fatalf("nonce 不是 hex: %v", err)
+	}
+	if len(nonce) != gcmNonceSize {
+		t.Fatalf("向量 nonce 长度 = %d, want %d", len(nonce), gcmNonceSize)
+	}
+	plain, err := hex.DecodeString(v.PlaintextHex)
+	if err != nil {
+		t.Fatalf("plaintext 不是 hex: %v", err)
+	}
+	wantCT, err := hex.DecodeString(v.CiphertextHex)
+	if err != nil {
+		t.Fatalf("ciphertext 不是 hex: %v", err)
+	}
+
+	// 同 nonce 下 Go 的封装必须逐字节等于 TS 的 ciphertext||tag。
+	if got := st.aead.Seal(nil, nonce, plain, nil); !bytes.Equal(got, wantCT) {
+		t.Fatalf("Go 封装与 TS 不一致:\n got %x\nwant %x", got, wantCT)
+	}
+	// 反向：Go 必须能解开 TS 的密文。
+	gotPlain, err := st.aead.Open(nil, nonce, wantCT, nil)
+	if err != nil {
+		t.Fatalf("Go 解 TS 密文失败: %v", err)
+	}
+	if !bytes.Equal(gotPlain, plain) {
+		t.Fatalf("解出的明文不一致:\n got %x\nwant %x", gotPlain, plain)
+	}
+	// 完整拼接形态 nonce || ct || tag（与 TS 的 seal 一致）：Encrypt 自带随机 nonce，
+	// 而 GCM 的密文与 nonce 绑定，故 ct||tag 不会等于向量——这里只锁长度与「能解开」。
+	gotBlob, err := st.Encrypt(plain)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if want := gcmNonceSize + len(wantCT); len(gotBlob) != want {
+		t.Fatalf("封装长度 = %d, want %d", len(gotBlob), want)
+	}
+	back, err := st.Decrypt(gotBlob)
+	if err != nil {
+		t.Fatalf("Decrypt 自己的封装失败: %v", err)
+	}
+	if !bytes.Equal(back, plain) {
+		t.Fatalf("往返明文不一致:\n got %x\nwant %x", back, plain)
+	}
+	// 跨语言正向：把 TS 的 seal 输出（nonce || ct || tag）原样喂给 Go，必须解得开。
+	tsBlob := make([]byte, 0, gcmNonceSize+len(wantCT))
+	tsBlob = append(tsBlob, nonce...)
+	tsBlob = append(tsBlob, wantCT...)
+	if back, err := st.Decrypt(tsBlob); err != nil || !bytes.Equal(back, plain) {
+		t.Fatalf("Go 解 TS 的拼接密文失败: err=%v got=%x", err, back)
 	}
 }

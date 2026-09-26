@@ -69,7 +69,7 @@
 - `body_sha256`：请求体原始字节的 sha256 hex；**无请求体时为 `sha256("")` 的 hex**（固定值，不省略）。
 - `ts` / `nonce`：与头一致（防头体不一致）。
 
-`canonical` 复用 P0 已实现的 `protocol.Canonicalize`（键排序、无多余空白、拒绝非整数数字与非 ASCII 键）。固定向量写入 `vectors/v1/reqsig.json`（固定密钥 + 固定请求元组 → 期望待签字节 + 期望签名），Go 与 TS 两侧测试同时消费。固定向量写入 `vectors/v1/reqsig.json`（固定密钥 + 固定请求元组 → 期望待签字节 + 期望签名），Go 与 TS 两侧测试同时消费。
+`canonical` 复用 P0 已实现的 `protocol.Canonicalize`（键排序、无多余空白、拒绝非整数数字与非 ASCII 键）。固定向量写入 `vectors/v1/reqsig.json`（固定密钥 + 固定请求元组 → 期望待签字节 + 期望签名），Go 与 TS 两侧测试同时消费。
 
 ### 3.2 节点验签流程（顺序固定，先验后读体）
 
@@ -159,6 +159,8 @@
 - 客户端首次连接：接受自签证书，但**必须**由人核对配对码（手输或扫节点浏览页二维码）；核对通过 → 指纹写入本地 `nodes.tls_fingerprint`。
 - 之后连接：只接受该指纹，不匹配即断（`tls_fingerprint_mismatch`）。**不提供「忽略」开关**——只能删记录重新配对。
 
+> **落地状态（2026-09-26，Task 15 回填）**：Spike（Task 1）**尚未执行**——验证需要真机与具体 ROM，本机没有可验设备，因此「App 的 HTTP 栈能否接受自签证书、能否固定指纹」仍**未定**。已落地的只有不依赖该结论的部分：节点侧证书生成 / 配对码 / 指纹固定与拒连、节点↔节点双向 TLS + `X-Base-Node-Key`、浏览页与启动日志展示配对码。三条退路（F1 客户端↔节点降级为 HTTP + 签名头、F2 原生插件 pinning、F3 待定）**仍然有效**；若 spike 结论为 F1，需按 `docs/README.md` 硬规则 1 先改总纲再改本节与总纲 §4「传输」一行。§8 的 `nodes` 表与配对交互同样以该结论为前提，结论未定前不实现。
+
 ### 6.2 换证书
 
 节点执行 `rotate-cert` → 生成新自签证书 → 浏览页与启动日志显示**新配对码** → 所有客户端需重新配对。旧指纹不会自动接受。
@@ -174,7 +176,10 @@
 
 - 算法：AES-256-GCM（Go 标准库 `crypto/aes` + `crypto/cipher`，无第三方依赖）。
 - 封装格式统一为 `nonce(12B) || ciphertext || tag(16B)`。
-- 密钥来源（优先级）：`BASE_STORE_KEY`（hex64）→ `data/store.key`（0600）→ 两者皆无则**首启自动生成** `data/store.key` 并打印**离线恢复码**（hex64）。
+- 密钥来源（四级优先级）：`WithStoreKey`（代码/测试注入）→ `BASE_STORE_KEY`（hex64）→ `BASE_STORE_KEY_FILE`（文件路径）→ 默认文件 **`<data>.key`**（`data` 目录的**兄弟文件**，刻意置于 `data` 之外，0600），末者不存在则**首启自动生成**。
+- **密钥文件必须在 `data` 目录之外**：`cp -r data` / 只备份 `data` 目录不应连密钥一起拷走。代价是备份**整个安装目录**仍可解密——只有把密钥经 env 注入（`BASE_STORE_KEY` / `BASE_STORE_KEY_FILE`）且不入镜像才能根除。
+- `BASE_STORE_KEY_FILE` 指向的密钥文件内容为 hex64（允许结尾换行与大小写）；内容坏 → 报错，不静默回退到默认文件（否则会用一把新密钥去解旧库）。
+- 启动日志只回显密钥**前 8 个 hex**（`storeKey=67eed590…`）：完整 hex 写进日志等于把它留在日志文件与运维平台上。需要离线恢复码时用 `based store-key show -data <dir>` 按需取。
 - **密钥独立，不派生自签名私钥**：签名私钥丢失不应连带全库不可读，反之亦然。
 
 ### 7.2 加密范围
@@ -182,10 +187,12 @@
 | 对象 | 处理 |
 |---|---|
 | `data/blobs/<h0..1>/<h2..3>/<blob_id>` | 逐文件封装（整体作为一个密文文件） |
-| `data/base.db` 的 `articles.body_md` / `segments.text` / `quizzes.question_json` | 逐列封装，列值以 hex 文本存 |
+| `data/base.db` 的 `articles.body_md` | 逐列封装，列值以 **`enc:v1:` 前缀 + base64** 存（便于识别历史明文行；无前缀即未加密行，原样读出） |
 | `data/packs/` | **不加密**（可由内容库重导出的产物） |
 | ② 类密文块 | **不二次加密**（E2E 后已不可读，再包一层只增开销） |
 | `identity` 类表（公钥、托管密文） | **不加密**（本就是公开信息 / 已加密密文） |
+
+`segments` / `quizzes` 两张表在本期只有 DDL、没有任何读写代码路径，故不在加密范围内；A 阶段（课程体系）引入写入路径时，**同步接入同一套 `encText` / `decText`** 并在那里补验收，避免留下「有列无加密」的空档。
 
 ### 7.3 落点与不变量
 
@@ -216,7 +223,8 @@
 | `nodes(node_id, url, tls_fingerprint, pairing_verified_at, last_seen_at)` | 已配对节点与固定指纹 |
 
 - 私钥**永不**明文落盘：落 `privkey_cipher`，由设备侧 KEK 加密。
-- `kek_source` 记录 KEK 来源（设备安全存储 / 用户口令派生 / 二者组合），供 spike 结论回填。
+- `kek_source` 记录 KEK 来源（设备安全存储 / 用户口令派生 / 二者组合），供 spike 结论回填。**S1 期实际取值为 `"device"`**：KEK = 随机 32 字节，经 `StorageAdapter` 存于应用私有存储（键 `identity.device_kek`），与 `privkey_cipher` 同库。
+  - **残余风险（必须诚实标注）**：同库意味着有 root/越狱能力的本地读取可同时拿到 KEK 与密文，此层防护只挡「应用沙箱外的普通读取」。真正的加固属 spike（#4）：落地后**只替换 `deviceKek()` 一个实现**（改走设备安全存储 / 用户口令派生），`saveLocalIdentity` / `loadLocalIdentity` 的调用契约不变。
 - 与 §5 的 `escrow` 不同：这里的 `privkey_cipher` 是**本机**密文，`escrow` 是**上传托管**密文，两者可用不同 KEK，互不替代。
 
 ## 9. 与手机本地加密 spike（#4）的交汇点与退路
@@ -243,11 +251,14 @@
 | 11 | L4a′ 透明性 | 加密前后 `blob_id` 相同；`catalog` / `manifest` / `pack` 输出逐字节一致；`/v1/blob` 返回明文且长度 = `blobs.size` |
 | 12 | 私钥不落明文 | 设备端数据库与文件中搜不到私钥明文 |
 | 13 | 向量双侧 | `vectors/v1/identity.json` 与 `vectors/v1/reqsig.json` 被 Go 与 TS 测试同时消费，任一漂移即失败 |
+| 14 | L4a′ 密钥位置 | 默认密钥文件为 `data` 目录的兄弟文件 `<data>.key`；`data/` 内不得出现密钥文件（`cp -r data` 拷不走密钥） |
+| 15 | AEAD 格式双侧 | `vectors/v1/aead.json` 被 TS `aead.ts` 与 Go `Encrypt` / `Decrypt` 同时消费：同 nonce 下逐字节一致，且 Go 能直接解开 TS 的 `nonce ‖ ct ‖ tag` 拼接密文 |
+
+验收 9 / 10 / 11 / 12 / 13 / 15 的落点：9 → `tlscfg_test.go`；10 → `store` 的 `assertPlaintextAbsent`；11 / 12 → blob 与 pack 导出的既有断言；13 → `protocol` / `protocol-ts` 的向量消费测试；15 → `crypto_test.go` 的 `TestAEADGoldenVector` 与 `aead.test.ts`。验收 1–8 与 14 由 `internal/httpapi/s1_acceptance_test.go` 覆盖。
 
 ## 11. 红线（本册子）
 
 1. 节点永不接触明文私钥、永不签发密钥、永不发 JWT / session。
-2. `escrow` 的 nonce 必须独立列存储，不得与 `priv_cipher` 混为一体。
 2. `escrow` 的 nonce 必须独立列存储，不得与 `priv_cipher` 混为一体，避免服务端拆包猜测。
 3. `blob_id` 的算法与其输入不可变；静态加密只允许改磁盘表示。
 4. L4a′ 密钥不得与签名私钥同源或互相派生。
@@ -266,7 +277,7 @@
 | 写请求认证 | 5 个签名头；签名覆盖 `canonical({method,path,query,body_sha256,ts,nonce})`；时间窗 300s；nonce 去重窗口 10 分钟 |
 | 密码托管 | 客户端 argon2id(65536/3/1/32) + AES-256-GCM；节点只存不解释；同 username 只允许同 id 覆盖；读取匿名 + 限速 |
 | TLS | 自签 + 证书指纹固定 + 配对码（指纹前 10 字节 Base32，4-4-4-4）人工确认；无忽略开关 |
-| 节点静态加密 | L4a′：store 层透明 AEAD；范围 = blobs + `base.db` 三个正文列；独立密钥（`BASE_STORE_KEY` / `data/store.key`）；不做轮换 |
+| 节点静态加密 | L4a′：store 层透明 AEAD；范围 = blobs + `articles.body_md`；独立密钥（`WithStoreKey` / `BASE_STORE_KEY` / `BASE_STORE_KEY_FILE` / `<data>.key`，密钥文件刻意置于 `data` 之外）；不做轮换 |
 | 不做 | L4b、L4c、① 类 E2E、JWT、读取鉴权、密钥轮换 |
 | 手机端 | 私钥密文落 `identity.privkey_cipher`；本地库加密的最终实现取决于 spike（#4），格式与本册子 §7.1 对齐 |
 
