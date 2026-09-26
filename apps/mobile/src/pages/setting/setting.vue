@@ -25,6 +25,11 @@ import { onShow } from '@dcloudio/uni-app';
 import { bootstrap, updateNodeBaseUrl } from '../../platform';
 import { plusRuntime } from '../../platform/uni';
 
+// 生产默认值：只读分发节点（明文 :80）+ 源节点签发方公钥（based pubkey -issuer base-node-1）。
+// 仅在本地未保存过配置时预填，保存后以本地配置为准；公钥是公开值，不是私钥。
+const DEFAULT_BASE_URL = 'http://118.190.217.242';
+const DEFAULT_PUBKEY = '48c33db9cf859e107fe89651d15fc5faaa8b16ffbb7d4b483aa167a0cff824f4';
+
 const baseUrl = ref('');
 const pubkey = ref('');
 const tip = ref('');
@@ -34,8 +39,8 @@ const probeLines = ref<string[]>([]);
 onShow(async () => {
   try {
     const { repo } = await bootstrap();
-    baseUrl.value = (await repo.getConfig('node_base_url')) ?? '';
-    pubkey.value = (await repo.getConfig('pubkey_hex')) ?? '';
+    baseUrl.value = (await repo.getConfig('node_base_url')) ?? DEFAULT_BASE_URL;
+    pubkey.value = (await repo.getConfig('pubkey_hex')) ?? DEFAULT_PUBKEY;
     error.value = '';
   } catch (e) {
     error.value = (e as Error).message;
