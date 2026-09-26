@@ -79,10 +79,9 @@ fi
 cp "$tmp/$name" "$DIR/based"
 chmod 0755 "$DIR/based"
 mkdir -p "$DIR/data/tls"
+# data.key **不预建**：store 只在「文件不存在」时生成，预建空文件会让首启直接报 `store: empty store key`
+# （避免误拷 data/ 的威胁模型下密钥必须在 data/ 之外，见总纲 §7.2）
 if [ -f "$DIR/data.key" ]; then
-  chmod 0600 "$DIR/data.key"
-else
-  : > "$DIR/data.key"
   chmod 0600 "$DIR/data.key"
 fi
 

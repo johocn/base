@@ -45,12 +45,12 @@ try {
     $got = (Get-FileHash -Algorithm SHA256 -Path $binTmp).Hash.ToLower()
     if ($got -ne $want) { throw "SHA256 校验失败: $name`n  want=$want`n  got =$got" }
 
-    # 第 3+4 步：落地二进制、配置模板、空 data/ 与 data/tls/；data.key 在 data/ 之外
+    # 第 3+4 步：落地二进制、配置模板、空 data/ 与 data/tls/
     Copy-Item -Path $binTmp -Destination (Join-Path $dirPath "based.exe") -Force
     New-Item -ItemType Directory -Force -Path (Join-Path $dirPath "data/tls") | Out-Null
 
-    $keyPath = Join-Path $dirPath "data.key"
-    if (-not (Test-Path $keyPath)) { New-Item -ItemType File -Path $keyPath -Force | Out-Null }
+    # data.key **不预建**：store 只在「文件不存在」时生成，预建空文件会让首启直接报 `store: empty store key`
+    # （密钥必须在 data/ 之外，见总纲 §7.2）
 
     $envPath = Join-Path $dirPath "base.env"
     @"

@@ -28,7 +28,7 @@
 
 ### 0.2 2026-09-26 实施回填（计划 #13 Task 0–12 执行后）
 
-共 7 条。前 6 条是「照设计原文写会编译不过 / 断言必假 / 与既有契约不符」的修正，第 7 条是真机验收（AC 7）暴露出的算法缺口；每条都已在正文对应处就地改成修正后的口径。
+共 8 条。前 6 条是「照设计原文写会编译不过 / 断言必假 / 与既有契约不符」的修正，第 7 条是真机验收（AC 7）暴露出的算法缺口，第 8 条是首次生产部署暴露出的安装脚本缺口；每条都已在正文对应处就地改成修正后的口径。
 
 1. **包路径**：`internal/sync` → `internal/peersync`。`sync` 既撞标准库包名、又与本册子「反熵一轮」的语义混淆，实现落在 `internal/peersync`；正文不再出现 `internal/sync`。
 2. **`scrub` 的 `repaired` 在对端监听上恒为 0**：跨节点补齐必须走出站请求，`internal/httpapi` 不依赖 `internal/peersync`。非零的 `repaired` 只出现在发起方 `peersync.ScrubOnce` 的结果与日志里。（就地补进 §5.2 / §8）
@@ -37,6 +37,7 @@
 5. **墓碑删块文件是「先收集后删」**：`store.ImportPack` 在事务内收集 `RemovedBlobs` 返回给调用方，事务提交后由调用方删文件，失败只记日志、不回滚；节点侧与客户端侧同口径。（就地补进 §9.2 / §9.3）
 6. **`media_meta` 行级校验口径精确化为「块数 + size 之和」**：`articles` 有 `content_hash` 列可逐行比对，`media_meta` **没有**该列，故只能比 `chunk_hashes_json` 的块数是否等于 manifest `chunks[]` 的长度、`size` 是否等于 `chunks[].size` 之和；整块完整性由签名域（`chunks[].blob_id + size`）与补齐时的逐块哈希共同兜底。（就地补进 §6.2 步骤 5）
 7. **反熵补齐必须按「本地归属」过滤**（真机 AC 7 暴露的缺口）：`missing` 不能只算「邻居有、本地无」，还必须算「本地仍声明归属该块」——即该 `blob_id` 仍出现在本地某条 `media_meta.chunk_hashes_json` 中。墓碑删条目时会把 `media_meta` 一并删掉（§9.2），已撤回的块在本地已无归属；若照邻居 inventory 拉回，会落成 `item_id` 为空的孤儿 `blobs` 行 + 块文件并**永久残留**（`extra` 只记录不删，§7.4 不为它开例外）。（就地补进 §7.2 步骤 4）
+8. **安装脚本不得预建 `data.key`**（首次生产部署暴露的缺口）：`install.sh` / `install.ps1` 原本会创建**空的** `<dir>/data.key`，而 `internal/store` 只在密钥文件**不存在**时才生成它，读到空文件即 `error: store: empty store key` → 节点在 systemd 下反复重启、起不来（与脚本自己打印的「首启自动生成」自相矛盾）。已改为**只对已存在的文件 `chmod 0600`、绝不创建**，并在真机干净目录复验（首启自动生成 0600 的 `data.key`、`:8090` 自检 200）。（就地补进 §10.2 第 4 条）
 
 ## 1. 范围与不做什么
 
@@ -354,7 +355,7 @@ blob_replicas(blob_id TEXT, peer TEXT, seen_at INTEGER, PRIMARY KEY(blob_id, pee
 1. 探测 `os` / `arch` → 选定文件名；
 2. 下载二进制与 `SHA256SUMS.txt` → **校验 SHA256**，不符即失败退出（不覆盖已有二进制）；
 3. 落地安装目录：二进制 + 生成的配置文件（`base.env`）+ 空 `data/` 目录；
-4. 数据目录与密钥位置符合总纲 §7.2：`data/`、`data.key` 在 `data/` 之外（0600）、`data/tls/`；
+4. 数据目录与密钥位置符合总纲 §7.2：`data/`、`data.key` 在 `data/` 之外（0600）、`data/tls/`；**脚本不预建 `data.key`**——`internal/store` 只在密钥文件**不存在**时生成它，预建一个空文件会让首启直接报 `store: empty store key`（脚本已存在的文件只 `chmod 0600`）；
 5. 打印后续人工步骤（TLS 指纹与配对码在首次启动日志中回显；源节点另需注入签名私钥与 `BASE_ISSUER_PUBKEYS`），**不自动写入任何私钥**；
 6. 幂等：重复执行只更新二进制与配置模板，**不动 `data/`、不动 `data.key`**。
 
