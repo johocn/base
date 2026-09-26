@@ -58,26 +58,35 @@ func (f *peerFlags) peers() ([]peersync.Peer, error) {
 	return out, nil
 }
 
-// certPaths 返回证书/私钥实际路径；-tls-cert=off 时返回空串（主监听明文）。
+// defaultCertPaths 返回默认证书/私钥路径（<data>/tls/node.crt|key）。
+// 与 -tls-cert=off 无关：off 只说「主监听不加密」，节点本身份仍然存在。
+func (f *peerFlags) defaultCertPaths() (certPath, keyPath string) {
+	return filepath.Join(*f.data, "tls", "node.crt"), filepath.Join(*f.data, "tls", "node.key")
+}
+
+// certPaths 返回主监听要用的证书/私钥路径；-tls-cert=off 时返回空串（主监听明文）。
 func (f *peerFlags) certPaths() (certPath, keyPath string) {
 	if strings.EqualFold(strings.TrimSpace(*f.tlsCert), "off") {
 		return "", ""
 	}
 	certPath, keyPath = strings.TrimSpace(*f.tlsCert), strings.TrimSpace(*f.tlsKey)
+	defCert, defKey := f.defaultCertPaths()
 	if certPath == "" {
-		certPath = filepath.Join(*f.data, "tls", "node.crt")
+		certPath = defCert
 	}
 	if keyPath == "" {
-		keyPath = filepath.Join(*f.data, "tls", "node.key")
+		keyPath = defKey
 	}
 	return certPath, keyPath
 }
 
-// tlsInfo 加载（必要时生成）本节点 TLS 身份。出站必须带证书：对端是双向 TLS。
+// tlsInfo 加载（必要时生成）本节点 TLS 身份。
+// 出站（节点↔节点）必须带证书，且**与主监听是否明文无关**：F1 退路下主监听走 HTTP，
+// 但节点↔节点仍是双向 TLS + 指纹固定，故 off 时落回默认证书路径，而不是报错。
 func (f *peerFlags) tlsInfo() (httpapi.TLSInfo, error) {
 	certPath, keyPath := f.certPaths()
-	if certPath == "" || keyPath == "" {
-		return httpapi.TLSInfo{}, fmt.Errorf("出站（节点↔节点）要求本节点有证书：-tls-cert 不能为 off")
+	if certPath == "" && keyPath == "" {
+		certPath, keyPath = f.defaultCertPaths()
 	}
 	return httpapi.LoadOrCreateTLSCert(certPath, keyPath)
 }

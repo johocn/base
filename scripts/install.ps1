@@ -61,6 +61,9 @@ BASE_ADDR=:8080
 # 对端清单/信任表是 JSON，且本文件每次执行都会被覆盖，故走启动命令行（见下文第 5 步）。
 # BASE_PEER_ADDR=:8081
 BASE_ISSUER=$Issuer
+# 客户端监听是否加密：留路径 = TLS（默认）；置 off = 明文 HTTP。
+# 客户端↔节点走明文是已定案的退路 F1（总纲 §12.2）：off 只关主监听，节点自身身份仍在，
+# 启用对端监听时仍从下面的默认路径加载/生成证书。对端监听（节点↔节点）永远 TLS。
 BASE_TLS_CERT=$dirPath\data\tls\node.crt
 BASE_TLS_KEY=$dirPath\data\tls\node.key
 BASE_SYNC_INTERVAL=5m

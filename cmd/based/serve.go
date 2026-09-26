@@ -59,14 +59,18 @@ func runServe(args []string) error {
 	defer st.Close()
 
 	plaintext := strings.EqualFold(strings.TrimSpace(*pf.tlsCert), "off")
-	certPath, keyPath := pf.certPaths()
 
 	// 节点自身 TLS 身份：主监听与对端监听共用同一张证书。
-	// 客户端接口显式降级为明文时，只要启用了 -peer-addr 仍必须生成证书。
+	// -tls-cert=off 的语义是「主监听不加密」，**不是「本节点没有身份」**：只要启用了
+	// -peer-addr（双向 TLS），就必须落回默认证书路径生成/加载证书——直接拿 certPaths()
+	// 的空串会报「证书与私钥路径都不能为空」，使 F1 退路（客户端明文 + 节点间 TLS）起不来。
 	var info httpapi.TLSInfo
-	if !plaintext || *peerAddr != "" {
-		info, err = httpapi.LoadOrCreateTLSCert(certPath, keyPath)
-		if err != nil {
+	if !plaintext {
+		if info, err = httpapi.LoadOrCreateTLSCert(pf.certPaths()); err != nil {
+			return err
+		}
+	} else if *peerAddr != "" {
+		if info, err = httpapi.LoadOrCreateTLSCert(pf.defaultCertPaths()); err != nil {
 			return err
 		}
 	}

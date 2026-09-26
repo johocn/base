@@ -93,6 +93,9 @@ BASE_ADDR=:8080
 # 四个内部接口只挂对端监听、客户端监听上根本不存在。备好对端指纹后按第 5 步写进服务单元再启用。
 # BASE_PEER_ADDR=:8081
 BASE_ISSUER=$ISSUER
+# 客户端监听是否加密：留路径 = TLS（默认）；置 off = 明文 HTTP。
+# 客户端↔节点走明文是已定案的退路 F1（总纲 §12.2）：off 只关主监听，节点自身身份仍在，
+# 启用对端监听时仍从下面的默认路径加载/生成证书。对端监听（节点↔节点）永远 TLS。
 BASE_TLS_CERT=$DIR/data/tls/node.crt
 BASE_TLS_KEY=$DIR/data/tls/node.key
 BASE_SYNC_INTERVAL=5m
