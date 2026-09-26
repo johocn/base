@@ -19,7 +19,12 @@ type Options struct {
 	// TLS 身份，供首页展示配对码与指纹；两者留空表示节点未启用 TLS。
 	FingerprintHex string
 	PairingCode    string
+	// FetchMaxBlobs 是 POST /v1/fetch 单请求的块数上限；<=0 时取 defaultFetchMaxBlobs。
+	FetchMaxBlobs int
 }
+
+// defaultFetchMaxBlobs 与册子 §5.2 的缺省值一致。
+const defaultFetchMaxBlobs = 64
 
 // Server 是节点 HTTP 服务。
 type Server struct {
@@ -32,6 +37,9 @@ type Server struct {
 
 // New 构造服务；配置了私钥时同时推导出公钥（用于 /v1/pubkey 与验签）。
 func New(st *store.Store, opt Options) (*Server, error) {
+	if opt.FetchMaxBlobs <= 0 {
+		opt.FetchMaxBlobs = defaultFetchMaxBlobs
+	}
 	s := &Server{
 		st: st, opt: opt,
 		escrowLimiter:   newIPLimiter(10, 10),
@@ -47,8 +55,24 @@ func New(st *store.Store, opt Options) (*Server, error) {
 	return s, nil
 }
 
-// Handler 返回路由。公开读路由不挂鉴权中间件（契约：匿名可读）。
+// Handler 返回客户端监听用的路由：**只有公开路由**。
+// 内部接口（inventory / sync / fetch / scrub）在此监听上根本不存在（404），
+// 而不是「存在但被拦截」——这是册子 §5.1 的红线。
 func (s *Server) Handler() http.Handler {
+	return withCommon(s.publicMux())
+}
+
+// PeerHandler 返回对端监听用的路由：公开路由 ∪ 内部路由。
+// 对端监听同时保留公开路由，使 BASE_PEERS 里**一个 url 即可满足两种用途**：
+// 调内部接口 + 拉 catalog/manifest/pack/blob（无需第二个地址字段）。
+func (s *Server) PeerHandler() http.Handler {
+	mux := s.publicMux()
+	s.mountInternal(mux)
+	return withCommon(mux)
+}
+
+// publicMux 组装公开路由（匿名可读 + 身份 + 事件）。
+func (s *Server) publicMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /v1/pubkey", s.handlePubkey)
@@ -68,7 +92,16 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /a/{item_id}", s.handleArticlePage)
-	return withCommon(mux)
+	return mux
+}
+
+// mountInternal 注册节点↔节点接口，**只在 PeerHandler 调用**。
+// 红线：这几条一旦被加回 publicMux，内部接口就暴露给了客户端监听。
+func (s *Server) mountInternal(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/inventory", s.handleInventory)
+	mux.HandleFunc("POST /v1/sync", s.handleSync)
+	mux.HandleFunc("POST /v1/fetch", s.handleFetch)
+	mux.HandleFunc("POST /v1/scrub", s.handleScrub)
 }
 
 // withCommon 统一处理 CORS、OPTIONS 预检、panic 兜底与访问日志。

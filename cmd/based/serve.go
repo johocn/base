@@ -109,7 +109,9 @@ func runServe(args []string) error {
 		log.Printf("based: 清理过期 nonce %d 行", n)
 	}
 
-	handler := srv.Handler()
+	// 客户端监听：只有公开路由；对端监听：公开路由 ∪ 内部路由（册子 §5.1）。
+	publicHandler := srv.Handler()
+	peerHandler := srv.PeerHandler()
 
 	// 对端监听：强制双向 TLS + 指纹固定，可选叠加预共享密钥（契约 6.3）。
 	if *peerAddr != "" {
@@ -120,15 +122,15 @@ func runServe(args []string) error {
 		if err != nil {
 			return err
 		}
-		peerHandler := handler
+		peerWithKey := peerHandler
 		if strings.TrimSpace(*nodeKey) != "" {
-			peerHandler = srv.RequireNodeKey(*nodeKey, peerHandler)
+			peerWithKey = srv.RequireNodeKey(*nodeKey, peerHandler)
 		}
 		ln, err := net.Listen("tcp", *peerAddr)
 		if err != nil {
 			return err
 		}
-		peerSrv := &http.Server{Handler: peerHandler, TLSConfig: peerTLS}
+		peerSrv := &http.Server{Handler: peerWithKey, TLSConfig: peerTLS}
 		go func() {
 			log.Printf("based 对端接口监听 %s（双向 TLS + 指纹固定，白名单 %d 个）", *peerAddr, len(peerFPs))
 			if err := peerSrv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -140,14 +142,14 @@ func runServe(args []string) error {
 	base := fmt.Sprintf("issuer=%s source=%v data=%s storeKey=%s…", *issuer, *key != "", *data, shortKey(st.StoreKeyHex()))
 	if plaintext {
 		log.Printf("based %s 监听 %s（**明文 HTTP**，仅签名头认证；%s）", version, *addr, base)
-		return http.ListenAndServe(*addr, handler)
+		return http.ListenAndServe(*addr, publicHandler)
 	}
 
 	clientTLS, err := httpapi.ServerTLSConfig(info, nil)
 	if err != nil {
 		return err
 	}
-	httpSrv := &http.Server{Addr: *addr, Handler: handler, TLSConfig: clientTLS}
+	httpSrv := &http.Server{Addr: *addr, Handler: publicHandler, TLSConfig: clientTLS}
 	log.Printf("based %s 监听 %s（TLS；指纹 %s；配对码 %s；%s）",
 		version, *addr, info.FingerprintHex, info.PairingCode, base)
 	return httpSrv.ListenAndServeTLS("", "")
