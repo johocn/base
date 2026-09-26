@@ -262,4 +262,32 @@ describe('syncOnce', () => {
     expect(res.status).toBe('updated');
     expect((await repo.listItems()).map((i) => i.itemId).sort()).toEqual(['article:aaa', 'article:bbb']);
   });
+
+  it('墓碑：条目连同本地块文件一起删除（契约 §9.3 delta）', async () => {
+    const fx1 = buildNode(7, { withCover: true });
+    const { repo, fs, opts } = setup(fx1);
+    await repo.setConfig('pubkey_hex', PUB);
+    await syncOnce(opts);
+    const coverId = blobId(COVER);
+    expect(await repo.hasBlob(coverId)).toBe(true);
+    expect(fs.files.has(`/work/blobs/${coverId}`)).toBe(true);
+
+    buildNode(8, { tombstones: [{ item_id: 'cover:aaa', revoked_rev: 8 }], http: fx1.http });
+
+    const res = await syncOnce(opts);
+    expect(res.status).toBe('updated');
+    expect(await repo.hasBlob(coverId)).toBe(false);
+    expect(fs.files.has(`/work/blobs/${coverId}`)).toBe(false);
+    expect(await repo.listTombstones()).toEqual([{ itemId: 'cover:aaa', revokedRev: 8 }]);
+  });
+
+  it('墓碑：无本地块文件时不报错（幂等）', async () => {
+    const fx = buildNode(8, { tombstones: [{ item_id: 'cover:aaa', revoked_rev: 8 }] });
+    const { repo, opts } = setup(fx);
+    await repo.setConfig('pubkey_hex', PUB);
+
+    const res = await syncOnce(opts);
+    expect(res.status).toBe('updated');
+    expect(await repo.listTombstones()).toEqual([{ itemId: 'cover:aaa', revokedRev: 8 }]);
+  });
 });

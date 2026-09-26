@@ -147,6 +147,21 @@ export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
   }));
   const tombstones: TombstoneRow[] = man.tombstone.map((t) => ({ itemId: t.item_id, revokedRev: t.revoked_rev }));
 
+  // 必须在 applyPack 之前取路径：applyPack 会删掉 blob_index 行，之后再也查不到块文件位置（契约 §9.3）
+  const stalePaths: string[] = [];
+  for (const t of tombstones) {
+    stalePaths.push(...(await o.repo.listBlobPathsByItem(t.itemId)));
+  }
+
   await o.repo.applyPack({ version: cat.content_version, packId: cat.pack_id, items, articles, tombstones, updatedAt: now });
+
+  // 行已删、文件后删：删文件失败不阻断本轮（本地视图已一致，下次同步会重跑同一流程）
+  for (const path of stalePaths) {
+    try {
+      await o.adapters.fs.remove(path);
+    } catch (err) {
+      console.warn(`墓碑清理块文件失败（不阻断同步）: ${path}`, err);
+    }
+  }
   return { status: 'updated', contentVersion: cat.content_version, items: items.length, blobs };
 }

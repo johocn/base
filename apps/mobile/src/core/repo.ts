@@ -23,6 +23,8 @@ export interface LocalRepo {
   addBlob(blobId: string, itemId: string, path: string, size: number, verifiedAt: string): Promise<void>;
   /** 取某条目的本地块路径（文章页按 cover:<slug> 取封面，Task 19 用） */
   findBlobPathByItem(itemId: string): Promise<string | null>;
+  /** 取某条目在 blob_index 中登记的全部块文件路径（墓碑删文件用，契约 §9.3） */
+  listBlobPathsByItem(itemId: string): Promise<string[]>;
   listTombstones(): Promise<TombstoneRow[]>;
 }
 
@@ -127,6 +129,11 @@ export class SqlRepo implements LocalRepo {
   async findBlobPathByItem(itemId: string): Promise<string | null> {
     const rows = await this.db.select(`SELECT path FROM blob_index WHERE item_id=?`, [itemId]);
     return rows.length > 0 ? String(rows[0].path) : null;
+  }
+
+  async listBlobPathsByItem(itemId: string): Promise<string[]> {
+    const rows = await this.db.select(`SELECT path FROM blob_index WHERE item_id=?`, [itemId]);
+    return rows.map((r) => String(r.path));
   }
 }
 

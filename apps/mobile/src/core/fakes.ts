@@ -93,6 +93,13 @@ export class MemoryRepo implements LocalRepo {
     }
     return null;
   }
+  async listBlobPathsByItem(itemId: string): Promise<string[]> {
+    const out: string[] = [];
+    for (const b of this.blobs.values()) {
+      if (b.itemId === itemId) out.push(b.path);
+    }
+    return out;
+  }
   async listTombstones(): Promise<TombstoneRow[]> {
     return [...this.tombstones.values()];
   }
