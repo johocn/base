@@ -5210,6 +5210,7 @@ Task 12 最后
 | Task 12 Step 9（AC 7） | 计划未预见 | **缺陷**：反熵会把已墓碑撤回、但邻居尚未收敛的块重新拉回，落成 `item_id` 为空的孤儿 `blobs` 行 + 块文件并永久残留（`extra` 只记录不删）。已按册子 §0.2 第 7 条在补齐路径加**本地归属过滤**（只补齐本节点仍有 `media_meta.chunk_hashes_json` 声明的块），并补单测 `TestSyncPeerSkipsTombstonedBlobsStillHeldByNeighbor`（`daf33a9`） |
 | Task 12 Step 10（AC 10） | 有 wsl 时跑 `install.sh` | 本机 `wsl --status` 返回 50（无发行版）、亦无 `bash`，故 `install.sh` 的**真机执行留给 Linux 部署机**（契约 §10.3 的部署者路径）；`install.ps1` 侧已在 Task 11 Step 4–5 真机执行 |
 | 首次生产部署（2026-09-26，`118.190.217.242`） | 计划未预见 | **缺陷**：`install.sh` / `install.ps1` 会预建一个**空的** `<dir>/data.key`，而 `store` 只在密钥文件**不存在**时才生成 → 首启 `error: store: empty store key`，systemd 下反复重启起不来（与脚本自己打印的「首启自动生成」矛盾）。已改为**绝不创建、只对已存在的文件 `chmod 0600`**，真机干净目录复验通过（自动生成 0600 `data.key`、`:8090` 自检 200）；册子 §0.2 第 8 条与 §10.2 第 4 条已回填 |
+| 双节点生产部署（2026-09-26，`118.190.217.242` 上再起同机缓存节点 `base-node-2`） | 计划未预见 | **缺陷**：`install.sh` / `install.ps1` 生成的 `base.env` 带**启用态**的 `BASE_PEER_ADDR=:8081`，而 `-peers` 白名单缺省为空 → `serve` 的硬校验「`-peer-addr` 非空 ⇒ `-peers` 必须非空」判错，**照模板配置的新节点必然起不来**。已把 `BASE_PEER_ADDR` 改为注释行，并把 JSON 参数（`-peers` / `-issuer-pubkeys`）连同 `-peer-addr` 指导写进服务单元 `ExecStart` 的单引号参数（`base.env` 每次执行会被覆盖）；真机干净目录复验三条（默认模板不带对端参数正常起 / 带 `-peer-addr :8089` + 两个 JSON 参数打印「对端接口监听 …白名单 1 个」与「反熵调度已启动」/ 单引号写法 JSON 解析正常），非白名单对端被 mTLS 拒（`tls: bad certificate`）；册子 §0.2 第 9 条与 §10.2 第 5 条已回填 |
 
 另修同源残留：册子 §3「文档清单」中 `internal/sync` 一行并不存在（该名称只出现在本计划的文件清单里，已随册子 §0.2 第 1 条一并说明）；册子 §8 末句「跨节点编排不做」与新增的「`ScrubOnce` 去邻居拉回」表述冲突，已改为「只扫自己的块、不为别人编排，但为自己修复可以去邻居拉」。
 
