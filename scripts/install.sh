@@ -89,17 +89,18 @@ cat > "$DIR/base.env" <<EOF
 # base 节点配置模板（由 install.sh 生成；重复执行会覆盖本文件，自定义项请写进服务单元或 shell profile）
 BASE_DATA=$DIR/data
 BASE_ADDR=:8080
-BASE_PEER_ADDR=:8081
+# 对端监听（节点↔节点）默认不启用：serve 的硬校验是「BASE_PEER_ADDR 非空 ⇒ BASE_PEERS 必须非空」，
+# 四个内部接口只挂对端监听、客户端监听上根本不存在。备好对端指纹后按第 5 步写进服务单元再启用。
+# BASE_PEER_ADDR=:8081
 BASE_ISSUER=$ISSUER
 BASE_TLS_CERT=$DIR/data/tls/node.crt
 BASE_TLS_KEY=$DIR/data/tls/node.key
 BASE_SYNC_INTERVAL=5m
 BASE_SCRUB_INTERVAL=24h
 BASE_FETCH_MAX_BLOBS=64
-# 对端清单（指纹来自对端的 \`based tls-cert show -data <对端数据目录>\`）：
-# BASE_PEERS=[{"url":"https://127.0.0.1:8081","tls_fingerprint":"<hex64>"}]
-# 签发方公钥信任表（缓存节点必填；唯一信任来源，册子 §6.1）：
-# BASE_ISSUER_PUBKEYS=[{"issuer":"$ISSUER","public_key_hex":"<64 hex>"}]
+# 下面两项是 JSON，且本文件每次执行都会被覆盖（见首行说明），故连同 -peer-addr 一起写在服务单元 ExecStart（见第 5 步）。
+#   BASE_PEERS           对端清单，指纹来自对端 \`based tls-cert show -data <对端数据目录>\`
+#   BASE_ISSUER_PUBKEYS  签发方公钥信任表（缓存节点必填；唯一信任来源，册子 §6.1）
 # 源节点签名私钥种子（仅源节点；本脚本不写任何私钥）：
 # BASE_SIGN_KEY=<hex64>
 EOF
@@ -120,6 +121,11 @@ cat <<EOF
   2) 静态加密密钥位于 data/ 之外的 $DIR/data.key（0600），首启自动生成；不要移动或丢失。
   3) 缓存节点：把内容源的签发方公钥写进 BASE_ISSUER_PUBKEYS（唯一信任来源，册子 §6.1）。
   4) 源节点：额外注入签名私钥 BASE_SIGN_KEY；用 \`$DIR/based pubkey -issuer $ISSUER\` 打印对应公钥。
-  5) 服务托管请自行配置（脚本不注册服务）。示例：
-       ExecStart=$DIR/based serve -data $DIR/data
+  5) 服务托管请自行配置（脚本不注册服务）。示例（JSON 参数走命令行：单引号内的双引号是字面量）：
+       [Service]
+       EnvironmentFile=$DIR/base.env
+       EnvironmentFile=$DIR/base.secret.env
+       ExecStart=$DIR/based serve -peer-addr :8081 -peers '[{"url":"https://<对端IP>:8081","tls_fingerprint":"<对端 hex64>"}]' -issuer-pubkeys '[{"issuer":"<内容源 issuer>","public_key_hex":"<内容源公钥 hex64>"}]'
+     不启用对端监听时一并去掉 -peer-addr / -peers / -issuer-pubkeys：ExecStart=$DIR/based serve
+     $DIR/base.secret.env 由你自建（0600），只放一行 BASE_SIGN_KEY=<hex64>，仅源节点需要。
 EOF

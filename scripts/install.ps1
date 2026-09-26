@@ -57,17 +57,21 @@ try {
 # base 节点配置模板（由 install.ps1 生成；重复执行会覆盖本文件，自定义项请写进服务单元或系统环境变量）
 BASE_DATA=$dirPath\data
 BASE_ADDR=:8080
-BASE_PEER_ADDR=:8081
+# 对端监听默认不启用：serve 硬校验是「BASE_PEER_ADDR 非空 ⇒ BASE_PEERS 必须非空」。
+# 对端清单/信任表是 JSON，且本文件每次执行都会被覆盖，故走启动命令行（见下文第 5 步）。
+# BASE_PEER_ADDR=:8081
 BASE_ISSUER=$Issuer
 BASE_TLS_CERT=$dirPath\data\tls\node.crt
 BASE_TLS_KEY=$dirPath\data\tls\node.key
 BASE_SYNC_INTERVAL=5m
 BASE_SCRUB_INTERVAL=24h
 BASE_FETCH_MAX_BLOBS=64
-# 对端清单（指纹来自对端的 based tls-cert show -data <对端数据目录>）：
-# BASE_PEERS=[{"url":"https://127.0.0.1:8081","tls_fingerprint":"<hex64>"}]
+# 对端清单（指纹来自对端的 based tls-cert show -data <对端数据目录>）。
+# 它与 -peer-addr 必须同时给：启用对端监听时 BASE_PEERS 白名单不能为空。
+#   based.exe serve -peer-addr :8081 -peers '[{"url":"https://127.0.0.1:8081","tls_fingerprint":"<hex64>"}]'
 # 签发方公钥信任表（缓存节点必填；唯一信任来源，册子 §6.1）：
-# BASE_ISSUER_PUBKEYS=[{"issuer":"$Issuer","public_key_hex":"<64 hex>"}]
+#   ... -issuer-pubkeys '[{"issuer":"$Issuer","public_key_hex":"<64 hex>"}]'
+# 两者是 JSON，也可写进 base.env（实测 EnvironmentFile 只剥成对的外层引号，内层双引号保留）。
 # 源节点签名私钥种子（仅源节点；本脚本不写任何私钥）：
 # BASE_SIGN_KEY=<hex64>
 "@ | Set-Content -Path $envPath -Encoding utf8
@@ -83,7 +87,7 @@ BASE_FETCH_MAX_BLOBS=64
     Write-Host "  2) 静态加密密钥位于 data/ 之外的 $dirPath\data.key，首启自动生成；不要移动或丢失。"
     Write-Host "  3) 缓存节点：把内容源的签发方公钥写进 BASE_ISSUER_PUBKEYS（唯一信任来源，册子 §6.1）。"
     Write-Host "  4) 源节点：额外注入签名私钥 BASE_SIGN_KEY；用 based pubkey -issuer <id> 打印对应公钥。"
-    Write-Host "  5) 服务托管请自行配置（脚本不注册服务）。"
+    Write-Host "  5) 服务托管请自行配置（脚本不注册服务）。启用对端监听时把 -peer-addr 与 -peers 一起给（JSON 走启动命令行：本 base.env 每次执行会被覆盖）。"
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
