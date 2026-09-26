@@ -18,6 +18,8 @@ func main() {
 		fmt.Println("based " + version)
 	case "import-md":
 		err = runImportMD(os.Args[2:])
+	case "import-video":
+		err = runImportVideo(os.Args[2:])
 	case "export":
 		err = runExport(os.Args[2:])
 	case "serve":
@@ -36,7 +38,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: based <version|import-md|export|serve|pubkey|store-key|tls-cert> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: based <version|import-md|import-video|export|serve|pubkey|store-key|tls-cert|peer-sync|scrub> [flags]")
 }
 
 func must(err error) {
