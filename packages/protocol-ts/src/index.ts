@@ -5,3 +5,5 @@ export * from "./ed25519";
 export * from "./manifest";
 export * from "./identity";
 export * from "./reqsig";
+export * from "./aead";
+export * from "./kdf";

@@ -1,5 +1,5 @@
 import { sha256 } from "@noble/hashes/sha256";
-import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils";
+import { bytesToHex, hexToBytes, randomBytes, utf8ToBytes } from "@noble/hashes/utils";
 
 export function utf8(s: string): Uint8Array {
   return utf8ToBytes(s);
@@ -24,4 +24,4 @@ export function isBlobId(id: string): boolean {
   return typeof id === "string" && /^[0-9a-f]{32}$/.test(id);
 }
 
-export { hexToBytes };
+export { bytesToHex, hexToBytes, randomBytes };
