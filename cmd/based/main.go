@@ -30,6 +30,9 @@ func main() {
 		err = runStoreKey(os.Args[2:])
 	case "tls-cert":
 		err = runTLSCert(os.Args[2:])
+	case "peer-sync":
+		err = runPeerSync(os.Args[2:])
+	// case "scrub": Task 9 落地 runScrub 后一并启用
 	default:
 		usage()
 		os.Exit(2)

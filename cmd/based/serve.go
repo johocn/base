@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,11 +11,12 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/johocn/base/internal/httpapi"
-	"github.com/johocn/base/internal/store"
 )
 
 // peerSpec 是契约 6.3 的对端清单元素。
@@ -36,44 +39,27 @@ func parsePeers(raw string) ([]peerSpec, error) {
 
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	data := fs.String("data", "data", "数据目录")
+	pf := registerPeerFlags(fs)
 	addr := fs.String("addr", envOr("BASE_ADDR", ":8080"), "客户端接口监听地址")
 	issuer := fs.String("issuer", envOr("BASE_ISSUER", "base-node-1"), "签发方标识")
 	key := fs.String("sign-key", os.Getenv("BASE_SIGN_KEY"), "Ed25519 私钥种子（hex64）；配置了才是源节点")
-	storeKey := fs.String("store-key", os.Getenv("BASE_STORE_KEY"), "L4a′ 静态加密密钥（hex64）；缺省 <data>.key，两者皆无则首启生成")
-	tlsCert := fs.String("tls-cert", envOr("BASE_TLS_CERT", ""), "客户端接口证书路径；空=<data>/tls/node.crt；off=明文 HTTP（仅 TLS spike 失败时的退路）")
-	tlsKey := fs.String("tls-key", envOr("BASE_TLS_KEY", ""), "客户端接口私钥路径；空=<data>/tls/node.key")
 	peerAddr := fs.String("peer-addr", envOr("BASE_PEER_ADDR", ""), "节点↔节点监听地址；空=不启用")
-	peersRaw := fs.String("peers", os.Getenv("BASE_PEERS"), `对端清单 JSON：[{"url":"https://...","tls_fingerprint":"<hex64>"}]`)
-	nodeKey := fs.String("node-key", os.Getenv("BASE_NODE_KEY"), "节点间预共享密钥（头 X-Base-Node-Key）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	peers, err := parsePeers(*peersRaw)
+	peers, err := pf.peers()
 	if err != nil {
 		return err
 	}
 
-	opts := []store.Option{}
-	if strings.TrimSpace(*storeKey) != "" {
-		opts = append(opts, store.WithStoreKey(*storeKey))
-	}
-	st, err := store.Open(*data, opts...)
+	st, err := pf.openStore()
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 
-	plaintext := strings.EqualFold(strings.TrimSpace(*tlsCert), "off")
-	certPath, keyPath := strings.TrimSpace(*tlsCert), strings.TrimSpace(*tlsKey)
-	if !plaintext {
-		if certPath == "" {
-			certPath = filepath.Join(*data, "tls", "node.crt")
-		}
-		if keyPath == "" {
-			keyPath = filepath.Join(*data, "tls", "node.key")
-		}
-	}
+	plaintext := strings.EqualFold(strings.TrimSpace(*pf.tlsCert), "off")
+	certPath, keyPath := pf.certPaths()
 
 	// 节点自身 TLS 身份：主监听与对端监听共用同一张证书。
 	// 客户端接口显式降级为明文时，只要启用了 -peer-addr 仍必须生成证书。
@@ -99,6 +85,7 @@ func runServe(args []string) error {
 		Version:        version,
 		FingerprintHex: info.FingerprintHex,
 		PairingCode:    info.PairingCode,
+		FetchMaxBlobs:  *pf.fetchMaxBlobs,
 	})
 	if err != nil {
 		return err
@@ -113,7 +100,6 @@ func runServe(args []string) error {
 	publicHandler := srv.Handler()
 	peerHandler := srv.PeerHandler()
 
-	// 对端监听：强制双向 TLS + 指纹固定，可选叠加预共享密钥（契约 6.3）。
 	if *peerAddr != "" {
 		if len(peerFPs) == 0 {
 			return fmt.Errorf("启用 -peer-addr 必须同时配置 -peers：没有对端指纹白名单就无法固定对端身份")
@@ -123,8 +109,8 @@ func runServe(args []string) error {
 			return err
 		}
 		peerWithKey := peerHandler
-		if strings.TrimSpace(*nodeKey) != "" {
-			peerWithKey = srv.RequireNodeKey(*nodeKey, peerHandler)
+		if strings.TrimSpace(*pf.nodeKey) != "" {
+			peerWithKey = srv.RequireNodeKey(*pf.nodeKey, peerHandler)
 		}
 		ln, err := net.Listen("tcp", *peerAddr)
 		if err != nil {
@@ -139,20 +125,66 @@ func runServe(args []string) error {
 		}()
 	}
 
-	base := fmt.Sprintf("issuer=%s source=%v data=%s storeKey=%s…", *issuer, *key != "", *data, shortKey(st.StoreKeyHex()))
+	// 反熵调度器：只有配置了 -peers 才启动（册子 §7.1）。
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if len(peers) > 0 {
+		syncEvery, _, err := pf.durations()
+		if err != nil {
+			return err
+		}
+		peerCfg, err := pf.config(info)
+		if err != nil {
+			return err
+		}
+		peerCfg.RunForever(ctx, st, peers, syncEvery, logf)
+		log.Printf("based: 反熵调度已启动（%d 个对端，间隔 %s）", len(peers), syncEvery)
+		// scrub 调度在 Task 9 Step 5 追加：peerCfg.ScrubForever(ctx, st, scrubEvery, logf)
+	}
+
+	base := fmt.Sprintf("issuer=%s source=%v data=%s storeKey=%s…", *issuer, *key != "", *pf.data, shortKey(st.StoreKeyHex()))
 	if plaintext {
 		log.Printf("based %s 监听 %s（**明文 HTTP**，仅签名头认证；%s）", version, *addr, base)
-		return http.ListenAndServe(*addr, publicHandler)
+		return serveUntil(ctx, *addr, publicHandler)
 	}
 
 	clientTLS, err := httpapi.ServerTLSConfig(info, nil)
 	if err != nil {
 		return err
 	}
-	httpSrv := &http.Server{Addr: *addr, Handler: publicHandler, TLSConfig: clientTLS}
 	log.Printf("based %s 监听 %s（TLS；指纹 %s；配对码 %s；%s）",
 		version, *addr, info.FingerprintHex, info.PairingCode, base)
-	return httpSrv.ListenAndServeTLS("", "")
+	return serveTLSUntil(ctx, *addr, publicHandler, clientTLS)
+}
+
+// serveUntil 起主监听并在 ctx 取消时优雅关停。
+func serveUntil(ctx context.Context, addr string, h http.Handler) error {
+	srv := &http.Server{Addr: addr, Handler: h}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// serveTLSUntil 同上，带 TLS 配置。
+func serveTLSUntil(ctx context.Context, addr string, h http.Handler, tlsCfg *tls.Config) error {
+	srv := &http.Server{Addr: addr, Handler: h, TLSConfig: tlsCfg}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+	if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // shortKey 只回显密钥前 8 位 hex，避免完整密钥进日志。
