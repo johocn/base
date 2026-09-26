@@ -26,6 +26,18 @@
 - L4a′ 静态加密只在 `internal/store` 一层透明加解密，跨节点仍传**明文**（总纲 §12.1.1）
 - P0 已落地的导入 / 导出 / 公开读 / 手机端下载全部保留，不重写
 
+### 0.2 2026-09-26 实施回填（计划 #13 Task 0–12 执行后）
+
+共 7 条。前 6 条是「照设计原文写会编译不过 / 断言必假 / 与既有契约不符」的修正，第 7 条是真机验收（AC 7）暴露出的算法缺口；每条都已在正文对应处就地改成修正后的口径。
+
+1. **包路径**：`internal/sync` → `internal/peersync`。`sync` 既撞标准库包名、又与本册子「反熵一轮」的语义混淆，实现落在 `internal/peersync`；正文不再出现 `internal/sync`。
+2. **`scrub` 的 `repaired` 在对端监听上恒为 0**：跨节点补齐必须走出站请求，`internal/httpapi` 不依赖 `internal/peersync`。非零的 `repaired` 只出现在发起方 `peersync.ScrubOnce` 的结果与日志里。（就地补进 §5.2 / §8）
+3. **`fetch` 的总字节上限是两侧同源的一个常量**：`protocol.FetchMaxBytes = 64 << 20`（服务端判 413、客户端分批都用它），不是两侧各写一个数；有一侧单独改大即被 `TestBlobFetchMaxBytesIsSharedContract` 拦下。（就地补进 §5.3）
+4. **`-data` 的缺省值不是硬编码 `"data"`**：实现走 `envOr("BASE_DATA", "data")`，与 `serve` / `export` / `import-video` 一致——否则安装脚本生成的 `base.env` 里的 `BASE_DATA` 对子命令无效。（影响 §10.2 的配置模板口径）
+5. **墓碑删块文件是「先收集后删」**：`store.ImportPack` 在事务内收集 `RemovedBlobs` 返回给调用方，事务提交后由调用方删文件，失败只记日志、不回滚；节点侧与客户端侧同口径。（就地补进 §9.2 / §9.3）
+6. **`media_meta` 行级校验口径精确化为「块数 + size 之和」**：`articles` 有 `content_hash` 列可逐行比对，`media_meta` **没有**该列，故只能比 `chunk_hashes_json` 的块数是否等于 manifest `chunks[]` 的长度、`size` 是否等于 `chunks[].size` 之和；整块完整性由签名域（`chunks[].blob_id + size`）与补齐时的逐块哈希共同兜底。（就地补进 §6.2 步骤 5）
+7. **反熵补齐必须按「本地归属」过滤**（真机 AC 7 暴露的缺口）：`missing` 不能只算「邻居有、本地无」，还必须算「本地仍声明归属该块」——即该 `blob_id` 仍出现在本地某条 `media_meta.chunk_hashes_json` 中。墓碑删条目时会把 `media_meta` 一并删掉（§9.2），已撤回的块在本地已无归属；若照邻居 inventory 拉回，会落成 `item_id` 为空的孤儿 `blobs` 行 + 块文件并**永久残留**（`extra` 只记录不删，§7.4 不为它开例外）。（就地补进 §7.2 步骤 4）
+
 ## 1. 范围与不做什么
 
 **做七件事：**
@@ -189,11 +201,13 @@ based import-video -file <path> -slug <slug> [-title <t>] [-mime <m>] [-duration
 - 请求：`{blob_ids?: [<32 hex>...]}`；省略则全量。
 - 响应：`{checked, repaired, dropped, bad:[{blob_id, reason}]}`；`reason` 取值 `hash_mismatch` / `missing`。
 - 本接口**只对自己**做校验修复；「从邻居补齐」由调用方在拿到 `bad` 后走 `fetch`。不做跨节点 scrub 编排。
+- 因上一条，对端监听上本接口的 `repaired` **恒为 0**（算是契约的一部分）：跨节点补齐必须由调用方走出站请求，`internal/httpapi` 不依赖 `internal/peersync`。真正非零的 `repaired` 只出现在发起方 `peersync.ScrubOnce` 的结果与日志里（§8）。
 
 ### 5.3 鉴权、限额与红线
 
 - 内部路由的一切请求都经过对端监听的三层：传输层 mTLS（双向）→ 对端证书指纹白名单 → 可选 `X-Base-Node-Key`。三层缺任一层不影响其余，但**缺省全部启用**（除 node key 可留空以便局域网调试）。
-- `fetch` 是唯一可能被用来放大流量的接口：限额 = 单请求块数上限 + 单请求总字节上限（64 块 × 1 MiB ≈ 64 MiB）；超限 413。
+- `fetch` 是唯一可能被用来放大流量的接口：限额 = 单请求块数上限（`BASE_FETCH_MAX_BLOBS`，默认 64）+ 单请求**总字节**上限；超限 413。
+- 总字节上限是**两侧同源的一个常量** `protocol.FetchMaxBytes = 64 << 20`（64 MiB）：服务端用它判 413，客户端用它分批，避免两侧各写一个数而漂移；某一侧单独改大 → 集成测试 `TestBlobFetchMaxBytesIsSharedContract` 失败。
 - 内部接口**不**返回 `items` / `articles` 等条目级信息，只返回块清单与块字节；条目与正文的复制走公开接口（§6）。
 - 内部接口不写任何业务数据（`scrub` 只修自己的本地状态）。
 
@@ -213,7 +227,8 @@ based import-video -file <path> -slug <slug> [-title <t>] [-mime <m>] [-duration
 4. `GET {peer.url}/v1/pack/{pack_id}` → 写入 `data/packs/<pack_id>/pack.sqlite`（先写临时目录，校验通过再落位）。
 5. 解包入库（一个事务内）：
    - `meta` 表中的 `pack_id` / `content_version` / `merkle_root` 必须与已验签的 manifest 一致；
-   - 逐条按 `manifest.entries[]` 比对：`items` 行按 `item_id` 覆盖写、`articles` / `media_meta` 行按 `item_id` 覆盖写，行的 `content_hash` 必须与 manifest 一致，任一行不符 → **整包拒绝**，事务回滚，临时目录清理；
+   - 逐条按 `manifest.entries[]` 比对：`items` 行按 `item_id` 覆盖写、`articles` / `media_meta` 行按 `item_id` 覆盖写，任一行不符 → **整包拒绝**，事务回滚，临时目录清理；
+   - 行级校验的具体口径（`articles` 有 `content_hash` 列，`media_meta` **没有**）：`articles` 行必须存在、其 `content_hash` 列等于 manifest 且 `sha256(body_md)` 等于它；`media_meta` 行必须存在、`chunk_hashes_json` 的**块数**等于 manifest `chunks[]` 的长度、`size` 等于 `chunks[].size` 的**和**（整块完整性由签名域 `chunks[].blob_id + size` 与补齐时的逐块哈希共同兜底）；
    - `dist_class != public` 的条目**跳过入库**（防御性：P0 导出口径本就拒绝非 public 条目，此处只作双保险，不改变导出侧行为）。
 6. 登记 `packs` 行（`dir` 指向落位后的目录、`signature` 存 manifest 签名）→ 本节点 `LatestPack` 自然指向它 → `catalog` / `manifest` / `pack` 三个公开接口在本节点**立即可用**。
 7. 块补齐：按 entries 的 `chunks[]` 计算本地缺失的 `blob_id`，走反熵补齐（§7.3），补齐后本节点对客户端**完整等价于源节点**（除 `/v1/pubkey` 返回 404）。
@@ -251,7 +266,7 @@ based import-video -file <path> -slug <slug> [-title <t>] [-mime <m>] [-duration
 2. `POST {peer}/v1/sync` 提交 `{本地 content_version, 本地块集合 merkle_root}`；`equal=true` → 本 peer 结束。
 3. `equal=false` → 分页 `GET {peer}/v1/inventory` 拉邻居块清单（含 `blob_id` 与 `size`）。
 4. 计算集合差：
-   - `missing` = 邻居有、本地无 → 走补齐；
+   - `missing` = 邻居有、本地无 **且本地仍有归属声明** → 走补齐。归属声明 = 该 `blob_id` 出现在本地某条 `media_meta.chunk_hashes_json` 中；墓碑会把条目的 `media_meta` 一并删掉（§9.2），已撤回的块在本地已无归属，即便邻居仍声明它也不得拉回（否则会落成 `item_id` 为空的孤儿登记并永久残留，见验收 7）；
    - `extra` = 本地有、邻居无 → **仅记录**，不删除（避免误删唯一副本）。
 5. `missing` 按 `BASE_FETCH_MAX_BLOBS` 分批 `POST {peer}/v1/fetch`：
    - 逐帧读出 → `hex(sha256(payload))[0:32]` 必须等于帧头 `blob_id`，不符即丢弃该帧（不落盘、不登记）并记 `hash_mismatch`；
@@ -285,8 +300,9 @@ blob_replicas(blob_id TEXT, peer TEXT, seen_at INTEGER, PRIMARY KEY(blob_id, pee
   2. 与文件名/登记 id 不符 → 记 `bad{reason=hash_mismatch}` → 删除坏块文件与 `blobs` 行；
   3. 文件不存在但 `blobs` 行存在 → 记 `bad{reason=missing}` → 删除 `blobs` 行；
   4. 对每个坏块：按 `blob_replicas` 找声明持有它的 peer → `POST {peer}/v1/fetch` 拉回 → 校验 → `PutBlob`。全部已知 peer 都拿不到 → 保留在 `bad` 列表并**告警**（不静默、不删除已坏的登记之外的任何数据）。
+- 本地校验修复（`checked` / `dropped` / `bad`）与跨节点补齐（`repaired`）分居两个包：`internal/httpapi` 的 `/v1/scrub` 只做前者（`repaired` 恒 0，§5.2），`internal/peersync` 的 `ScrubOnce` 做编排——先调自己的 `/v1/scrub`，再拿 `bad` 里的 `blob_id` 走 `fetch`，拉回并通过逐块哈希校验的才计 `repaired`。
 - ② 类密文只需重算**密文**哈希，无需解密（密文就是 blob 的逻辑字节，拆封只发生在 L4a′ 的磁盘表示层）。
-- scrub 只修**本地**；跨节点编排不做（节点各扫各的）。
+- 每个节点只扫**自己的**块（节点各扫各的）：不编排「让邻居去 scrub」，也不把坏块清单推给别人；但为自己修复时**可以**去邻居拉（即上一条的 `repaired` 路径）。
 
 ## 9. 墓碑同步
 
@@ -302,13 +318,13 @@ blob_replicas(blob_id TEXT, peer TEXT, seen_at INTEGER, PRIMARY KEY(blob_id, pee
 
 1. `tombstones` 表 upsert `(item_id, revoked_rev)`；
 2. 删 `items` 行、`articles` / `media_meta` 行、`blobs` 行；
-3. 删块文件：先取该 `item_id` 在 `blobs` 中的全部 `blob_id`，逐个删 `data/blobs/...`；
+3. 删块文件（**先收集后删**）：事务内先把该 `item_id` 在 `blobs` 中的全部 `blob_id` 收集出来返回给调用方，事务提交后由调用方逐个删 `data/blobs/...`；删文件失败只记日志、不回滚事务（行已删，本地视图已一致，重跑同一流程即续上）。
 4. 已撤回的 `item_id` 若在**同一或更小** `content_version` 的 manifest 的 `entries[]` 中再次出现 → 拒绝入库该条目（防回卷），并告警；出现在**更大** `content_version` 中 → 视为正常「重新发布」，允许入库（`tombstones` 行按 `revoked_rev` 取大值覆盖）。
 
 ### 9.3 客户端侧（含实现 delta）
 
 - 现实现已做：应用墓碑 → upsert `tombstone` 行 → 删 `blob_index` 行 → 删 `articles` 行 → 删 `items` 行（同一事务）。
-- **补齐**：删行前先按 `blob_index.path` 取出本地块文件路径，在同一流程中删除文件本体（文件删除失败不阻断事务，只记错并重试于下次同步）。
+- **补齐**：**在 `applyPack` 之前**按 `blob_index.path` 取出待删块文件路径（`applyPack` 会删掉 `blob_index` 行，之后再查不到位置），行删完后再逐个删文件本体；删文件失败只 `console.warn` 不阻断本轮（本地视图已一致，下次同步重跑同一流程）。
 - 客户端不重新计算 `revoked_rev`，一律以 manifest 中的值为准；客户端没有源节点签名能力，**不可能伪造墓碑**。
 
 ### 9.4 防回卷的统一口径

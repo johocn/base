@@ -28,7 +28,7 @@
 | 2 | `plans/2026-09-25-base-p0-plan.md` | P0 实施计划（协议双实现 + 导入 + 导出 + 公开读 + 手机端匿名下载） | 不覆盖 S1 及之后 | 总纲 | 已执行；仅 Task 20 真机验收待人工 |
 | 3 | `specs/2026-09-26-base-identity-tls-design.md` | **S1 纵切**：客户端自持 Ed25519 身份、id 派生、节点公钥登记与验签、密码托管加密私钥、TLS 信任模型、私钥本地存储、**节点静态加密 L4a′（应用层）** | 不做任何互动形态（评论/进度/小组/私信）；不做内容分发改动；不做 L4b / L4c / ① 类 E2E / JWT | 总纲 | **已实施**（计划 #12 已落地；§6.1 已标注自签 TLS 的真机 spike 结论未定） |
 | 4 | `specs/2026-09-26-base-mobile-local-encryption-spike.md` | 风险前置：验证 `plus.sqlite` 是否支持本地加密；不支持时定案退路 | 不实现业务功能；只出结论与退路 | 总纲 §8.2 | 待写 |
-| 5 | `specs/2026-09-26-base-content-distribution-design.md` | A 主线：视频分块、包级复制、多节点反熵、邻居补齐、scrub、墓碑同步、发行包 | 不改内容包规范 v1 的字段契约；不做课程层级建模（item_id 命名留给 #6）；不做容量上限与 LRU 淘汰 | 总纲、S1 | 2026-09-26 已设计；**计划 #13 已出**（P0 已实现部分只补文档） |
+| 5 | `specs/2026-09-26-base-content-distribution-design.md` | A 主线：视频分块、包级复制、多节点反熵、邻居补齐、scrub、墓碑同步、发行包 | 不改内容包规范 v1 的字段契约；不做课程层级建模（item_id 命名留给 #6）；不做容量上限与 LRU 淘汰 | 总纲、S1 | **已落地**（计划 #13 Task 0–12；实施回填见册子 §0.2 的 7 条修正） |
 | 6 | `specs/*-base-course-design.md` | A 主线：课程体系 `course → lesson → (article/video/quiz)` 落地与排序 | 不引入新的权限维度；可见性一律用 `dist_class` | 总纲 §6.0、#5 | 待写 |
 | 7 | `specs/*-base-discussion-design.md` | B 主线：① 类内容锚定讨论 + 审核通道 + 分享归因 | 不做 ② 类讨论（归 #9/#10）；不做读取鉴权 | 总纲、S1 | 待写 |
 | 8 | `specs/*-base-progress-design.md` | B 主线：学习进度与打卡、LWW 合并 | 不做排名/奖励结算；不做跨身份可见性策略 | 总纲、S1 | 待写 |
@@ -36,7 +36,7 @@
 | 10 | `specs/*-base-direct-message-design.md` | B 主线：私信（② 加密）、收发索引、离线补投 | 不做节点侧内容审核；不做群发/广播 | 总纲、S1、#4 | 待写 |
 | 11 | `docs/deploy-at-rest.md` | L4a 落地：**文件系统级**磁盘加密的装机步骤与恢复密钥流程 | 不含应用层加密（L4a′ 归 #3）；不含代码改动 | 总纲 §12.1 | 待写（随发行脚本产出） |
 | 12 | `plans/2026-09-26-base-identity-tls-plan.md` | S1 实施计划（Task 0–15：测试去 socket 化、TLS 证书/指纹/配对码、协议层 identity/reqsig、存储层 L4a′、身份与验签中间件、事件路由、移动端身份、端到端验收） | 不覆盖 A/B 主线；不含 #4 spike 结论；不做节点间同步 | 册子 #3 | 已执行（Task 0–15 已落地并推送；**Task 1 自签 TLS 真机 spike 未执行**） |
-| 13 | `plans/2026-09-26-base-content-distribution-plan.md` | A 主线内容分发实施计划（Task 0–12：离线测试基座、store 新表/分页/删除、`import-video` 分块导入、blobpack 帧格式、公开/对端路由隔离、四个内部接口、出站 peer 客户端、包级复制、反熵与副本登记、scrub、墓碑同步、install 脚本、三节点验收） | 不改内容包规范 v1 的字段与表结构；不做课程层级建模与 `item_id` 重命名（归 #6）；不做容量上限与 LRU 淘汰；不做读取鉴权 | 册子 #5 | 待执行 |
+| 13 | `plans/2026-09-26-base-content-distribution-plan.md` | A 主线内容分发实施计划（Task 0–12：离线测试基座、store 新表/分页/删除、`import-video` 分块导入、blobpack 帧格式、公开/对端路由隔离、四个内部接口、出站 peer 客户端、包级复制、反熵与副本登记、scrub、墓碑同步、install 脚本、三节点验收） | 不改内容包规范 v1 的字段与表结构；不做课程层级建模与 `item_id` 重命名（归 #6）；不做容量上限与 LRU 淘汰；不做读取鉴权 | 册子 #5 | **已执行**（Task 0–12 全部落地；AC 1–9 三节点真机通过、AC 10 的 `install.sh` 侧留给 Linux 部署机） |
 
 ## 4. 依赖顺序
 
@@ -56,6 +56,6 @@ P0 计划 (#2) 已完成，冻结，不再变更
 
 ## 5. 当前阶段
 
-- 已完成：总纲 2026-09-26 改版与 **L4a′ 追加确认**（§12.1.1）、P0 实现（保留，不删除）、**S1 身份 + TLS + 节点静态加密（#3 册子 + #12 计划 Task 0–15）已落地并推送**（`go test ./...` 全包 + TS 73/73 + typecheck 通过；双节点运维验收通过）。
-- 待人工：`#2` 中 Task 20 真机验收（DCloud / HBuilderX）；`#12` 中 Task 1 自签 TLS 真机 spike（决定客户端↔节点走 TLS 还是退路 F1，结论未定前不实现 #3 §8 的 `nodes` 表与配对交互）。
-- 下一步（关键路径）：`#5` 内容分发册子与**实施计划**均已出（`specs/2026-09-26-base-content-distribution-design.md`、`plans/2026-09-26-base-content-distribution-plan.md` #13），**待执行** → 之后 `#6` 课程体系册子；并行可做 `#4` 手机本地加密 spike 册子（它决定 #9 / #10 的本地存储形态）。
+- 已完成：总纲 2026-09-26 改版与 **L4a′ 追加确认**（§12.1.1）、P0 实现（保留，不删除）、**S1 身份 + TLS + 节点静态加密（#3 册子 + #12 计划 Task 0–15）已落地并推送**（`go test ./...` 全包 + TS 73/73 + typecheck 通过；双节点运维验收通过）、**A 主线内容分发（#5 册子 + #13 计划 Task 0–12）已落地并推送**（`go build ./...` / `go test ./...` 全包 + mobile vitest 30/30 + typecheck 通过；三节点真机验收 AC 1–9 通过、AC 7 的块复活缺口已按册子 §0.2 第 7 条收口）。
+- 待人工：`#2` 中 Task 20 真机验收（DCloud / HBuilderX）；`#12` 中 Task 1 自签 TLS 真机 spike（决定客户端↔节点走 TLS 还是退路 F1，结论未定前不实现 #3 §8 的 `nodes` 表与配对交互）；`#13` 的 AC 10 中 `install.sh` 的 Linux 侧真机执行（本机无 WSL/bash，契约 §10.3 的部署者路径留给 Linux 部署机）。
+- 下一步（关键路径）：`#6` 课程体系册子（`specs/*-base-course-design.md`）；并行可做 `#4` 手机本地加密 spike 册子（它决定 #9 / #10 的本地存储形态）。

@@ -5189,3 +5189,27 @@ Task 12 最后
 每个 Task 完成即 `git add` **该 Task 的具体文件**（绝不 `git add -A`）并 commit；Task 12 落地后追加 `## 执行记录` 并回填 `docs/README.md` 与册子。
 
 ---
+
+## 执行记录（2026-09-26，Task 0–12 全部落地）
+
+本计划 13 个 Task（0–12）已全部实现并提交（Task 9 `0cac9d4`、Task 10 `dbd3b2e`、Task 11 `e8d2503`，另含 packexport 去重一致性修复 `b67612e` 与反熵归属过滤修复 `daf33a9`）。以下是**与计划原文的偏离项**（计划代码照抄会编译不过 / 断言必假 / 与既有契约不符，或验收脚本机制不成立）：
+
+| 位置 | 计划原文 | 实际做法与原因 |
+|---|---|---|
+| Task 5 / Task 8 包路径 | 新建 `internal/sync` | 实际落在 `internal/peersync`：`sync` 撞标准库包名，且与「反熵一轮」语义混淆。册子 §0.2 第 1 条已就地回填 |
+| Task 5 `/v1/scrub` | 响应 `repaired` 可非零 | 对端监听的 `repaired` **恒为 0**：跨节点补齐必须走出站请求，`internal/httpapi` 不依赖 `internal/peersync`。非零值只出现在发起方 `peersync.ScrubOnce` |
+| Task 6/7 出站 `fetch` | 客户端侧另写总字节上限 | 改为两侧同源常量 `protocol.FetchMaxBytes = 64 << 20`（服务端判 413、客户端分批共用），由 `TestBlobFetchMaxBytesIsSharedContract` 锁住，避免两侧漂移 |
+| Task 2 / Task 8 `-data` 缺省值 | 硬编码 `"data"` | 走 `envOr("BASE_DATA", "data")`，与 `serve` / `export` / `import-video` 一致；否则安装脚本生成的 `base.env` 里的 `BASE_DATA` 对子命令无效 |
+| Task 1 / Task 7 / Task 10 墓碑删块文件 | 事务内直接删文件 | 改「**先收集后删**」：`store.ImportPack` 事务内收集 `RemovedBlobs` 返回，事务提交后由调用方删文件，失败只记日志不回滚；客户端侧同口径（必须在 `applyPack` **之前**取 `blob_index.path`，之后行已删、查不到位置） |
+| Task 7 `media_meta` 行级校验 | 「行的 `content_hash` 必须与 manifest 一致」 | `media_meta` **没有** `content_hash` 列，该断言必假。改为按「块数 + size 之和」：`chunk_hashes_json` 块数 == manifest `chunks[]` 长度、`size` == `chunks[].size` 之和；整块完整性由签名域与补齐时逐块哈希兜底 |
+| packexport 去重一致性 | （未预见） | `packexport` 按块 id **去重**后写 `chunks[]`，而 `media_meta.chunk_hashes_json` 是**按 seq 的完整序列**（长度 = `ceil(size/chunk_size)`）；同字节块重复出现时两侧长度不等 → 导出侧口径对齐为按 seq 序列（`b67612e`）。由 `zzpackcheck` 对三节点交叉比对发现 |
+| Task 12 Step 6（AC 3） | 同句多次 `curl` 取三块 | `headLen=0` / 文件不存在：同句多次 curl 混杂。改为每块独立 `curl.exe -s -k -o <file> -w '%{http_code}'` + 独立 `-I -o <headfile>` |
+| Task 12 Step 7（AC 8） | 断言 `articles.title` 等亦无明文 | 过严。按总纲 §12.1.1，L4a′ 本期**只加密** `articles.body_md` 与 `data/blobs/*`；改为断言正文与 blob 加密封装（长度 = 明文 + 28，nonce 12 + tag 16） |
+| Task 12 Step 8（AC 9） | 篡改**已存在** pack1 的 manifest 后断言缓存节点不前进 | 机制不成立：`export` 会新建 pack2（version 2），B 拉的是 pack2（未篡改）→ 必然前进。改为先 export 出 pack2，再篡改 **pack2** 的 manifest（`content_version` 2 → 99），B/C 保持 1，日志出现 `manifest 验签失败`；恢复后收敛到 2 |
+| Task 12 Step 9（AC 1） | 只删缓存节点的块文件即触发反熵补齐 | 不足以触发：`equal` 由 `blobs` 表的 `ListAllBlobIDs()` 算出，不检查块文件是否存在。改为连 `blobs` 行一起删（模拟缓存节点块数据全失），实测 `equal=false missing=2 fetched=2`，随后 `equal=true` |
+| Task 12 Step 9（AC 7） | 计划未预见 | **缺陷**：反熵会把已墓碑撤回、但邻居尚未收敛的块重新拉回，落成 `item_id` 为空的孤儿 `blobs` 行 + 块文件并永久残留（`extra` 只记录不删）。已按册子 §0.2 第 7 条在补齐路径加**本地归属过滤**（只补齐本节点仍有 `media_meta.chunk_hashes_json` 声明的块），并补单测 `TestSyncPeerSkipsTombstonedBlobsStillHeldByNeighbor`（`daf33a9`） |
+| Task 12 Step 10（AC 10） | 有 wsl 时跑 `install.sh` | 本机 `wsl --status` 返回 50（无发行版）、亦无 `bash`，故 `install.sh` 的**真机执行留给 Linux 部署机**（契约 §10.3 的部署者路径）；`install.ps1` 侧已在 Task 11 Step 4–5 真机执行 |
+
+另修同源残留：册子 §3「文档清单」中 `internal/sync` 一行并不存在（该名称只出现在本计划的文件清单里，已随册子 §0.2 第 1 条一并说明）；册子 §8 末句「跨节点编排不做」与新增的「`ScrubOnce` 去邻居拉回」表述冲突，已改为「只扫自己的块、不为别人编排，但为自己修复可以去邻居拉」。
+
+**验证**：`go build ./...` + `go test ./...` 全包 ok（含 `internal/peersync` 的 `TestSyncPeerConvergesBlobSetsAndRegistersReplicas`、`TestSyncPeerSkipsTombstonedBlobsStillHeldByNeighbor` 与 `internal/httpapi` 的 `TestBlobFetchMaxBytesIsSharedContract`）；`npm run test --workspace @base/mobile` 30/30 PASS；`npm run typecheck --workspace @base/mobile` 无错。三节点真机验收（1 源 + 2 缓存，LAN IP `192.168.1.2`）：AC 1（块数据全失 → 从邻居补齐、逐块哈希正确）、AC 2（坏块 `scrub checked=1 repaired=1 dropped=1 unrepaired=0` → 修复后 GET 200 / 哈希一致 → 复扫全 0）、AC 3（1.5 MiB 视频 → 2 块、三节点逐块 GET/HEAD/哈希通过、`manifest.chunks[]` 与 `media_meta.chunk_hashes_json` 一致）、AC 4（A/B 两侧 pack sha256 一致）、AC 5（客户端监听四个内部路由全 404、对端监听裸连 exit 35）、AC 7（墓碑后三节点 `items` 移除、块文件 0、块行 0，+40s 后仍未复活，B↔C 日志 `equal=true missing=0 fetched=0`）、AC 8（`base.db`(+wal/shm) 无明文命中、6 个 blob 文件长度 = 明文 + 28 且非全零、公开读仍返回明文）、AC 9（篡改 manifest → B/C 水位不动并记验签失败；恢复后收敛）全部通过；AC 6（幂等）由单测覆盖（同版本复制 noop 的 `TestImportPackNoopWhenUpToDate`；去重下 `chunks[]` 仍按声明块序列的 `TestExportKeepsDeclaredChunkCountUnderDedup`），AC 10 的 `install.sh` 侧留给 Linux 部署机（见上表）。
