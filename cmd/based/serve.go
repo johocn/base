@@ -129,7 +129,7 @@ func runServe(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if len(peers) > 0 {
-		syncEvery, _, err := pf.durations()
+		syncEvery, scrubEvery, err := pf.durations()
 		if err != nil {
 			return err
 		}
@@ -139,7 +139,8 @@ func runServe(args []string) error {
 		}
 		peerCfg.RunForever(ctx, st, peers, syncEvery, logf)
 		log.Printf("based: 反熵调度已启动（%d 个对端，间隔 %s）", len(peers), syncEvery)
-		// scrub 调度在 Task 9 Step 5 追加：peerCfg.ScrubForever(ctx, st, scrubEvery, logf)
+		peerCfg.ScrubForever(ctx, st, peers, scrubEvery, logf)
+		log.Printf("based: scrub 调度已启动（间隔 %s，首轮延迟 10 分钟）", scrubEvery)
 	}
 
 	base := fmt.Sprintf("issuer=%s source=%v data=%s storeKey=%s…", *issuer, *key != "", *pf.data, shortKey(st.StoreKeyHex()))
