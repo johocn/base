@@ -16,6 +16,9 @@ type Options struct {
 	Issuer     string
 	SignKeyHex string
 	Version    string
+	// TLS 身份，供首页展示配对码与指纹；两者留空表示节点未启用 TLS。
+	FingerprintHex string
+	PairingCode    string
 }
 
 // Server 是节点 HTTP 服务。

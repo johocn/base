@@ -31,6 +31,7 @@ var authErrText = map[string]string{
 	"identity_id_invalid":      "身份 id 必须是 32 位 hex",
 	"identity_alg_unsupported": "算法不受支持",
 	"identity_unregistered":    "身份未登记",
+	"node_key_mismatch":        "节点间预共享密钥不匹配",
 }
 
 // writeAuthErr 按契约 3.3 输出 {"error": "<人读消息>", "code": "<机器码>"}。
