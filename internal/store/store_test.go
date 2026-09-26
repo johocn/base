@@ -16,6 +16,17 @@ func openTemp(t *testing.T) *Store {
 	return st
 }
 
+// putBlob 写入一个块并返回 blob_id（测试 helper）。
+func putBlob(t *testing.T, st *Store, content, itemID string, seq int) string {
+	t.Helper()
+	data := []byte(content)
+	id := protocol.BlobID(data)
+	if err := st.PutBlob(id, data, itemID, seq); err != nil {
+		t.Fatalf("PutBlob: %v", err)
+	}
+	return id
+}
+
 func TestOpenConfiguresWAL(t *testing.T) {
 	st := openTemp(t)
 	var mode string

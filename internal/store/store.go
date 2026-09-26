@@ -78,6 +78,7 @@ type BlobRef struct {
 	BlobID string
 	Seq    int
 	Size   int64
+	ItemID string
 }
 
 // PackRecord 是已发布包的登记。

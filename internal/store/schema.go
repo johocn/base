@@ -115,4 +115,13 @@ var schemaStatements = []string{
 		created_at  INTEGER NOT NULL,
 		received_at INTEGER NOT NULL
 	)`,
+
+	// blob_replicas：peer 存 BASE_PEERS 里的 url；一行 = 「那个 peer 曾经声明持有该块」，
+	// 与本地是否持有无关；长期离线不删行，seen_at 供运维判断新鲜度。
+	`CREATE TABLE IF NOT EXISTS blob_replicas(
+		blob_id TEXT NOT NULL,
+		peer    TEXT NOT NULL,
+		seen_at INTEGER NOT NULL,
+		PRIMARY KEY(blob_id, peer)
+	)`,
 }
