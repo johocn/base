@@ -31,22 +31,58 @@ interface PlusSqlite {
   }): void;
 }
 
+/** plus.io 的目录/文件对象（HTML5+ 里两者是同一族 duck-typed 对象） */
+interface PlusEntry {
+  isFile?: boolean;
+  isDirectory?: boolean;
+  getDirectory(
+    path: string,
+    flag: { create: boolean; exclusive?: boolean },
+    success: (entry: PlusEntry) => void,
+    error: (e: unknown) => void,
+  ): void;
+  getFile(
+    path: string,
+    flag: { create: boolean; exclusive?: boolean },
+    success: (entry: PlusEntry) => void,
+    error: (e: unknown) => void,
+  ): void;
+  createWriter(success: (writer: PlusWriter) => void, error: (e: unknown) => void): void;
+  file(success: (file: { size?: number }) => void, error: (e: unknown) => void): void;
+  getMetadata(success: (meta: { size?: number }) => void, error: (e: unknown) => void): void;
+  remove(success?: () => void, error?: (e: unknown) => void): void;
+}
+
+/**
+ * plus.io 的写文件对象。writeAsBinary 收的是 **base64 串**（不是 Uint8Array）——
+ * 依据是 DCloud 自家 uni-h5 的 app-plus/helpers/save-image.js：`writer.writeAsBinary(base64)`。
+ */
+interface PlusWriter {
+  onwrite?: () => void;
+  onerror?: (e: unknown) => void;
+  seek(position: number): void;
+  writeAsBinary(data: string): void;
+}
+
+/** plus.io 的读文件对象：只有 readAsDataURL / readAsText，二进制只能走 dataURL */
+interface PlusReader {
+  result?: string;
+  onloadend?: () => void;
+  onerror?: (e: unknown) => void;
+  readAsDataURL(file: { size?: number }): void;
+}
+
 export interface PlusRuntime {
-  io: { convertLocalFileSystemURL(path: string): string };
+  io: {
+    convertLocalFileSystemURL(path: string): string;
+    /** url 支持相对 URL（_doc/…）与本地绝对 URL（file:///…），见 HTML5+ io 文档 */
+    resolveLocalFileSystemURL(url: string, success: (entry: PlusEntry) => void, error: (e: unknown) => void): void;
+    FileReader: new () => PlusReader;
+  };
   sqlite: PlusSqlite;
 }
 
-interface FsManager {
-  mkdirSync(path: string, recursive?: boolean): void;
-  writeFileSync(path: string, data: ArrayBuffer, encoding?: string): void;
-  readFileSync(path: string, encoding?: string): ArrayBuffer | string;
-  accessSync(path: string): void;
-  unlinkSync(path: string): void;
-  statSync(path: string): { size: number };
-}
-
 interface UniGlobal {
-  getFileSystemManager?: () => FsManager;
   getStorageSync(key: string): string;
   setStorageSync(key: string, value: string): void;
   request(o: {
@@ -202,41 +238,94 @@ export class PlusLocalDb implements LocalDb {
   }
 }
 
+const DOC = '_doc';
+
+/** 绝对平台路径 → plus.io 认的 URL（_doc/…）：plus.io 不认裸平台路径 */
+function toPlusUrl(io: PlusRuntime['io'], absPath: string): string {
+  const doc = io.convertLocalFileSystemURL(DOC);
+  return absPath.startsWith(doc) ? DOC + absPath.slice(doc.length) : absPath;
+}
+
+function resolveUrl(io: PlusRuntime['io'], url: string): Promise<PlusEntry> {
+  return new Promise((resolve, reject) => {
+    io.resolveLocalFileSystemURL(url, resolve, (e) =>
+      reject(new Error(`解析路径失败 ${url}: ${JSON.stringify(e)}`)),
+    );
+  });
+}
+
 export class PlusFs implements FsAdapter {
   constructor(private readonly p: PlusRuntime) {}
 
-  private mgr(): FsManager {
-    const m = uniGlobal().getFileSystemManager?.();
-    if (!m) throw new Error('当前运行时不支持 uni.getFileSystemManager（文件读写不可用）');
-    return m;
+  /** 逐段下钻建目录，缺失的段一律 create —— 调用方不必先建父目录 */
+  private async dirEntry(absDir: string): Promise<PlusEntry> {
+    const parts = toPlusUrl(this.p.io, absDir).split('/').filter(Boolean);
+    let entry = await resolveUrl(this.p.io, parts[0] as string);
+    for (const name of parts.slice(1)) {
+      const parent = entry;
+      entry = await new Promise<PlusEntry>((resolve, reject) => {
+        parent.getDirectory(name, { create: true, exclusive: false }, resolve, (e) =>
+          reject(new Error(`建目录失败 ${absDir}/${name}: ${JSON.stringify(e)}`)),
+        );
+      });
+    }
+    return entry;
   }
 
-  /** 目录必须显式创建：SQLite 会建库文件，但不会建父目录 */
-  ensureDir(dir: string): void {
-    const m = this.mgr();
-    try {
-      m.accessSync(dir);
-    } catch {
-      m.mkdirSync(dir, true);
-    }
+  private async fileEntry(absPath: string, create: boolean): Promise<PlusEntry> {
+    const cut = absPath.lastIndexOf('/');
+    const dir = await this.dirEntry(absPath.slice(0, cut));
+    const name = absPath.slice(cut + 1);
+    return new Promise<PlusEntry>((resolve, reject) => {
+      dir.getFile(name, { create, exclusive: false }, resolve, (e) =>
+        reject(new Error(`打开文件失败 ${absPath}: ${JSON.stringify(e)}`)),
+      );
+    });
   }
 
   async rootDir(): Promise<string> {
-    return `${this.p.io.convertLocalFileSystemURL('_doc')}/base`;
+    return `${this.p.io.convertLocalFileSystemURL(DOC)}/base`;
+  }
+
+  /** 目录必须显式创建：SQLite 会建库文件，但不会建父目录 */
+  async ensureDir(dir: string): Promise<void> {
+    await this.dirEntry(dir);
   }
 
   async writeFile(path: string, data: Uint8Array): Promise<void> {
-    this.ensureDir(path.slice(0, path.lastIndexOf('/')));
-    this.mgr().writeFileSync(path, toArrayBuffer(data), 'binary');
+    // 先删旧文件：覆盖写时残留的尾巴会让上一次更长的内容混进来
+    await this.remove(path);
+    const entry = await this.fileEntry(path, true);
+    const writer = await new Promise<PlusWriter>((resolve, reject) => {
+      entry.createWriter(resolve, (e) => reject(new Error(`createWriter 失败 ${path}: ${JSON.stringify(e)}`)));
+    });
+    await new Promise<void>((resolve, reject) => {
+      writer.onwrite = () => resolve();
+      writer.onerror = (e) => reject(new Error(`写文件失败 ${path}: ${JSON.stringify(e)}`));
+      writer.seek(0);
+      writer.writeAsBinary(bytesToBase64(data));
+    });
   }
 
   async readFile(path: string): Promise<Uint8Array> {
-    return toUint8(this.mgr().readFileSync(path, 'binary'));
+    const entry = await this.fileEntry(path, false);
+    const file = await new Promise<{ size?: number }>((resolve, reject) => entry.file(resolve, reject));
+    const reader = new this.p.io.FileReader();
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      reader.onloadend = () => {
+        if (typeof reader.result === 'string') resolve(reader.result);
+        else reject(new Error(`读文件无结果 ${path}`));
+      };
+      reader.onerror = (e) => reject(new Error(`读文件失败 ${path}: ${JSON.stringify(e)}`));
+      reader.readAsDataURL(file);
+    });
+    const comma = dataUrl.indexOf(',');
+    return base64ToBytes(comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl);
   }
 
   async exists(path: string): Promise<boolean> {
     try {
-      this.mgr().accessSync(path);
+      await this.fileEntry(path, false);
       return true;
     } catch {
       return false;
@@ -245,14 +334,17 @@ export class PlusFs implements FsAdapter {
 
   async remove(path: string): Promise<void> {
     try {
-      this.mgr().unlinkSync(path);
+      const entry = await this.fileEntry(path, false);
+      await new Promise<void>((resolve, reject) => entry.remove(resolve, (e) => reject(e)));
     } catch {
       // 文件本就不存在
     }
   }
 
   async size(path: string): Promise<number> {
-    return this.mgr().statSync(path).size;
+    const entry = await this.fileEntry(path, false);
+    const meta = await new Promise<{ size?: number }>((resolve, reject) => entry.getMetadata(resolve, reject));
+    return meta.size ?? 0;
   }
 }
 
@@ -297,8 +389,21 @@ export class PlusPackReader implements PackReader {
   }
 }
 
-export function toArrayBuffer(data: Uint8Array): ArrayBuffer {
-  return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+/** Uint8Array → base64：plus.io 的 writeAsBinary 只收 base64 串 */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  const CHUNK = 0x8000; // 分块喂 fromCharCode，避免超参数上限
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK) as unknown as number[]);
+  }
+  return btoa(bin);
+}
+
+export function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 export function toUint8(data: unknown): Uint8Array {

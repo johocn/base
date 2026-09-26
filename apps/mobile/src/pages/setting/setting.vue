@@ -62,13 +62,11 @@ async function save() {
 
 // 能力诊断：真机验收第一步，把平台能力有没有一次看清（Task 20）
 function probe() {
-  const u = globalThis as unknown as Record<string, unknown>;
-  const uniAny = u.uni as { getFileSystemManager?: () => unknown } | undefined;
   const p = plusRuntime();
   probeLines.value = [
     `plus 运行时：${p ? '有' : '无'}`,
     `plus.sqlite：${p?.sqlite ? '有' : '无'}`,
-    `uni.getFileSystemManager：${typeof uniAny?.getFileSystemManager === 'function' ? '有' : '无'}`,
+    `plus.io 文件接口：${p?.io.resolveLocalFileSystemURL ? '有' : '无'}`,
     `_doc 绝对路径：${p ? p.io.convertLocalFileSystemURL('_doc') : '-'}`,
   ];
 }

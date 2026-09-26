@@ -17,7 +17,7 @@ export async function bootstrap(): Promise<AppContext> {
   const p = assertAppRuntime();
   const fs = new PlusFs(p);
   const root = await fs.rootDir();
-  fs.ensureDir(root);
+  await fs.ensureDir(root);
 
   const db = new PlusLocalDb(p, `${root}/base.db`);
   for (const sql of SCHEMA_SQL) await db.execute(sql);
