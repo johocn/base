@@ -1518,6 +1518,7 @@ git push
    - 证书：DCloud 云证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`，与 0.4.1 一致（可覆盖安装）。
    - 上线：APK → `/opt/appdl/base-0.5.0.apk`，`/opt/appdl/index.html` 指向 `base-0.5.0.apk`；`release.json` 落 `/opt/base-cache/data/release.json`（`issued_at 2026-09-27T16:49:21Z`，`min_version_name 0.4.0`，`notes` 为不含空格的一个 token，按计划签发）；未产生误写副本。
    - 线上验证：`GET /v1/release` 200 且 `apk_size=27373900` 与文档一致；`/dl/base-0.5.0.apk` 200 / `Content-Length 27373900`；**验签用独立实现复核为 true**（Node 原生 ed25519 + JCS 规范化，不共享仓库 TS 验签器代码，公钥 `48c33db9…24f4`）。
+   - **产物复核（防「版本号新、功能旧」）**：从**已发布的 APK** 内（`assets/apps/__UNI__936A667/www/`）取出 `app-service.js`（162910 字节）逐串核对，`基座自检`、`selfcheck`、`selfcheck_probe`、`randomblob`、降级文案 `随机源不可用` / `节点未接受写入`（评论页）与 `本地文件不可写`（课程页）**全部命中**；`app-config-service.js` 含路由 `pages/selfcheck/selfcheck`；`manifest.json` 为 `0.5.0`。即云打包抓到的确实是本次构建产物。
 6. **T9 第 1 项（真机 6 条验收）待装机后回填**：计划 Step 1 的 6 条判定需要真机操作，本小节先记发布实况，真机结果待补。
 
 ---
