@@ -71,12 +71,14 @@ interface NodeOptions {
   withQuiz?: boolean;
   /** 容器条目（课程/课时）的 segments；传入时按 itemId 生成 manifest 条目并注入 pack */
   segments?: SegmentRow[];
+  /** 覆盖默认文章集合（默认 article:aaa / article:bbb） */
+  items?: ArticleRow[];
   http?: FakeHttp;
 }
 
 function buildNode(version: number, options: NodeOptions = {}): NodeFixture {
   const http = options.http ?? new FakeHttp();
-  const all = [
+  const all = options.items ?? [
     makeArticle('article:aaa', '甲', '甲正文\n'),
     makeArticle('article:bbb', '乙', '乙正文\n'),
   ];
@@ -405,5 +407,20 @@ describe('syncOnce', () => {
     expect(await repo.getConfig('content_version')).toBeNull();
     expect(await repo.listSegments('course/c1')).toEqual([]);
     expect((await repo.listItems()).map((i) => i.itemId)).not.toContain('course/c1');
+  });
+
+  it('同步成功后自动触发旧 id 平移', async () => {
+    const fx = buildNode(7, {
+      items: [makeArticle('article:aaa', '甲', '甲正文\n'), makeArticle('article/aaa', '甲新', '甲新正文\n')],
+    });
+    const { repo, opts } = setup(fx);
+    await repo.setConfig('pubkey_hex', PUB);
+    await repo.toggleFavorite('article:aaa', '2026-01-01T00:00:00Z');
+
+    const res = await syncOnce(opts);
+
+    expect(res.status).toBe('updated');
+    expect(await repo.isFavorite('article/aaa')).toBe(true);
+    expect(await repo.isFavorite('article:aaa')).toBe(false);
   });
 });

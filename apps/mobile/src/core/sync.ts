@@ -1,6 +1,7 @@
 import { blobId, sha256Hex, utf8, verifyManifest, type Manifest } from '@base/protocol-ts';
 
 import type { Adapters, SqliteConnection } from '../platform/adapter';
+import { migrateLegacyIds } from './id-migrate';
 import type { LocalRepo } from './repo';
 import type { ArticleRow, ItemRow, QuizRow, SegmentRow, TombstoneRow } from './types';
 
@@ -271,5 +272,7 @@ export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
       console.warn(`墓碑清理块文件失败（不阻断同步）: ${path}`, err);
     }
   }
+  // 一次性幂等平移：把旧形态 id（<source>:<slug>）上的用户数据改指到新形态
+  await migrateLegacyIds(o.repo);
   return { status: 'updated', contentVersion: cat.content_version, items: items.length, blobs };
 }
