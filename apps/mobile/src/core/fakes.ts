@@ -197,19 +197,30 @@ function sameQuery(a: string, b: string): boolean {
  * pack 存储按路径共享：同一测试内 buildNode 可能新建 Reader 实例（旧的仍被 opts 持有），
  * 共享后二者视为同一份只读分发产物。
  */
-const PACK_STORE = new Map<string, ArticleRow[]>();
+interface PackRows {
+  articles: ArticleRow[];
+  quizzes: QuizRow[];
+}
+const PACK_STORE = new Map<string, PackRows>();
 
 export class FakePackReader implements PackReader {
-  set(path: string, rows: ArticleRow[]): void {
-    PACK_STORE.set(path, rows);
+  set(path: string, articles: ArticleRow[], quizzes: QuizRow[] = []): void {
+    PACK_STORE.set(path, { articles, quizzes });
   }
   async open(path: string): Promise<SqliteConnection> {
     const rows = PACK_STORE.get(path);
     if (!rows) throw new Error(`fake pack 未登记: ${path}`);
     return {
       select: async (sql: string) => {
+        if (sql.includes('FROM quizzes')) {
+          return rows.quizzes.map((q) => ({
+            item_id: q.itemId,
+            question_json: q.questionJson,
+            content_hash: q.contentHash,
+          }));
+        }
         if (!sql.includes('FROM articles')) throw new Error(`fake pack 不支持的查询: ${sql}`);
-        return rows.map((r) => ({
+        return rows.articles.map((r) => ({
           item_id: r.itemId,
           title: r.title,
           digest: r.digest,

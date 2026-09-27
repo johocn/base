@@ -16,7 +16,7 @@ import {
 import type { Adapters } from '../platform/adapter';
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { syncOnce, type Catalog, type SyncOptions } from './sync';
-import type { ArticleRow } from './types';
+import type { ArticleRow, QuizRow } from './types';
 
 const BASE = 'https://node.test';
 
@@ -44,6 +44,13 @@ function makeArticle(itemId: string, title: string, body: string): ArticleRow {
   };
 }
 
+const QUIZ_JSON =
+  '{"schema_version":1,"questions":[{"q":"内容寻址的标识是什么？","options":["路径","内容哈希"],"answer":1,"explain":"哈希即标识"}]}';
+
+function makeQuiz(itemId: string): QuizRow {
+  return { itemId, questionJson: QUIZ_JSON, contentHash: sha256Hex(utf8(QUIZ_JSON)) };
+}
+
 interface NodeFixture {
   http: FakeHttp;
   pack: FakePackReader;
@@ -56,6 +63,7 @@ interface NodeOptions {
   /** 从目录与条目中剔除的条目（模拟「已下架」） */
   omitArticles?: string[];
   withCover?: boolean;
+  withQuiz?: boolean;
   http?: FakeHttp;
 }
 
@@ -67,6 +75,8 @@ function buildNode(version: number, options: NodeOptions = {}): NodeFixture {
   ];
   const omitted = new Set(options.omitArticles ?? []);
   const articles = all.filter((a) => !omitted.has(a.itemId));
+
+  const quizRows: QuizRow[] = options.withQuiz ? [makeQuiz('lesson:cid')] : [];
 
   const entries: Entry[] = all
     .filter((a) => !omitted.has(a.itemId))
@@ -98,6 +108,19 @@ function buildNode(version: number, options: NodeOptions = {}): NodeFixture {
     });
   }
 
+  for (const q of quizRows) {
+    entries.push({
+      item_id: q.itemId,
+      source: 'lesson',
+      type: 'quiz',
+      title: '内容寻址小测',
+      source_rev: 'rev-1',
+      content_hash: q.contentHash,
+      sqlite_table: 'quizzes',
+      dist_class: 'public',
+    });
+  }
+
   const merkle = merkleRoot(manifestBlobIds(entries));
   const packId = derivePackId('base-node-1', version, merkle);
   const manifest = signManifest(
@@ -118,7 +141,7 @@ function buildNode(version: number, options: NodeOptions = {}): NodeFixture {
     pack_id: packId,
     content_version: version,
     items: entries
-      .filter((e) => e.type === 'article')
+      .filter((e) => e.type === 'article' || e.type === 'quiz')
       .map((e) => ({
         item_id: e.item_id,
         source: e.source,
@@ -136,7 +159,7 @@ function buildNode(version: number, options: NodeOptions = {}): NodeFixture {
   for (const [id, data] of blobs) http.routes.set(`${BASE}/v1/blob/${id}`, { status: 200, body: data });
 
   const pack = new FakePackReader();
-  pack.set(`/work/pack-${packId}.sqlite`, articles);
+  pack.set(`/work/pack-${packId}.sqlite`, articles, quizRows);
   return { http, pack, catalog, manifest };
 }
 
@@ -289,5 +312,31 @@ describe('syncOnce', () => {
     const res = await syncOnce(opts);
     expect(res.status).toBe('updated');
     expect(await repo.listTombstones()).toEqual([{ itemId: 'cover:aaa', revokedRev: 8 }]);
+  });
+
+  it('题库：quizzes 与 articles 同批次落库', async () => {
+    const fx = buildNode(7, { withQuiz: true });
+    const { repo, opts } = setup(fx);
+    await repo.setConfig('pubkey_hex', PUB);
+
+    const res = await syncOnce(opts);
+
+    expect(res).toEqual({ status: 'updated', contentVersion: 7, items: 3, blobs: 0 });
+    expect((await repo.getQuiz('lesson:cid'))?.questionJson).toBe(QUIZ_JSON);
+    expect((await repo.listQuizItems()).map((i) => i.itemId)).toEqual(['lesson:cid']);
+    expect((await repo.getItem('lesson:cid'))?.type).toBe('quiz');
+  });
+
+  it('题库行被换过：拒收', async () => {
+    const fx = buildNode(7, { withQuiz: true });
+    const { repo, opts } = setup(fx);
+    await repo.setConfig('pubkey_hex', PUB);
+    const bad = '{"schema_version":1,"questions":[]}';
+    fx.pack.set(`/work/pack-${fx.catalog.pack_id}.sqlite`, [], [
+      { itemId: 'lesson:cid', questionJson: bad, contentHash: sha256Hex(utf8('别的字节')) },
+    ]);
+
+    await expect(syncOnce(opts)).rejects.toThrow(/行级 hash 不符/);
+    expect(await repo.getConfig('content_version')).toBeNull();
   });
 });
