@@ -15,14 +15,19 @@ import {
   keyPairFromSeed,
   manifestBlobIds,
   merkleRoot,
+  releaseDocSha256,
+  releaseSignBytes,
   requestSignBytes,
   sha256Hex,
   sign,
   signBytes,
+  signRelease,
   utf8,
   verify,
   verifyManifest,
+  verifyRelease,
   type Manifest,
+  type ReleaseDoc,
 } from "./index";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -183,4 +188,35 @@ describe("reqsig.json", () => {
     });
     expect(verify(f.pub_hex, bytes, c.signature_hex)).toBe(false);
   });
+});
+
+describe("release.json", () => {
+  const f = load("release.json");
+  it("version 与密钥", () => {
+    expect(f.version).toBe(1);
+    expect(keyPairFromSeed(f.key.seed_hex).pubHex).toBe(f.key.pub_hex);
+  });
+  for (const c of f.cases) {
+    it(c.name, () => {
+      const doc = c.doc as ReleaseDoc;
+      expect(verifyRelease(doc, f.key.pub_hex)).toBe(true);
+      expect(releaseSignBytes(doc.payload)).toBe(c.sign_bytes);
+      expect(doc.signature).toBe(c.signature_hex);
+      expect(releaseDocSha256(doc)).toBe(c.doc_sha256);
+      expect(signRelease(doc.payload, f.key.seed_hex)).toEqual(doc);
+    });
+    it(c.name + "：篡改后拒收", () => {
+      const badVersion = JSON.parse(JSON.stringify(c.doc)) as ReleaseDoc;
+      badVersion.payload.version_name = "9.9.9";
+      expect(verifyRelease(badVersion, f.key.pub_hex)).toBe(false);
+
+      const badSig = JSON.parse(JSON.stringify(c.doc)) as ReleaseDoc;
+      badSig.signature = "0" + badSig.signature.slice(1);
+      expect(verifyRelease(badSig, f.key.pub_hex)).toBe(false);
+
+      const badSchema = JSON.parse(JSON.stringify(c.doc)) as ReleaseDoc;
+      badSchema.payload.schema_version = 2;
+      expect(verifyRelease(badSchema, f.key.pub_hex)).toBe(false);
+    });
+  }
 });

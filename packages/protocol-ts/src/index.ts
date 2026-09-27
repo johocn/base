@@ -7,3 +7,4 @@ export * from "./identity";
 export * from "./reqsig";
 export * from "./aead";
 export * from "./kdf";
+export * from "./release";
