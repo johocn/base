@@ -126,6 +126,10 @@ func (c Config) ImportPack(ctx context.Context, st *store.Store, p Peer, localVe
 //   - media_meta 行：表里**没有** content_hash 列，故按「声明块序列」比对——
 //     行存在、chunk_hashes_json 的块数等于 manifest 的 chunks 数、size 等于 chunks 的 size 之和。
 //     整块完整性由签名域（chunks[].blob_id + size）与补齐时的逐块哈希共同兜底。
+//   - quizzes 行：必须存在，且 content_hash 列等于 manifest 的 content_hash，
+//     且 sha256(question_json) 等于它（题库不可被换）；
+//   - segments 行：必须存在且非空，逐行 content_hash 等于 sha256(text)；
+//     条目级 hash 由 SegmentsContentHash(按 seq 升序) 复核，必须等于 manifest 的 content_hash。
 //   - pack 里多出来的行不进 entries → 永不入库（只按 manifest 的白名单落库）。
 func readAndVerifyPack(packPath string, man protocol.Manifest) ([]store.PackEntry, error) {
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(packPath)+"?mode=ro")
@@ -208,6 +212,49 @@ func readAndVerifyPack(packPath string, man protocol.Manifest) ([]store.PackEntr
 		return nil, err
 	}
 
+	type quizRow struct{ questionJSON, contentHash string }
+	quizzes := map[string]quizRow{}
+	rows, err = db.Query(`SELECT item_id,question_json,content_hash FROM quizzes`)
+	if err != nil {
+		return nil, fmt.Errorf("读 pack quizzes: %w", err)
+	}
+	for rows.Next() {
+		var id string
+		var r quizRow
+		if err := rows.Scan(&id, &r.questionJSON, &r.contentHash); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		quizzes[id] = r
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	type segRow struct {
+		seq                     int
+		kind, text, contentHash string
+	}
+	segs := map[string][]segRow{}
+	rows, err = db.Query(`SELECT item_id,seq,kind,text,content_hash FROM segments ORDER BY item_id ASC, seq ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("读 pack segments: %w", err)
+	}
+	for rows.Next() {
+		var id string
+		var r segRow
+		if err := rows.Scan(&id, &r.seq, &r.kind, &r.text, &r.contentHash); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		segs[id] = append(segs[id], r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	out := make([]store.PackEntry, 0, len(man.Entries))
 	for _, e := range man.Entries {
 		base := store.PackEntry{
@@ -250,6 +297,32 @@ func readAndVerifyPack(packPath string, man protocol.Manifest) ([]store.PackEntr
 			}
 			base.MIME, base.Size, base.Duration, base.ChunkSize = r.mime, r.size, r.duration, r.chunkSize
 			base.ChunkHashes = hashes
+		case "quizzes":
+			r, ok := quizzes[e.ItemID]
+			if !ok {
+				return nil, fmt.Errorf("pack 缺少 manifest 声明的题库行 %s", e.ItemID)
+			}
+			if r.contentHash != e.ContentHash || protocol.SHA256Hex([]byte(r.questionJSON)) != e.ContentHash {
+				return nil, fmt.Errorf("pack 行级 hash 不符 %s", e.ItemID)
+			}
+			base.QuestionJSON = r.questionJSON
+		case "segments":
+			rowsList, ok := segs[e.ItemID]
+			if !ok || len(rowsList) == 0 {
+				return nil, fmt.Errorf("pack 缺少 manifest 声明的 segments 行 %s", e.ItemID)
+			}
+			ordered := make([]store.Segment, 0, len(rowsList))
+			for _, r := range rowsList {
+				if r.contentHash != protocol.SHA256Hex([]byte(r.text)) {
+					return nil, fmt.Errorf("pack segments 行级 hash 不符 %s seq=%d", e.ItemID, r.seq)
+				}
+				ordered = append(ordered, store.Segment{ItemID: e.ItemID, Seq: r.seq, Kind: r.kind, Text: r.text, ContentHash: r.contentHash})
+			}
+			// 条目级口径必须等于 manifest 的 content_hash（册子 §3.3）
+			if store.SegmentsContentHash(ordered) != e.ContentHash {
+				return nil, fmt.Errorf("pack segments 条目级 hash 与 manifest 不符 %s", e.ItemID)
+			}
+			base.Segments = ordered
 		default:
 			return nil, fmt.Errorf("manifest 条目 %s 的 sqlite_table=%q 不支持入库", e.ItemID, e.SQLiteTable)
 		}

@@ -2,8 +2,10 @@ package peersync
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -142,6 +144,105 @@ func TestImportPackRejectsTamperedManifest(t *testing.T) {
 	}
 	if _, ok, _ := dst.LatestPack(); ok {
 		t.Fatal("被拒的包不得登记 packs 行")
+	}
+}
+
+// seedCourseSource 写入一个 course 容器（segments）+ 一个小测（quizzes）+ 一篇文章并导出 1 个包。
+// 独立于 seedSource，避免改动既有用例依赖的种子语义。
+func seedCourseSource(t *testing.T, st *store.Store) packexport.Result {
+	t.Helper()
+	body := "甲正文\n"
+	if err := st.UpsertArticle(store.Article{
+		ItemID: "article:aaa", Title: "甲", Digest: "甲摘要", PublishedAt: "2026-01-01T00:00:00Z",
+		TagsJSON: `[]`, BodyMD: body, ContentHash: protocol.SHA256Hex([]byte(body)),
+		SourceRev: "rev-1", UpdatedAt: "2026-01-02T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("UpsertArticle: %v", err)
+	}
+	if err := st.UpsertSegmentItem(store.SegmentItem{
+		ItemID: "course/c1", Source: "course", Type: "course", Title: "课程一",
+		Segments: []store.Segment{
+			{Seq: 0, Kind: "digest", Text: "课程简介"},
+			{Seq: 1, Kind: "lesson", Text: "course/c1/lesson/l1"},
+		},
+		UpdatedAt: "2026-01-02T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("UpsertSegmentItem: %v", err)
+	}
+	const qjson = `{"schema_version":1,"questions":[]}`
+	if err := st.UpsertQuiz(store.Quiz{
+		ItemID: "course/c1/lesson/l1/quiz/q1", Title: "小测一", QuestionJSON: qjson,
+		ContentHash: protocol.SHA256Hex([]byte(qjson)), SourceRev: "rev-1",
+		UpdatedAt: "2026-01-02T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("UpsertQuiz: %v", err)
+	}
+	res, err := packexport.Export(st, packexport.Options{Issuer: srcIssuer, SignKeyHex: srcSeed})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	return res
+}
+
+func TestImportPackCopiesSegmentsAndQuizzes(t *testing.T) {
+	src, url, tr, pub := newSourceNode(t)
+	seedCourseSource(t, src)
+
+	dst := openTemp(t)
+	cfg := Config{TransportFor: tr, IssuerPubKeys: map[string]string{srcIssuer: pub}}
+	outcome, err := cfg.ImportPack(context.Background(), dst, Peer{URL: url}, 0)
+	if err != nil {
+		t.Fatalf("ImportPack: %v", err)
+	}
+	if outcome.Status != "imported" {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	segs, err := dst.ListSegments("course/c1")
+	if err != nil {
+		t.Fatalf("ListSegments: %v", err)
+	}
+	if len(segs) != 2 {
+		t.Fatalf("segments = %d 行, want 2: %+v", len(segs), segs)
+	}
+	if segs[0].Seq != 0 || segs[0].Kind != "digest" || segs[0].Text != "课程简介" ||
+		segs[1].Seq != 1 || segs[1].Kind != "lesson" || segs[1].Text != "course/c1/lesson/l1" {
+		t.Fatalf("segments 行不符: %+v", segs)
+	}
+	qs, err := dst.ListQuizzes([]string{"course/c1/lesson/l1/quiz/q1"})
+	if err != nil {
+		t.Fatalf("ListQuizzes: %v", err)
+	}
+	q, ok := qs["course/c1/lesson/l1/quiz/q1"]
+	if !ok || q.QuestionJSON != `{"schema_version":1,"questions":[]}` {
+		t.Fatalf("quizzes = %+v ok=%v", qs, ok)
+	}
+}
+
+func TestImportPackRejectsTamperedSegments(t *testing.T) {
+	src, _, _, _ := newSourceNode(t)
+	res := seedCourseSource(t, src)
+
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(res.PackPath))
+	if err != nil {
+		t.Fatalf("open pack: %v", err)
+	}
+	rs, err := db.Exec(`UPDATE segments SET text='篡改文本' WHERE item_id='course/c1' AND seq=1`)
+	if err != nil {
+		t.Fatalf("篡改 segments: %v", err)
+	}
+	if n, _ := rs.RowsAffected(); n != 1 {
+		t.Fatalf("篡改未命中行: affected=%d", n)
+	}
+	if err := db.Close(); err != nil { // 必须先释放写句柄，Windows 下否则只读打开会失败
+		t.Fatalf("关闭写连接: %v", err)
+	}
+
+	_, err = readAndVerifyPack(res.PackPath, res.Manifest)
+	if err == nil {
+		t.Fatal("segments 行级 hash 被篡改必须拒绝整包")
+	}
+	if !strings.Contains(err.Error(), "行级 hash 不符") {
+		t.Fatalf("应以行级 hash 不符拒绝，got: %v", err)
 	}
 }
 

@@ -39,6 +39,9 @@ type PackEntry struct {
 
 	// SQLiteTable == "segments"
 	Segments []Segment
+
+	// SQLiteTable == "quizzes"
+	QuestionJSON string
 }
 
 // ImportResult 是一次包入库的结果。
@@ -158,6 +161,12 @@ func (s *Store) ImportPack(version int64, entries []PackEntry, tombstones []prot
 					chunk_size=excluded.chunk_size, chunk_hashes_json=excluded.chunk_hashes_json`,
 				e.ItemID, e.MIME, e.Size, e.Duration, e.ChunkSize, string(chunkJSON)); err != nil {
 				return res, fmt.Errorf("store: 入库 media_meta %s: %w", e.ItemID, err)
+			}
+		case "quizzes":
+			if _, err := tx.Exec(`INSERT INTO quizzes(item_id,question_json,content_hash) VALUES(?,?,?)
+				ON CONFLICT(item_id) DO UPDATE SET question_json=excluded.question_json, content_hash=excluded.content_hash`,
+				e.ItemID, e.QuestionJSON, e.ContentHash); err != nil {
+				return res, fmt.Errorf("store: 入库 quizzes %s: %w", e.ItemID, err)
 			}
 		default:
 			return res, fmt.Errorf("store: 条目 %s 的 sqlite_table=%s 不支持入库", e.ItemID, e.SQLiteTable)
