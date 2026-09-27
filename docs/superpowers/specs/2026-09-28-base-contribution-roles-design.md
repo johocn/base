@@ -93,6 +93,12 @@ canonical_json({
 
 由此得到一条关键性质：**验证者不需要信任发行节点，即可确认归属**——拿 `contributors[author_id]` 的公钥验 `author_sig`，并复算 id 自证。
 
+**(d) 导出与入库必须同口径**
+
+三个新增字段必须**同时**出现在：`internal/protocol` 的结构定义、导出侧 `internal/packexport` 白名单、入库侧 `ImportPack` 解包。任一处漏掉，归属就会在包层静默丢失——这与册子 #14 给 `segments` 补 `packexport` 白名单是同一类坑。
+
+**再导出时 `contributors` 怎么重建**：节点本地只缓存了 `author_id` / `author_sig`，没缓存公钥。重建走本地 `identities` 表按 `author_id` 反查（投稿必然登记过该身份），**零新表**；查不到公钥的条目不导出 author 字段，降级为无归属，不影响其余条目。
+
 ### 2.2 不 bump `schema_version`
 
 新增字段全部可选（`omitempty`）。旧包缺失这些字段时解析为空串，语义即「无归属、不计贡献」——这是**正确的降级，不是错误**。因此不改 `schema_version`、不重签历史包、不动存量内容哈希。
@@ -105,17 +111,20 @@ canonical_json({
 
 ## 3. 数据模型
 
-### 3.1 `items.author_id`（本地缓存列，非权威）
+### 3.1 `items` 新增两列（本地缓存，非权威）
 
 ```
-ALTER TABLE items ADD COLUMN author_id TEXT NOT NULL DEFAULT ''
+ALTER TABLE items ADD COLUMN author_id  TEXT NOT NULL DEFAULT ''
+ALTER TABLE items ADD COLUMN author_sig TEXT NOT NULL DEFAULT ''
 CREATE INDEX IF NOT EXISTS idx_items_author ON items(author_id, state)
 ```
 
-- **不是权威**：权威在签名里（§2.1）。此列只是「已验签通过的归属」的本地缓存，避免每次算名册都重新验签全部条目。
-- **写入时机**：第 2 册投稿落库时，节点验 `author_sig` 通过后一并写入；验签失败则不写（该条目 `author_id` 保持 `''`）。本册只定义该列的语义与读法。
-- **加列迁移必须显式做**：`internal/store/schema.go` 的 `schemaStatements` 全是 `CREATE TABLE/INDEX IF NOT EXISTS`，**对既有表不补列**。新增此列必须仿 `eventColumnMigrations` 做「列存在性检查 + 逐条 ALTER」，否则老库上 `SELECT author_id` 直接报错。
-- 存量导入内容（`import-md` / `import-video` / `tools/migrate`）保持 `author_id = ''`。
+- **不是权威**：权威在签名里（§2.1）。这两列是「入库时已验签通过」的本地缓存，避免每次算名册都重新验签全部条目。
+- `author_sig` 必须一并留存（原始签名 hex），否则事后无从重验，AC 3/4 也无法独立复现。
+- **验签只在入库时执行一次**：第 2 册投稿落库、以及 `ImportPack` 解包（`internal/store` 导入路径）时，节点用该包 `contributors[author_id]` 的公钥验 `author_sig`；通过才写这两列，失败则**两列都保持空**（该条目等于无归属）。
+- **运行期名册计算只读缓存列，不重验**（成本考虑）。因此 §6「以签名为准」的含义是**入库时以签名为准**，不是每轮重算都验。
+- **加列迁移必须显式做**：`internal/store/schema.go` 的 `schemaStatements` 全是 `CREATE TABLE/INDEX IF NOT EXISTS`，**对既有表不补列**。新增这两列必须仿 `eventColumnMigrations` 做「列存在性检查 + 逐条 ALTER」，否则老库上 `SELECT author_id` 直接报错。
+- 存量导入内容（`import-md` / `import-video` / `tools/migrate`）两列均为空。
 
 ### 3.2 `profiles`（本地表，展示层）
 
@@ -149,8 +158,10 @@ CREATE TABLE IF NOT EXISTS profiles(
 一条内容计入其作者贡献，当且仅当**全部满足**：
 
 1. `state = 'active'`（被下架或已墓碑的条目不计）；且
-2. `author_id` 非空，且 `author_sig` 验签通过，且 `contributors[author_id]` 存在且 `IdentityID(pubkey) == author_id`；且
+2. `items.author_id` 非空——该值本身即「入库时 `author_sig` 已验签通过」的凭证（§3.1）；且
 3. 达到该载体的质量门槛（§4.3）。
+
+名册计算**只读缓存列，不重验签名**；验签发生在入库那一次（§3.1）。
 
 ### 4.3 质量门槛（文档级常量）
 
@@ -158,7 +169,7 @@ CREATE TABLE IF NOT EXISTS profiles(
 |---|---|
 | article | `body_md` 去除全部空白后，字符数（rune）≥ 200 |
 | video | `media_meta.duration` ≥ 60 秒 |
-| quiz | 题目数 ≥ 3 |
+| quiz | `question_json` 中的题目条数 ≥ 3 |
 
 - 数值写死在代码常量里，**不做配置项**；校准走「改册子 + 改常量」。
 - 三种载体**各计 1 条**；**同一 `item_id` 无论被重写多少次，都只计 1 条**。
@@ -220,7 +231,7 @@ CREATE TABLE IF NOT EXISTS profiles(
 ```
 
 - **硬约束**：写入的 `id` **取自鉴权中间件解析出的调用者身份**，请求体**不得**携带 `id`——否则等于伪造他人昵称。
-- `name` 校验：去首尾空白后（rune 计）长度 1..32；不允许含控制字符（U+0000–U+001F、U+007F）。不通过返回 `400` + `profile_name_invalid`。
+- `name` 校验：去首尾空白后（rune 计）长度 1..32；不允许含控制字符（U+0000–U+001F、U+007F）。不通过返回 `400` + `profile_name_invalid`。**入库的是去首尾空白后的值**（不是原文）。
 - 幂等：同一 `id` 重复提交即覆盖（`ON CONFLICT(id) DO UPDATE`）。
 - 只写本地 `profiles` 表，**不落 events、不跨节点传播**。
 
@@ -236,12 +247,12 @@ CREATE TABLE IF NOT EXISTS profiles(
 
 | 情形 | 处理 |
 |---|---|
-| `author_id` 为空（存量导入内容） | 跳过 |
-| `author_sig` 缺失或验签失败 | 跳过，并记一条告警（不阻断其余条目） |
-| `contributors` 缺该 id，或 `IdentityID(pubkey) ≠ author_id` | 跳过——改公钥即失配，篡改无收益 |
-| `state ≠ 'active'`（含被下架、墓碑） | 跳过 |
-| 未达质量门槛（含 video `duration = 0`） | 跳过 |
-| `items.author_id` 与签名内容不一致 | **以签名为准**，并记告警（缓存列不是权威，§3.1） |
+| **入库时** `author_sig` 缺失或验签失败 | 两列都写空（该条目等于无归属），记一条告警；**不阻断该包的其余条目** |
+| **入库时** `contributors` 缺该 id，或 `IdentityID(pubkey) ≠ author_id` | 同上——改公钥即失配，篡改无收益 |
+| **入库时** `author_id` 为空（存量导入内容） | 两列都写空 |
+| **计算名册时** `author_id` 为空 | 跳过 |
+| **计算名册时** `state ≠ 'active'`（含被下架、墓碑） | 跳过 |
+| **计算名册时** 未达质量门槛（含 video `duration = 0`） | 跳过 |
 | 名册为空（新节点） | 返回 `{"contributors":[]}` + `200`，不报错 |
 | `profiles` 缺该身份 | `name` 回退 `id` 前 8 位，**不影响名册成立** |
 
@@ -261,7 +272,7 @@ CREATE TABLE IF NOT EXISTS profiles(
 - **截断**：12 个身份投入不等数量 → 断言只返回 10 条、边界名次正确。
 - **去重**：同一 `item_id` 重写 5 次 → 仍只计 1 条。
 - **跳过路径**：空 `author_id` / 伪 `author_sig` / 公钥失配 / `state='removed'` / 未达门槛，各自独立用例。
-- **缓存列不一致**：以签名为准。
+- **入库验签**：验签失败的条目两列留空，且不阻断同包其余条目；同一包内「验签失败」与「验签通过」的条目共存时各自独立处理。
 
 ### 7.3 接口与集成
 
@@ -273,8 +284,8 @@ CREATE TABLE IF NOT EXISTS profiles(
 
 1. 构造 12 个身份、各投不同数量且达门槛的内容 → 名册严格按规则返回前 10。
 2. 把第 1 名的一条内容置为 `state='removed'` → 名册**实时**变化，其条数 -1。
-3. 篡改某条目的 `author_sig` → 该条不计入，名册其余部分**不受影响**。
-4. 篡改 `contributors` 里某公钥 → 该 id 名下**所有**条目不计入。
+3. 篡改某条目的 `author_sig` 后再入库 → 该条两列留空、不计入，名册其余部分**不受影响**。
+4. 篡改 `contributors` 里某公钥后再入库 → 该 id 名下**所有**条目不计入。
 5. 存量 `import-md` 内容（无归属）**不产生任何名册条目**。
 6. 同一 `item_id` 连续重写 5 次 → 计数仍为 1。
 7. 无签名头访问 `GET /v1/contributors` → `200`。
