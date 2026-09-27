@@ -16,10 +16,26 @@
       >{{ it.title || it.itemId }}</text>
     </scroll-view>
 
+    <view v-if="pending.length > 0" class="pending">
+      <view class="pending-bar">
+        <text class="pending-title">待发送 {{ pending.length }} 条</text>
+        <text class="act" @click="retryPending">立即补发</text>
+      </view>
+      <view v-for="p in pending" :key="p.eventId" class="po">
+        <text class="po-target">{{ targetTitle(p.targetId) }}</text>
+        <text class="po-text">{{ p.text }}</text>
+        <view class="po-foot">
+          <text :class="p.state === 'failed' ? 'po-reason' : 'po-state'">{{ p.state === 'failed' ? '发送失败：' + p.reason : '待发送' }}</text>
+          <text v-if="p.state === 'failed'" class="act" @click="dropPending(p.eventId)">删除</text>
+        </view>
+      </view>
+    </view>
+
     <text v-if="unconfigured" class="hint">未配置节点，请先在「我的 → 设置」里填写节点地址</text>
     <block v-else>
       <text v-if="error" class="error">{{ error }}</text>
       <text v-if="error" class="act" @click="reload">重试</text>
+      <text v-if="error && pending.length > 0" class="hint">离线，仅显示待发送</text>
       <text v-if="!error && !loading && list.length === 0" class="hint">还没有评论</text>
 
       <view v-for="c in list" :key="c.eventId" class="cmt">
@@ -36,8 +52,8 @@
       <input
         v-model="draft"
         class="input"
-        :disabled="target === ''"
-        :placeholder="target === '' ? '选择一项内容后可以评论' : '说点什么…'"
+        :disabled="unconfigured || target === ''"
+        :placeholder="unconfigured ? '未配置节点，暂不能评论' : target === '' ? '选择一项内容后可以评论' : '说点什么…'"
       />
       <button size="mini" :disabled="!canSend" @click="send">{{ sending ? '发表中…' : '发表' }}</button>
     </view>
@@ -51,6 +67,7 @@ import { onReachBottom, onShow } from '@dcloudio/uni-app';
 
 import {
   fetchCommentText,
+  flushPending,
   listComments,
   postComment,
   takePendingTarget,
@@ -58,7 +75,7 @@ import {
   type CommentItem,
   type CommentOptions,
 } from '../../core/comment';
-import type { ItemRow } from '../../core/types';
+import type { CommentOutRow, ItemRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 import {
   UNKNOWN_FLAGS,
@@ -89,8 +106,16 @@ const draft = ref('');
 const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
 const blocked = computed(() => postBlockedReason(caps.value));
 const canSend = computed(
-  () => canPostComment(caps.value) && target.value !== '' && draft.value.trim() !== '' && !sending.value,
+  () =>
+    canPostComment(caps.value) &&
+    !unconfigured.value &&
+    target.value !== '' &&
+    draft.value.trim() !== '' &&
+    !sending.value,
 );
+
+/** 待发区：不随 target 过滤——它是「尚未生效的本地状态」，过滤会让人误以为没待发了（本册 §6）。 */
+const pending = ref<CommentOutRow[]>([]);
 
 async function load() {
   try {
@@ -104,6 +129,34 @@ async function load() {
     error.value = (e as Error).message;
     return;
   }
+}
+
+async function loadPending() {
+  if (!opts.value) return;
+  pending.value = await opts.value.repo.listCommentOut();
+}
+
+/** 目标标题取自已下载内容列表（零网络）；找不到就退化成 target_id。 */
+function targetTitle(itemId: string): string {
+  return items.value.find((i) => i.itemId === itemId)?.title || itemId;
+}
+
+/** 补发一轮并刷新：不 await 进页面（由 onShow 决定），页面按钮会 await。 */
+async function flush() {
+  if (!opts.value) return;
+  const r = await flushPending(opts.value);
+  if (r.sent + r.failed > 0) await loadPending();
+  if (r.sent > 0) await refresh();
+}
+
+async function retryPending() {
+  await flush();
+}
+
+async function dropPending(eventId: string) {
+  if (!opts.value) return;
+  await opts.value.repo.removeCommentOut(eventId);
+  await loadPending();
 }
 
 async function refresh() {
@@ -166,10 +219,15 @@ async function send() {
   sending.value = true;
   notice.value = '';
   try {
-    await postComment(opts.value, { targetId: target.value, text });
+    const r = await postComment(opts.value, { targetId: target.value, text });
     draft.value = '';
-    notice.value = '已发表';
-    await refresh();
+    if (r.queued) {
+      notice.value = '已保存，联网后自动补发';
+      await loadPending();
+    } else {
+      notice.value = '已发表';
+      await refresh();
+    }
   } catch (e) {
     // 不用 instanceof 兜成通用文案：非 CommentError 的裸错误也要把原因显示出来，否则真机无从排查
     notice.value = e instanceof CommentError ? e.message : `提交失败：${(e as Error).message ?? String(e)}`;
@@ -194,10 +252,12 @@ function rel(ms: number): string {
 
 onShow(async () => {
   // 文章页 → 评论 tab 的锚定态（tab 页不能带 query）
-  const pending = takePendingTarget();
+  const anchor = takePendingTarget();
   await load();
-  if (pending) target.value = pending;
+  if (anchor) target.value = anchor;
+  await loadPending();
   await refresh();
+  void flush(); // 不 await：补发不阻塞首屏（本册 §6）
 });
 
 onReachBottom(() => {
@@ -219,6 +279,15 @@ onReachBottom(() => {
 .cmt-text { display: block; margin-top: 4px; font-size: 15px; line-height: 1.6; }
 .hint { display: block; margin-top: 8px; color: #888888; font-size: 13px; }
 .error { display: block; color: #c53030; font-size: 13px; }
+.pending { margin-bottom: 12px; padding: 10px; background: #fffaf0; border: 1px solid #f6e05e; border-radius: 6px; }
+.pending-bar { display: flex; align-items: center; justify-content: space-between; }
+.pending-title { font-size: 14px; font-weight: 600; }
+.po { padding: 8px 0; border-top: 1px solid #f6e05e; }
+.po-target { display: block; color: #888888; font-size: 12px; }
+.po-text { display: block; margin-top: 2px; font-size: 15px; }
+.po-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.po-state { color: #888888; font-size: 12px; }
+.po-reason { color: #c05621; font-size: 12px; }
 .blocked { display: block; margin-bottom: 8px; color: #c05621; font-size: 13px; }
 .composer { position: fixed; left: 0; right: 0; bottom: 0; display: flex; align-items: center; padding: 8px 12px; background: #ffffff; border-top: 1px solid #eeeeee; }
 .input { flex: 1; height: 36px; margin-right: 8px; padding: 0 10px; background: #f5f5f5; border-radius: 6px; font-size: 14px; }
