@@ -3971,6 +3971,8 @@ git commit -m "chore(mobile): 版本递增到 0.2.0（四 tab + 答题 + 升级�
 
 9. **T15 顺带 `gofmt -w` 了 `tools/genvectors/main.go` 里既存的 6 行对齐**：`writeManifest` 的两处 map 字面量在改动前就是 gofmt 违规（`git show HEAD:tools/genvectors/main.go | gofmt -l` 可复现）。为满足「改动的文件 gofmt 干净」，对该文件整体跑了一次 `gofmt -w`，除新增的 `writeRelease` 外只多出这 6 行的空白重排，无语义变化（提交 `8e22004`）。
 
+10. **T18 三处收敛（提交 `322c090`）**：①计划把 `import { decodeUtf8 } from './sync'` 等写在 `update.ts` **文件末尾**，那是错的，已合并到文件顶部的 import 块；②`PlusRuntime` 只补**一个**字段 `runtime?: { version?: string; openURL?: (url: string) => void }`，避免计划里 `openApkUrl` 那两处 `as unknown as` 强制转换；③把设置页与 `App.vue` 里各写一份的「拉取验签 + 打开下载链接 + 弹窗」抽成 `fetchReleaseDoc` / `openApkUrl` / `promptUpdate` 三个函数放在 `update.ts`，两处调用点复用——否则计划原文会出现「设置页用浏览器打开、App.vue 复制到剪贴板」的行为漂移（计划自己标注的 `uni.navigateTo(...) || openApkUrl(...)` 错写法也已按注改为直接调 `openApkUrl`）。`uni` 全局有 `@dcloudio/types` 的 `declare const uni`，故这三个函数可以留在 `core/` 而不需要挪回页面。
+
 ## 明确不做的（spec §1，任何实现都不得顺手加）
 
 不做评论/圈子的真实功能、不做 App 侧 markdown 解析、不做答题结果上报、不做滚动位置恢复、不做全站深色主题、不做 FTS5、不做 wgt 热更新、不做 App 内下载 APK 与 `plus.runtime.install`、不做账号/设备身份上行、不做 tabBar 图标、不做节点侧分发与反熵改动（除 §6.3 导出增一类表与 §8.3 新增一个只读接口）。
