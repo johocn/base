@@ -39,22 +39,31 @@ export function computeStats(i: StatsInput): LearningStats {
   };
 }
 
-export type ReaderTheme = 'light' | 'dark';
-export type ReaderFontScale = 1 | 2 | 3;
+export type ReaderTheme = 'light' | 'dark' | 'sepia';
+export type ReaderFontScale = 1 | 2 | 3 | 4;
 
-/** 字号三档 → 正文 px（spec §5.5） */
-export const READER_FONT_SIZE: Record<ReaderFontScale, number> = { 1: 15, 2: 17, 3: 20 };
+/** 字号四档 → 正文 px（spec §5.5；真机反馈 20px 仍偏小，上限提到 28px） */
+export const READER_FONT_SIZE: Record<ReaderFontScale, number> = { 1: 16, 2: 19, 3: 23, 4: 28 };
+
+/** 主题循环顺序与界面上的名字（护眼在浅色之后，深色最后） */
+export const READER_THEME_ORDER: ReaderTheme[] = ['light', 'sepia', 'dark'];
+export const READER_THEME_LABEL: Record<ReaderTheme, string> = { light: '浅色', sepia: '护眼', dark: '深色' };
 
 /** 非预期取值一律回落缺省值，不做校验报错（spec §4.2）。 */
 export function normalizeTheme(v: string | null): ReaderTheme {
-  return v === 'dark' ? 'dark' : 'light';
+  return v === 'dark' || v === 'sepia' ? v : 'light';
 }
 
 export function normalizeFontScale(v: string | null): ReaderFontScale {
   const n = Number(v);
-  return n === 1 || n === 3 ? n : 2;
+  return n === 1 || n === 3 || n === 4 ? n : 2;
 }
 
 export function nextFontScale(cur: ReaderFontScale): ReaderFontScale {
-  return cur === 3 ? 1 : ((cur + 1) as ReaderFontScale);
+  return cur === 4 ? 1 : ((cur + 1) as ReaderFontScale);
+}
+
+export function nextTheme(cur: ReaderTheme): ReaderTheme {
+  const i = READER_THEME_ORDER.indexOf(cur);
+  return READER_THEME_ORDER[(i + 1) % READER_THEME_ORDER.length] as ReaderTheme;
 }

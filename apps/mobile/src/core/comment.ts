@@ -42,7 +42,7 @@ export interface CommentList {
   nextCursor: string | null;
 }
 
-export type CommentErrorCode = 'unregistered' | 'rate_limited' | 'revoked' | 'rejected' | 'network' | 'server';
+export type CommentErrorCode = 'unregistered' | 'rate_limited' | 'revoked' | 'rejected' | 'network' | 'server' | 'client';
 
 /** 发表/读取失败的用户可读错误（册子 §6.4 的映射结果）。 */
 export class CommentError extends Error {
@@ -66,11 +66,31 @@ async function localIdentity(o: CommentOptions): Promise<Identity> {
 }
 
 /**
+ * 把本地步骤（存储 / 随机数 / 签名）的裸错误包成带原因的可读错误。
+ * 不包的话页面只能显示通用文案，真机上出了问题等于没有线索。
+ */
+function localStep<T>(what: string, fn: () => T): T {
+  try {
+    return fn();
+  } catch (e) {
+    throw new CommentError('client', `${what}失败：${(e as Error).message ?? String(e)}`);
+  }
+}
+
+async function localStepAsync<T>(what: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    throw new CommentError('client', `${what}失败：${(e as Error).message ?? String(e)}`);
+  }
+}
+
+/**
  * 本地身份存在但节点侧未登记时补登记一次（匿名请求，无签名头）。
  * 失败不阻断阅读，只让评论功能不可用。
  */
 export async function ensureRegistered(o: CommentOptions): Promise<Identity> {
-  const ident = await localIdentity(o);
+  const ident = await localStepAsync('身份准备', () => localIdentity(o));
   if ((await o.repo.getConfig(IDENTITY_REGISTERED_KEY)) === '1') return ident;
   const body = utf8(JSON.stringify({ id: ident.id, alg: ident.alg, pubkey: ident.pubHex }));
   let res;
@@ -138,17 +158,20 @@ export async function postComment(
 
   const inner: Json = { target_id: input.targetId, text: input.text };
   if (input.replyTo) (inner as Record<string, Json>).reply_to = input.replyTo;
-  const eventId = bytesToHex(randomBytes(16));
-  const payload: Json = {
-    event_id: eventId,
-    type: 'comment.v1',
-    created_at: Date.now(),
-    body: inner,
-  };
-  // sig 覆盖 canonical({event_id,type,created_at,body})，与请求头无关：事件搬到别的节点仍可独立验签。
-  const sig = sign(ident.seedHex, utf8(canonicalize(payload)));
-  const wire = utf8(JSON.stringify({ ...(payload as Record<string, Json>), sig }));
-  const headers = signRequestHeaders(ident, { method: 'POST', path: '/v1/event', body: wire });
+  // 事件 id、内容签名、请求签名头都在本地算：任一步失败都要给出真实原因
+  const { eventId, wire, headers } = localStep('构造请求', () => {
+    const eid = bytesToHex(randomBytes(16));
+    const payload: Json = {
+      event_id: eid,
+      type: 'comment.v1',
+      created_at: Date.now(),
+      body: inner,
+    };
+    // sig 覆盖 canonical({event_id,type,created_at,body})，与请求头无关：事件搬到别的节点仍可独立验签。
+    const sig = sign(ident.seedHex, utf8(canonicalize(payload)));
+    const w = utf8(JSON.stringify({ ...(payload as Record<string, Json>), sig }));
+    return { eventId: eid, wire: w, headers: signRequestHeaders(ident, { method: 'POST', path: '/v1/event', body: w }) };
+  });
 
   let res;
   try {
@@ -160,7 +183,10 @@ export async function postComment(
     throw new CommentError('network', '无法连接节点，请稍后重试');
   }
   if (res.status === 200) {
-    const out = JSON.parse(decodeUtf8(res.body)) as { event_id?: string; payload_cid?: string };
+    const out = localStep(
+      '解析响应',
+      () => JSON.parse(decodeUtf8(res.body)) as { event_id?: string; payload_cid?: string },
+    );
     return { eventId: String(out.event_id ?? eventId), payloadCid: String(out.payload_cid ?? '') };
   }
   throw mapPostFailure(res.status, decodeUtf8(res.body));

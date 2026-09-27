@@ -152,7 +152,8 @@ async function send() {
     notice.value = '已发表';
     await refresh();
   } catch (e) {
-    notice.value = e instanceof CommentError ? e.message : '提交失败，请稍后重试';
+    // 不用 instanceof 兜成通用文案：非 CommentError 的裸错误也要把原因显示出来，否则真机无从排查
+    notice.value = e instanceof CommentError ? e.message : `提交失败：${(e as Error).message ?? String(e)}`;
   } finally {
     sending.value = false;
   }

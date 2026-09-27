@@ -1,10 +1,10 @@
 import { sha256 } from "@noble/hashes/sha256";
-import { bytesToHex, hexToBytes, randomBytes } from "@noble/hashes/utils";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 
 /**
  * 手写 UTF-8 编码。
- * 不用 noble 的 utf8ToBytes：它内部是 `new TextEncoder()`，而 App 端跑在系统 WebView 上，
- * 老内核没有 TextEncoder（真机实测同批缺失 URLSearchParams），同步时逐篇校验内容哈希会直接抛
+ * 不用 noble 的 utf8ToBytes：它内部是 `new TextEncoder()`，而 App 端逻辑层跑在 V8 / jscore 里
+ * （不是 WebView），既没有 TextEncoder 也没有 window，同步时逐篇校验内容哈希会直接抛
  * 「TextEncoder is not defined」。孤立代理对按 U+FFFD 处理，与 TextEncoder / Go 的 `[]byte(s)` 一致。
  */
 export function utf8(s: string): Uint8Array {
@@ -46,4 +46,37 @@ export function isBlobId(id: string): boolean {
   return typeof id === "string" && /^[0-9a-f]{32}$/.test(id);
 }
 
-export { bytesToHex, hexToBytes, randomBytes };
+/** 兜底随机源：注入方为平台层（App 逻辑层没有 WebCrypto）。返回的字节数必须正好是 n。 */
+export type RandomBytesSource = (n: number) => Uint8Array;
+
+let fallback: RandomBytesSource | null = null;
+
+/**
+ * 注入兜底随机源。
+ *
+ * 不用 noble 的 randomBytes：它是 `globalThis.crypto` 探测，而 uni-app 的 App 逻辑层跑在
+ * V8 / jscore 里（不是 WebView），没有 window、也没有 crypto —— 探测失败就抛
+ * `crypto.getRandomValues must be defined` 的裸 Error，身份生成与签名全部中断。
+ * 有 WebCrypto 的环境（H5 / Node / 测试）走不到这里。
+ */
+export function setRandomBytesFallback(fn: RandomBytesSource | null): void {
+  fallback = fn;
+}
+
+function webCrypto(): { getRandomValues(a: Uint8Array): Uint8Array } | undefined {
+  const g: unknown = typeof globalThis === "undefined" ? undefined : globalThis;
+  const c = (g as { crypto?: { getRandomValues?: unknown } } | undefined)?.crypto;
+  return c && typeof c.getRandomValues === "function"
+    ? (c as { getRandomValues(a: Uint8Array): Uint8Array })
+    : undefined;
+}
+
+/** 加密随机字节：优先 WebCrypto，其次注入的兜底源，都没有则显式报错。 */
+export function randomBytes(n: number): Uint8Array {
+  const c = webCrypto();
+  if (c) return c.getRandomValues(new Uint8Array(n));
+  if (fallback) return fallback(n);
+  throw new Error("randomBytes: 当前环境没有 crypto.getRandomValues，且未注入兜底随机源");
+}
+
+export { bytesToHex, hexToBytes };

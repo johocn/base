@@ -1,6 +1,6 @@
 import { gcm } from "@noble/ciphers/aes";
 
-import { randomBytes } from "@noble/hashes/utils";
+import { randomBytes } from "./hash";
 
 /**
  * 与 Go 侧 `store.Encrypt` 的封装格式逐字节一致（册子 §7.1 / §9 交汇点 1）：

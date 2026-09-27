@@ -1,5 +1,5 @@
 <template>
-  <view class="wrap" :class="theme === 'dark' ? 'dark' : ''" :style="wrapStyle">
+  <view class="wrap" :class="theme">
     <view v-if="progress > 0" class="progress" :style="`width:${progress}%`"></view>
     <text v-if="error" class="error">{{ error }}</text>
     <block v-else>
@@ -9,7 +9,7 @@
       <view class="actions">
         <text class="act" :class="fav ? 'act-on' : ''" @click="toggleFav">{{ fav ? '已收藏' : '收藏' }}</text>
         <text class="act" @click="cycleFont">A {{ fontScale }}</text>
-        <text class="act" @click="cycleTheme">{{ theme === 'dark' ? '浅色' : '深色' }}</text>
+        <text class="act" @click="cycleTheme">{{ themeLabel }}</text>
         <text class="act" @click="openComments">评论</text>
       </view>
       <text
@@ -26,7 +26,16 @@
 import { computed, nextTick, ref } from 'vue';
 import { onLoad, onPageScroll } from '@dcloudio/uni-app';
 
-import { READER_FONT_SIZE, nextFontScale, normalizeFontScale, normalizeTheme, type ReaderFontScale, type ReaderTheme } from '../../core/state';
+import {
+  READER_FONT_SIZE,
+  READER_THEME_LABEL,
+  nextFontScale,
+  nextTheme,
+  normalizeFontScale,
+  normalizeTheme,
+  type ReaderFontScale,
+  type ReaderTheme,
+} from '../../core/state';
 import { setPendingTarget } from '../../core/comment';
 import type { ArticleRow } from '../../core/types';
 import { bootstrap } from '../../platform';
@@ -44,9 +53,7 @@ const itemId = ref('');
 const scrollable = ref(0);
 const scrolled = ref(0);
 
-const wrapStyle = computed(() =>
-  theme.value === 'dark' ? 'background:#1a1a1a;color:#e6e6e6;min-height:100vh;' : '',
-);
+const themeLabel = computed(() => READER_THEME_LABEL[theme.value]);
 
 onLoad(async (query) => {
   const raw = String((query as Record<string, string> | undefined)?.itemId ?? '');
@@ -125,7 +132,7 @@ async function cycleFont() {
 }
 
 async function cycleTheme() {
-  theme.value = theme.value === 'dark' ? 'light' : 'dark';
+  theme.value = nextTheme(theme.value);
   const { repo } = await bootstrap();
   await repo.setConfig('reader_theme', theme.value);
 }
@@ -147,7 +154,7 @@ function decodedId(raw: string): string {
 </script>
 
 <style>
-.wrap { padding: 16px; }
+.wrap { padding: 16px; min-height: 100vh; }
 .progress { position: fixed; top: 0; left: 0; height: 2px; background: #2b6cb0; z-index: 10; }
 .title { font-size: 22px; font-weight: 600; }
 .meta { display: block; color: #888888; font-size: 12px; margin-bottom: 12px; }
@@ -157,6 +164,15 @@ function decodedId(raw: string): string {
 .act-on { color: #b7791f; }
 .para { display: block; margin-bottom: 12px; line-height: 1.8; }
 .error { color: #c53030; font-size: 13px; }
+
+/* 护眼：米黄纸底 + 暖褐字，介于浅色与深色之间 */
+.wrap.sepia { background: #f4ecd8; color: #4a4034; }
+.sepia .title { color: #3d3428; }
+.sepia .meta { color: #8a7c66; }
+.sepia .act { color: #8a6d3b; }
+.sepia .para { color: #4a4034; }
+
+.wrap.dark { background: #1a1a1a; color: #e6e6e6; }
 .dark .title { color: #f0f0f0; }
 .dark .meta { color: #999999; }
 .dark .para { color: #e6e6e6; }

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeStats, favoriteNext, nextFontScale, normalizeFontScale, normalizeTheme, readAtNext } from './state';
+import {
+  computeStats,
+  favoriteNext,
+  nextFontScale,
+  nextTheme,
+  normalizeFontScale,
+  normalizeTheme,
+  readAtNext,
+} from './state';
 
 describe('favoriteNext', () => {
   it('未收藏时写入时间并返回已收藏', () => {
@@ -54,10 +62,17 @@ describe('computeStats', () => {
 });
 
 describe('阅读偏好', () => {
-  it('主题未知取值回落 light', () => {
+  it('主题未知取值回落 light，dark/sepia 各归其位', () => {
     expect(normalizeTheme(null)).toBe('light');
     expect(normalizeTheme('DARK')).toBe('light');
+    expect(normalizeTheme('sepia')).toBe('sepia');
     expect(normalizeTheme('dark')).toBe('dark');
+  });
+
+  it('主题循环 light→sepia→dark→light', () => {
+    expect(nextTheme('light')).toBe('sepia');
+    expect(nextTheme('sepia')).toBe('dark');
+    expect(nextTheme('dark')).toBe('light');
   });
 
   it('字号未知取值回落 2（中）', () => {
@@ -66,11 +81,13 @@ describe('阅读偏好', () => {
     expect(normalizeFontScale('9')).toBe(2);
     expect(normalizeFontScale('1')).toBe(1);
     expect(normalizeFontScale('3')).toBe(3);
+    expect(normalizeFontScale('4')).toBe(4);
   });
 
-  it('字号循环 1→2→3→1', () => {
+  it('字号循环 1→2→3→4→1', () => {
     expect(nextFontScale(1)).toBe(2);
     expect(nextFontScale(2)).toBe(3);
-    expect(nextFontScale(3)).toBe(1);
+    expect(nextFontScale(3)).toBe(4);
+    expect(nextFontScale(4)).toBe(1);
   });
 });
