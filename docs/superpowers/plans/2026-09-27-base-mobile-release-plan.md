@@ -3965,6 +3965,8 @@ git commit -m "chore(mobile): 版本递增到 0.2.0（四 tab + 答题 + 升级�
 5. **`dist` 页面级 `.js` 不存在**：实测 uni-app 把页面逻辑汇进单个 `app-service.js`，页面目录下只有 `.css`。所有 `Test-Path ...pages/<name>/<name>.js` 的核对已改成 `Test-Path ...pages/<name>`（页面目录）。
 6. **T8 阅读器进度条的算法是坏的，已替换**：计划原文 `progress = Math.min(100, Math.round(e.scrollTop / 6))` —— 滚过 600px 就顶到 100%，长文里几乎全程假满格，会误导读者的阅读进度感。已改为**实测可滚动高度**：`scrollable = .wrap 高度 − uni.getSystemInfoSync().windowHeight`，进度 = `已滚 / scrollable`，并在正文渲染完（`nextTick` 后）与每次改字号后重新测量（字号变则总高变）。量不到时 `scrollable = 0`，进度条不显示（`v-if="progress > 0"`）而不是显示错的值。
 
+7. **T9 计划内部的用例与实现自相矛盾，已按「改实现不改测试」收敛**：用例「没有题目」给的是纯文本 `只有一段正文`，而计划 Step 3 的实现里 `default` 分支无条件报「无法识别的行」，永远走不到 `len(out) == 0` 的「没有解析到任何题目」。已把 `default` 收窄为**只在题目块内**（`cur != nil`）报错，题目开始前的普通文本视作前言忽略（提交 `dd93084`）。这样既满足 spec §6.1「只认三种元素、不部分导入」的失败语义，也保留了「题目块内写错行必须报错」的护栏（漏写 `- ` 的选项仍会失败）。
+
 ## 明确不做的（spec §1，任何实现都不得顺手加）
 
 不做评论/圈子的真实功能、不做 App 侧 markdown 解析、不做答题结果上报、不做滚动位置恢复、不做全站深色主题、不做 FTS5、不做 wgt 热更新、不做 App 内下载 APK 与 `plus.runtime.install`、不做账号/设备身份上行、不做 tabBar 图标、不做节点侧分发与反熵改动（除 §6.3 导出增一类表与 §8.3 新增一个只读接口）。
