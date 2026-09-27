@@ -327,3 +327,104 @@ describe('离线发表入队', () => {
     expect(await repo.listCommentOut()).toEqual([]);
   });
 });
+
+describe('flushPending', () => {
+  it('用例 5：补发成功且逐字节重放入队时的 wire（sig 未被重算）', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/event`, json({ payload_cid: 'cid' }));
+    const gate = gatePost(http);
+    gate.offline = true;
+    await postComment(o, { targetId: 'article/a', text: '甲' });
+    await postComment(o, { targetId: 'article/a', text: '乙', replyTo: 'b'.repeat(32) });
+    const rows = await repo.listCommentOut();
+    expect(rows).toHaveLength(2);
+
+    gate.offline = false;
+    http.posted.length = 0;
+    const r = await flushPending(o);
+
+    expect(r).toEqual({ sent: 2, failed: 0, remaining: 0, error: '' });
+    expect(await repo.listCommentOut()).toEqual([]);
+    const bodies = http.posted.filter((p) => p.url.endsWith('/v1/event')).map((p) => decodeUtf8(p.body));
+    expect(bodies).toEqual(rows.map((x) => x.wire));
+  });
+
+  it('用例 6：补发永久失败标 failed、原文仍在、且不抛错', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/event`, json({}));
+    const gate = gatePost(http);
+    gate.offline = true;
+    await postComment(o, { targetId: 'article/a', text: '会被拒的' });
+
+    gate.offline = false;
+    http.postRoutes.set(`${BASE}/v1/event`, { status: 403, body: utf8(JSON.stringify({ code: 'event_sig_invalid' })) });
+    const r = await flushPending(o);
+
+    expect(r).toEqual({ sent: 0, failed: 1, remaining: 0, error: '' });
+    const rows = await repo.listCommentOut();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe('failed');
+    expect(rows[0]!.reason).toContain('提交被拒绝');
+    expect(rows[0]!.text).toBe('会被拒的');
+  });
+
+  it('用例 7：补发暂时失败即中止本轮（不空跑后续条目）', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/event`, json({}));
+    const gate = gatePost(http);
+    gate.offline = true;
+    await postComment(o, { targetId: 'article/a', text: '一' });
+    await postComment(o, { targetId: 'article/a', text: '二' });
+    await postComment(o, { targetId: 'article/a', text: '三' });
+
+    http.posted.length = 0; // gate.offline 仍为 true
+    const r = await flushPending(o);
+
+    expect(r.sent).toBe(0);
+    expect(r.error).toBe('无法连接节点，请稍后重试');
+    const rows = await repo.listCommentOut();
+    expect(rows).toHaveLength(3);
+    expect(rows.every((x) => x.state === 'pending')).toBe(true);
+    expect(http.posted.filter((p) => p.url.endsWith('/v1/event'))).toHaveLength(1);
+  });
+
+  it('用例 8：并发调用只跑一轮（不重复发送）', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/event`, json({}));
+    const gate = gatePost(http);
+    gate.offline = true;
+    await postComment(o, { targetId: 'article/a', text: '一' });
+    await postComment(o, { targetId: 'article/a', text: '二' });
+
+    gate.offline = false;
+    http.posted.length = 0;
+    await Promise.all([flushPending(o), flushPending(o)]);
+
+    expect(http.posted.filter((p) => p.url.endsWith('/v1/event'))).toHaveLength(2);
+    expect(await repo.listCommentOut()).toEqual([]);
+  });
+
+  it('用例 9：listCommentOut 按入队时刻升序；删除一条即少一条', async () => {
+    const { repo } = fixture();
+    const row = (id: string, at: string) => ({
+      eventId: id,
+      targetId: 'article/a',
+      text: id,
+      replyTo: null,
+      wire: '{}',
+      state: 'pending' as const,
+      reason: null,
+      queuedAt: at,
+    });
+    await repo.enqueueComment(row('e2', '2026-09-28T00:00:02.000Z'));
+    await repo.enqueueComment(row('e1', '2026-09-28T00:00:01.000Z'));
+
+    expect((await repo.listCommentOut()).map((r) => r.eventId)).toEqual(['e1', 'e2']);
+    await repo.removeCommentOut('e1');
+    expect((await repo.listCommentOut()).map((r) => r.eventId)).toEqual(['e2']);
+  });
+});

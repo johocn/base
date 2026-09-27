@@ -264,6 +264,67 @@ export async function postComment(o: CommentOptions, input: CommentInput): Promi
   }
 }
 
+/** 永久失败：节点明确拒绝，重发无意义（本册 §5.2）。 */
+function isPermanentFailure(e: unknown): boolean {
+  return e instanceof CommentError && (e.code === 'revoked' || e.code === 'rejected');
+}
+
+/** 进行中的补发：并发调用复用同一轮（进页面与「立即补发」可能撞在一起）。 */
+let inflightFlush: Promise<FlushResult> | null = null;
+
+/**
+ * 补发待发队列。**不抛错**：结果只经返回值体现，绝不打断调用方（上上册 §6.4 红线）。
+ *
+ * 逐条顺序补发；**暂时失败即中止本轮**——网络刚断或已被限速时后续条目必然同错，
+ * 中止省掉一串无用请求，下次进页面继续。已 `failed` 的行永不自动重试，只能由用户删除。
+ * **不读能力标志**：`writeOk` 只由用户主动跑自检更新，用它拦补发会让「节点已恢复但标志过期」永久卡死。
+ */
+export function flushPending(o: CommentOptions): Promise<FlushResult> {
+  if (o.nodeBaseUrl === '') return Promise.resolve({ sent: 0, failed: 0, remaining: 0, error: '' });
+  if (!inflightFlush) {
+    inflightFlush = (async () => {
+      try {
+        return await runFlush(o);
+      } finally {
+        inflightFlush = null;
+      }
+    })();
+  }
+  return inflightFlush;
+}
+
+async function runFlush(o: CommentOptions): Promise<FlushResult> {
+  const rows = (await o.repo.listCommentOut()).filter((r) => r.state === 'pending');
+  let sent = 0;
+  let failed = 0;
+  let remaining = 0;
+  let error = '';
+  for (const row of rows) {
+    try {
+      await sendComment(o, {
+        targetId: row.targetId,
+        text: row.text,
+        replyTo: row.replyTo ?? undefined,
+        wire: row.wire,
+        eventId: row.eventId,
+      });
+      await o.repo.removeCommentOut(row.eventId);
+      sent += 1;
+    } catch (e) {
+      const msg = e instanceof CommentError ? e.message : `补发失败：${(e as Error).message ?? String(e)}`;
+      if (isPermanentFailure(e)) {
+        await o.repo.markCommentOutFailed(row.eventId, msg);
+        failed += 1;
+      } else {
+        remaining += 1;
+        error = msg;
+        break;
+      }
+    }
+  }
+  return { sent, failed, remaining, error };
+}
+
 /** 节点错误码 → 用户可读提示（册子 §6.4）。 */
 function mapPostFailure(status: number, raw: string): CommentError {
   let code = '';
