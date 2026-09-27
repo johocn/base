@@ -118,7 +118,15 @@ CREATE INDEX IF NOT EXISTS idx_comment_out_queued ON comment_out(queued_at);
 现在「构造 wire → 组签名头 → POST」全在 `postComment` 内（`comment.ts:152-193`）。拆成：
 
 ```ts
-export interface CommentInput { targetId: string; text: string; replyTo?: string }
+export interface CommentInput {
+  targetId: string;
+  text: string;
+  replyTo?: string;
+  /** 补发专用：已签名的完整请求体文本。传入即逐字节重放，不重算 event_id / sig（§3.1）。 */
+  wire?: string;
+  /** 与 `wire` 配套的 event_id（传入 wire 时必填）。 */
+  eventId?: string;
+}
 
 /** 直接发送一条评论：构造（本地）→ 登记 → POST /v1/event。失败抛 CommentError。不落本地队列。 */
 export async function sendComment(o: CommentOptions, input: CommentInput): Promise<{ eventId: string; payloadCid: string }>
@@ -158,7 +166,8 @@ export async function flushPending(o: CommentOptions): Promise<FlushResult>
 1. nodeBaseUrl === '' → 直接返回全 0（不报错）
 2. 模块级 inflight 守卫：已有进行中的 flush 则复用它（并发调用只跑一轮）
 3. rows = repo.listCommentOut()（queued_at ASC）；只处理 state === 'pending' 的行
-4. 逐条 sendComment(o, { targetId, text, replyTo: row.replyTo ?? undefined })：
+4. 逐条 sendComment(o, { targetId, text, replyTo: row.replyTo ?? undefined, wire: row.wire, eventId: row.eventId })：
+     —— 传 `wire` 即逐字节重放冻结的请求体（`sig` 不重算）；**请求签名头每轮新算**（`ts` 一次性、`nonce` 会被节点去重），故只重放 body 字节
      成功         → repo.removeCommentOut(eventId)；sent++
      永久失败     → repo.markCommentOutFailed(eventId, msg)；failed++
      暂时失败     → 保留 pending；error = msg；remaining++ **并中止本轮**
