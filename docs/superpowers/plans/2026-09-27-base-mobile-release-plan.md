@@ -3998,6 +3998,13 @@ git commit -m "chore(mobile): 版本递增到 0.2.0（四 tab + 答题 + 升级�
     - 发布：APK → `/opt/appdl/base-0.5.0.apk`（**27373900 字节**，sha256 `4a327647…598d7`）；`/opt/appdl/index.html` 指向新版本；`based release -version-name 0.5.0 -min-version-name 0.4.0 -apk-url http://118.190.217.242/dl/base-0.5.0.apk -apk-file /opt/appdl/base-0.5.0.apk -notes <无空格说明> -out /opt/base-cache/data/release.json`（`-notes` 仍必须是不含空格的单 token）。
     - 验证：`/v1/release` 200 且 `apk_size` 与文档一致；`/dl/base-0.5.0.apk` 200 / `Content-Length 27373900`；线上文档用**独立实现**（Node 原生 ed25519 + JCS 规范化，不共享仓库 TS 验签器）复核为 true。**PowerShell 里 ssh 远程命令中的双引号会被剥掉**（`-w "%{http_code} %{size_download}"` 会被拆坏并回吐二进制），核下载用 `curl -sSI` 看 `Content-Length` 更省事。
 
+14. **0.6.0（评论离线发表队列）发布实况（提交 `0abb030`；实施计划 `docs/superpowers/plans/2026-09-28-base-comment-offline-queue-plan.md`）**：
+    - 出包命令同前。APK → `/opt/appdl/base-0.6.0.apk`（**27375197 字节**，sha256 `fda62798a1981d4d09513df7b976caf198243738896af3c75dc5066e493592f1`）；`/opt/appdl/index.html` 由 0.5.0 改指 0.6.0；`based release -version-name 0.6.0 -min-version-name 0.5.0 -notes 离线可写评论：待发队列、联网自动补发、失败可删 -out /opt/base-cache/data/release.json`（`-notes` 仍必须是不含空格的单 token；本轮未产生 `/opt/base/data/release.json` 误写）。
+    - 证书 SHA1 `19:95:21:ED…FF:19` 与前几版一致（可覆盖安装）；`keytool` 仍用 `D:\HBuilderX\plugins\amazon-corretto\bin\keytool.exe`。
+    - 验证：`/v1/release` 返回 `version_name":"0.6.0"`；`/dl/base-0.6.0.apk` 200 / `Content-Length 27375197` 与文档 `apk_size` 一致；验签 `verifyRelease(doc, '48c33db9…24f4')` 为 true。
+    - **内嵌路径口径再更正**：0.5.0 记的 `assets/apps/__UNI__936A667__/www/` 是错的（多了一个尾部 `__`），本轮实测为 `assets/apps/__UNI__936A667/www/`（**单**尾 `__`）。
+    - **中文串核对别用 `Select-String`**：PowerShell 5.1 下它按 ANSI 读 UTF-8 文件，中文特征串会误报 0 命中；要用 `[System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)` 再 `.Contains(...)`。
+
 ## 明确不做的（spec §1，任何实现都不得顺手加）
 
 不做评论/圈子的真实功能、不做 App 侧 markdown 解析、不做答题结果上报、不做滚动位置恢复、不做全站深色主题、不做 FTS5、不做 wgt 热更新、不做 App 内下载 APK 与 `plus.runtime.install`、不做账号/设备身份上行、不做 tabBar 图标、不做节点侧分发与反熵改动（除 §6.3 导出增一类表与 §8.3 新增一个只读接口）。

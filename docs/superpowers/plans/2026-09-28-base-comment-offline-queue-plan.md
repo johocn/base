@@ -427,7 +427,7 @@ function buildCommentWire(ident: Identity, input: CommentInput): { eventId: stri
   if (input.replyTo) (inner as Record<string, Json>).reply_to = input.replyTo;
   const payload: Json = { event_id: eventId, type: 'comment.v1', created_at: Date.now(), body: inner };
   const sig = sign(ident.seedHex, utf8(canonicalize(payload)));
-  return { eventId, wire: utf8(JSON.stringify({ ...(payload as Record<string, Json>), sig })) };
+  return { eventId, wire: JSON.stringify({ ...(payload as Record<string, Json>), sig }) };
 }
 ```
 
@@ -1297,3 +1297,23 @@ git push
 - `MemoryDb` 一律不动：评论测试走 `MemoryRepo`，`MemoryDb` 只服务自检探测。
 - `SqlRepo` 与 `MemoryRepo` 必须同时实现 4 个新方法，否则 `npx tsc --noEmit` 报错——这是两地实现不漂移的唯一保证。
 - `comment.vue` 的 `onShow` 里原变量叫 `pending`，与新的 `pending` ref 冲突，必须改名 `anchor`（Task 5 Step 5 已写）。
+
+---
+
+## 执行期更正（已实施后回填，后续 Task 请以本节为准）
+
+1. **计划里 `buildCommentWire` 的 `wire` 写错了类型**：原文 `wire: utf8(JSON.stringify({...}))` 返回 `Uint8Array`，与函数签名 `{ eventId: string; wire: string }` 不符，照抄会让 8 项测试报 `编码请求失败：s.charCodeAt is not a function`。已改为 `wire: JSON.stringify({...})`（JSON 文本字符串），本文 Task 2 Step 3 已同步修正（提交 `3b627c4`）。
+
+2. **spec 已补 `CommentInput` 的两个可选字段**：spec §3.1 与 §8 用例 5 要求补发**逐字节重放**（`sig` 不重算），而 §4.1/§4.3 的调用只传 `targetId/text/replyTo`，二者无法同时成立。已给 `CommentInput` 加 `wire?: string` 与 `eventId?: string`，并在 spec §4.1/§4.3 同步说明；补发只重放 body 字节，**请求签名头每轮新算**（`ts` 一次性、`nonce` 节点去重）。（提交 `3b627c4`）
+
+3. **Task 2 结束时 `npx tsc --noEmit` 会短暂报 TS2305**（`comment.test.ts` 提前 import 了 Task 3 才导出的 `flushPending`）。属预期中的跨 Task 过渡，Task 3 补齐导出后即消失，无需在 Task 2 里提前实现 `flushPending`。
+
+4. **全量测试项数是 96，不是计划预估的 99**：mobile 由 85 → 96（`comment.test.ts` 新增 10 项：离线入队 4 + `sendComment` 纯度 1 + `flushPending` 5；`selfcheck.test.ts` 由既有「用例 2」拆成两条并新增用例 11，净增 1）。以全绿为准，项数仅作参考。
+
+5. **Task 6 的「特征串核对」不能直接用 `Select-String`**：PowerShell 5.1 按 ANSI 读 UTF-8 文件，中文特征串会误报 0 命中（本轮 `待发送` / `已保存，联网后自动补发` / `节点不可达，未探测` 等均误判）。正确做法是 `[System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)` 再 `.Contains(...)`；改用此法后全部命中。
+
+6. **APK 内嵌路径口径再更正**：0.5.0 记录的 `assets/apps/__UNI__936A667__/www/` 多了一个尾部 `__`，0.6.0 实测为 `assets/apps/__UNI__936A667/www/`（单尾 `__`）。已同步记入 `2026-09-27-base-mobile-release-plan.md` 第 14 条。
+
+7. **0.6.0 发布实况**：见 `docs/superpowers/plans/2026-09-27-base-mobile-release-plan.md`「执行期更正」第 14 条（APK 27375197 字节 / sha256 `fda62798a1981d4d09513df7b976caf198243738896af3c75dc5066e493592f1`、证书 SHA1 与前版一致、`release.json` 落 `/opt/base-cache/data/release.json`、线上 `/v1/release` 与 `/dl/base-0.6.0.apk` 验证通过、独立验签 true、已发布 APK 内 4 处特征串与 `version.name=0.6.0` 全部命中）。
+
+8. **Task 8 Step 1 的真机 6 条验收待装机后回填**：对照 spec §9 表格逐条实测后，把结果与本计划不符之处追加到本节。第 5 项造永久失败的做法：先断网攒一条待发项，再改掉本地 `comment_out.wire` 里的正文字符使 `sig` 失效，联网后点「立即补发」→ 节点验签失败即标「发送失败：提交被拒绝」。
