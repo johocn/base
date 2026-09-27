@@ -652,7 +652,7 @@ git commit -m "feat(mobile): 本地搜索（LIKE 转义 + 单遍占位符查询�
 Run: `npm run build:app -w @base/mobile`
 Expected: 构建成功但产物里仍有 `pages/index/index`；`pages.json` 无 `tabBar`。这两点即本 Task 要消除的状态。
 
-Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\index\index.js`
+Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\index`
 Expected: `True`（改造后应为 `False`，且出现 `pages\course\course.js`）
 
 - [ ] **Step 2: 写页面与配置**
@@ -864,10 +864,10 @@ git rm apps/mobile/src/pages/index/index.vue
 Run: `npm run build:app -w @base/mobile`
 Expected: 构建成功。
 
-Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\course\course.js`
+Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\course`
 Expected: `True`
 
-Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\index\index.js`
+Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\index`
 Expected: `False`
 
 - [ ] **Step 4: 手工核对硬约束**
@@ -896,12 +896,15 @@ git commit -m "feat(mobile): 四 tab 骨架（课程/圈子/评论/我的）与�
 
 **Files:**
 - Modify: `apps/mobile/src/pages/course/course.vue`
-- Modify: `apps/mobile/src/pages.json`（注册搜索页与答题页——答题页文件在 Task 14 创建，本步只注册搜索页，避免注册不存在的路径）
+
+> **本步不动 `pages.json`。** 页面注册一律由「创建该页 `.vue` 的那个 Task」负责（`pages.json` 里注册一个没有对应文件的路径会让 vite 构建直接失败）。因此 `pages/search/search` 的注册在 Task 5，`pages/quiz/quiz` 的注册在 Task 14。
 
 - [ ] **Step 1: 写改动前的可观察基线**
 
-Run: `npm run build:app -w @base/mobile` 且 `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\search\search.js`
+Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\search`
 Expected: `False`（尚未有搜索页）
+
+> 核对方针：uni-app 把页面逻辑汇进单个 `app-service.js`，页面目录下只留 `.css`，**不存在** `pages/<name>/<name>.js`。故一律用**页面目录**是否存在来核对。
 
 - [ ] **Step 2: 改课程页**
 
@@ -980,35 +983,22 @@ import { computed, ref } from 'vue';
 .group { display: block; margin: 16px 0 4px; color: #888888; font-size: 13px; }
 ```
 
-- [ ] **Step 3: 注册搜索页**
-
-在 `apps/mobile/src/pages.json` 的 `pages` 数组末尾（`pages/setting/setting` 之后）追加：
-
-```json
-    {
-      "path": "pages/search/search",
-      "style": { "navigationBarTitleText": "搜索" }
-    },
-    {
-      "path": "pages/quiz/quiz",
-      "style": { "navigationBarTitleText": "答题" }
-    },
-```
-
-> 因此本步的执行顺序是：**先做 Task 5（搜索页）、Task 14（答题页）再回头跑构建**；或者先只追加 `search` 项，`quiz` 项在第 14 个 Task 追加。两者择一，不要留下指向不存在页面的注册。本计划采用后者：本步只追加 `search`，`quiz` 在 Task 14 Step 3 追加。
-
-- [ ] **Step 4: 构建验证**
+- [ ] **Step 3: 构建验证**
 
 Run: `npm run build:app -w @base/mobile`
 Expected: 构建成功。
 
-Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\course\course.js`
+Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\course`
 Expected: `True`
+
+- [ ] **Step 4: 人工核对搜索入口**
+
+打开 `apps/mobile/src/pages/course/course.vue`，确认 `openSearch()` 指向 `/pages/search/search`（该页在 Task 5 创建并注册；在此之前点击无反应但不报错）。
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add apps/mobile/src/pages/course/course.vue apps/mobile/src/pages.json
+git add apps/mobile/src/pages/course/course.vue
 git commit -m "feat(mobile): 课程页按 type 分组展示文章与测验，加搜索入口"
 ```
 
@@ -1018,6 +1008,7 @@ git commit -m "feat(mobile): 课程页按 type 分组展示文章与测验，加
 
 **Files:**
 - Create: `apps/mobile/src/pages/search/search.vue`
+- Modify: `apps/mobile/src/pages.json`（追加 `pages/search/search` —— 由创建该页的本 Task 注册，见 Task 4 顶部说明）
 
 - [ ] **Step 1: 写失败条件**
 
@@ -1089,22 +1080,33 @@ function open(itemId: string) {
 </style>
 ```
 
-- [ ] **Step 3: 构建验证**
+- [ ] **Step 3: 注册搜索页**
+
+在 `apps/mobile/src/pages.json` 的 `pages` 数组末尾（`pages/setting/setting` 之后）追加（注意把上一项结尾的 `}` 补上逗号）：
+
+```json
+    {
+      "path": "pages/search/search",
+      "style": { "navigationBarTitleText": "搜索" }
+    }
+```
+
+- [ ] **Step 4: 构建验证**
 
 Run: `npm run build:app -w @base/mobile`
 Expected: 构建成功。
 
-Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\search\search.js`
+Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\search`
 Expected: `True`
 
-- [ ] **Step 4: 人工核对空输入不发查询**
+- [ ] **Step 5: 人工核对空输入不发查询**
 
 打开 `apps/mobile/src/core/repo.ts`，确认 `searchArticles` 第一句是 `if (pattern === null) return [];`——`searchPattern` 已把空串与纯空白判为 `null`，故空输入不会落库查询（spec §5.2、验收 3）。
 
-- [ ] **Step 5: 提交**
+- [ ] **Step 6: 提交**
 
 ```bash
-git add apps/mobile/src/pages/search/search.vue
+git add apps/mobile/src/pages/search/search.vue apps/mobile/src/pages.json
 git commit -m "feat(mobile): 搜索页（输入即搜，纯本地零网络）"
 ```
 
@@ -1117,7 +1119,7 @@ git commit -m "feat(mobile): 搜索页（输入即搜，纯本地零网络）"
 
 - [ ] **Step 1: 写失败条件**
 
-Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\mine\mine.js`（Task 3 的构建产物存在）
+Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\mine`（Task 3 的构建产物存在）
 打开 `apps/mobile/src/pages/mine/mine.vue`，确认此时只有两个 `<navigator>`，**没有**学习记录区。这就是本 Task 要补的状态。
 
 - [ ] **Step 2: 写实现**
@@ -1267,7 +1269,7 @@ function open(itemId: string) {
 Run: `npm run build:app -w @base/mobile`
 Expected: 构建成功。
 
-Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\favorite\favorite.js`
+Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\favorite`
 Expected: `True`
 
 - [ ] **Step 4: 核对「撤下即消失」语义**
@@ -2887,7 +2889,7 @@ function decodedId(raw: string): string {
 Run: `npm run build:app -w @base/mobile`
 Expected: 构建成功。
 
-Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\quiz\quiz.js`
+Run: `Test-Path e:\code\base\apps\mobile\dist\build\app\pages\quiz`
 Expected: `True`
 
 - [ ] **Step 4: 核对「一题只判一次、一次作答只写一行」**
@@ -3952,13 +3954,15 @@ git commit -m "chore(mobile): 版本递增到 0.2.0（四 tab + 答题 + 升级�
 1. **spec 覆盖**：§3 路由 → T3/T4/T5/T7/T14；§4 本地数据层 → T1（`user_state`/`quizzes`/`quiz_attempt` + §4.3 全部方法）、T8（`reader_theme`/`reader_font_scale`）；§5 → T4/T5/T6/T7/T8；§6.1 → T9/T10；§6.2 → T9（键名即契约，用 JSON 形状测试锁死）；§6.3 → T11/T12；§6.4 → T13/T14；§7 → T3（占位页）；§8.1/8.2 → T15/T16；§8.3 → T17；§8.4 → T18；§8.5 → T18（`openURL` + 展示 sha256 前 16 位）；§9 → T19；§10 → T19 Step 4 的 14 条表。**未覆盖**：§12 的 9 条待定项，本计划按 spec 刻意不做。
 2. **占位扫描**：无 `TODO` / `TBD` / 「类似 Task N」；每个代码步骤都给了可直接粘贴的完整代码。
 3. **类型一致性**：`QuizRow{itemId,questionJson,contentHash}` 在 T1 定义、T12 落库、T13 解析、T14 取用一致；`PackApply.quizzes` 在 T1 定义、T12 传参一致；`releaseSignBytes` 在 Go 叫 `ReleaseSignBytes`、TS 叫 `releaseSignBytes`，语义都是「payload 的 canonicalize」；`decideUpdate` 返回值 `'ignore'|'latest'|'optional'|'forced'` 在 T18 的测试与设置页 `if (decision === 'latest')` / `if (decision === 'ignore') return` 一致。
-4. **顺序耦合**：T1 与 T2 需在同一提交前一起完成（`repo.ts` 依赖 `./search`）；T4 只把 `search` 注册进 `pages.json`，`quiz` 由 T14 注册；T15 必须先跑 `genvectors` 再提交，否则 T16 的向量测试无数据。
+4. **顺序耦合**：T1 与 T2 需在同一提交前一起完成（`repo.ts` 依赖 `./search`）；页面注册一律由「创建该页 `.vue` 的 Task」负责（`search` → T5、`favorite` → T7、`quiz` → T14），因为 `pages.json` 里注册一个没有对应文件的路径会让 vite 构建失败；T15 必须先跑 `genvectors` 再提交，否则 T16 的向量测试无数据。
 
 ## 执行期更正（已实施后回填，后续 Task 请以本节为准）
 
 1. **T1 `fakes.ts` 的 import 漏了一行**：计划给的 import 里没有 `import type { LocalRepo, PackApply } from './repo';`，但 `MemoryRepo implements LocalRepo` 与 `applyPack(p: PackApply)` 需要它。已按既有文件保留该行（提交 `3fca406`）。
 2. **`PackApply.quizzes` 必填引发 T1 之外的连锁**：计划把 `quizzes` 定为必填数组，于是 `sync.ts` 里 `applyPack({...})` 的调用点 typecheck 报 TS2345，而 T1 的文件清单与 commit 清单都没列 `sync.ts`。已在调用点最小化补 `quizzes: []`（提交 `3fca406`）；**T12 落地 `readPackQuizzes` 时用它替换这一行**，不要再新增调用点。
 3. **全量测试的既有基线是 30 项**（identity 15 + sync 10 + sql 5），不是 75；文中已更正。
+4. **T4 原先要注册 `pages/search/search`，而 `search.vue` 在 T5 才创建** —— 那样 T4 的 `npm run build:app` 必然失败。已改为「谁建文件谁注册」：T4 只改 `course.vue`，T5 自己建页并注册。全计划统一这条规则。
+5. **`dist` 页面级 `.js` 不存在**：实测 uni-app 把页面逻辑汇进单个 `app-service.js`，页面目录下只有 `.css`。所有 `Test-Path ...pages/<name>/<name>.js` 的核对已改成 `Test-Path ...pages/<name>`（页面目录）。
 
 ## 明确不做的（spec §1，任何实现都不得顺手加）
 
