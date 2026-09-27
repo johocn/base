@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/johocn/base/internal/packexport"
@@ -33,6 +34,9 @@ func main() {
 		fail(err)
 	}
 	if err := writeRequestSig(*out); err != nil {
+		fail(err)
+	}
+	if err := writeRelease(*out); err != nil {
 		fail(err)
 	}
 }
@@ -127,20 +131,20 @@ func writeManifest(out string) error {
 		return err
 	}
 	case0 := map[string]any{
-		"name": "sample_pack_v7",
-		"pack_id": res.PackID,
+		"name":            "sample_pack_v7",
+		"pack_id":         res.PackID,
 		"content_version": res.ContentVersion,
-		"merkle_root": res.MerkleRoot,
-		"entries": res.Entries,
-		"pack_sha256": res.PackSHA256,
+		"merkle_root":     res.MerkleRoot,
+		"entries":         res.Entries,
+		"pack_sha256":     res.PackSHA256,
 		"manifest_sha256": res.ManifestSHA256,
-		"sign_bytes": string(signBytes),
-		"manifest": res.Manifest,
+		"sign_bytes":      string(signBytes),
+		"manifest":        res.Manifest,
 	}
 	return writeJSON(filepath.Join(out, "manifest.json"), map[string]any{
 		"version": 1,
-		"key": map[string]any{"seed_hex": testSeed, "pub_hex": kp.PubHex},
-		"cases": []any{case0},
+		"key":     map[string]any{"seed_hex": testSeed, "pub_hex": kp.PubHex},
+		"cases":   []any{case0},
 	})
 }
 
@@ -224,6 +228,42 @@ func writeRequestSig(out string) error {
 	}
 	return writeJSON(filepath.Join(out, "reqsig.json"), map[string]any{
 		"version": 1, "seed_hex": kp.SeedHex, "pub_hex": kp.PubHex, "cases": cases,
+	})
+}
+
+// writeRelease 产出一份确定性的 release 文档黄金向量：固定 payload → 待签字节 → 签名。
+func writeRelease(out string) error {
+	kp, err := protocol.KeyPairFromSeed(testSeed)
+	if err != nil {
+		return err
+	}
+	doc := protocol.ReleaseDoc{Payload: protocol.ReleasePayload{
+		SchemaVersion: 1, Issuer: "base-node-1", IssuedAt: "2026-09-27T00:00:00Z",
+		VersionName: "0.2.0", MinVersionName: "0.1.0",
+		ApkURL: "http://node.example.com/dl/base-0.2.0.apk", ApkSize: 12345678,
+		ApkSHA256: strings.Repeat("ab", 32), Notes: "课程、答题与我的；四 tab 定稿",
+	}}
+	if err := doc.SignWith(testSeed); err != nil {
+		return err
+	}
+	signBytes, err := doc.ReleaseSignBytes()
+	if err != nil {
+		return err
+	}
+	raw, err := doc.MarshalCanonical()
+	if err != nil {
+		return err
+	}
+	return writeJSON(filepath.Join(out, "release.json"), map[string]any{
+		"version": 1,
+		"key":     map[string]any{"seed_hex": testSeed, "pub_hex": kp.PubHex},
+		"cases": []any{map[string]any{
+			"name":          "release_0_2_0",
+			"sign_bytes":    string(signBytes),
+			"signature_hex": doc.Signature,
+			"doc_sha256":    protocol.SHA256Hex(raw),
+			"doc":           doc,
+		}},
 	})
 }
 

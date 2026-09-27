@@ -1,0 +1,29 @@
+{
+  "cases": [
+    {
+      "doc": {
+        "payload": {
+          "schema_version": 1,
+          "issuer": "base-node-1",
+          "issued_at": "2026-09-27T00:00:00Z",
+          "version_name": "0.2.0",
+          "min_version_name": "0.1.0",
+          "apk_url": "http://node.example.com/dl/base-0.2.0.apk",
+          "apk_size": 12345678,
+          "apk_sha256": "abababababababababababababababababababababababababababababababab",
+          "notes": "课程、答题与我的；四 tab 定稿"
+        },
+        "signature": "63b33bd95b7a3561a50482ac86b4e10cca8928e381daf2bbb71bcc04f08d6c649697adc8c7b31faa8b5d7877766112a5b680ca6c8f597183d7cf3e06dca7760d"
+      },
+      "doc_sha256": "10f83b1490cd0478db3706718d0e4c2eaf531cc773bbf4fc339f07e5b89818d5",
+      "name": "release_0_2_0",
+      "sign_bytes": "{\"apk_sha256\":\"abababababababababababababababababababababababababababababababab\",\"apk_size\":12345678,\"apk_url\":\"http://node.example.com/dl/base-0.2.0.apk\",\"issued_at\":\"2026-09-27T00:00:00Z\",\"issuer\":\"base-node-1\",\"min_version_name\":\"0.1.0\",\"notes\":\"课程、答题与我的；四 tab 定稿\",\"schema_version\":1,\"version_name\":\"0.2.0\"}",
+      "signature_hex": "63b33bd95b7a3561a50482ac86b4e10cca8928e381daf2bbb71bcc04f08d6c649697adc8c7b31faa8b5d7877766112a5b680ca6c8f597183d7cf3e06dca7760d"
+    }
+  ],
+  "key": {
+    "pub_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "seed_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+  },
+  "version": 1
+}
