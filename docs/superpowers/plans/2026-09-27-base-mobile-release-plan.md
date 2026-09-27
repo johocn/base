@@ -628,7 +628,7 @@ import type { ArticleRow, FavoriteRow, ItemRow, LearningStats, QuizRow, Tombston
 ```
 
 Run: `npm test`
-Expected: PASS（既有 75 项 + 新增全绿）
+Expected: PASS（既有 30 项 = identity 15 + sync 10 + sql 5，加本次新增全绿）
 
 ```bash
 git add apps/mobile/src/core/search.ts apps/mobile/src/core/search.test.ts apps/mobile/src/core/fakes.ts apps/mobile/src/core/repo.ts
@@ -3953,6 +3953,12 @@ git commit -m "chore(mobile): 版本递增到 0.2.0（四 tab + 答题 + 升级�
 2. **占位扫描**：无 `TODO` / `TBD` / 「类似 Task N」；每个代码步骤都给了可直接粘贴的完整代码。
 3. **类型一致性**：`QuizRow{itemId,questionJson,contentHash}` 在 T1 定义、T12 落库、T13 解析、T14 取用一致；`PackApply.quizzes` 在 T1 定义、T12 传参一致；`releaseSignBytes` 在 Go 叫 `ReleaseSignBytes`、TS 叫 `releaseSignBytes`，语义都是「payload 的 canonicalize」；`decideUpdate` 返回值 `'ignore'|'latest'|'optional'|'forced'` 在 T18 的测试与设置页 `if (decision === 'latest')` / `if (decision === 'ignore') return` 一致。
 4. **顺序耦合**：T1 与 T2 需在同一提交前一起完成（`repo.ts` 依赖 `./search`）；T4 只把 `search` 注册进 `pages.json`，`quiz` 由 T14 注册；T15 必须先跑 `genvectors` 再提交，否则 T16 的向量测试无数据。
+
+## 执行期更正（已实施后回填，后续 Task 请以本节为准）
+
+1. **T1 `fakes.ts` 的 import 漏了一行**：计划给的 import 里没有 `import type { LocalRepo, PackApply } from './repo';`，但 `MemoryRepo implements LocalRepo` 与 `applyPack(p: PackApply)` 需要它。已按既有文件保留该行（提交 `3fca406`）。
+2. **`PackApply.quizzes` 必填引发 T1 之外的连锁**：计划把 `quizzes` 定为必填数组，于是 `sync.ts` 里 `applyPack({...})` 的调用点 typecheck 报 TS2345，而 T1 的文件清单与 commit 清单都没列 `sync.ts`。已在调用点最小化补 `quizzes: []`（提交 `3fca406`）；**T12 落地 `readPackQuizzes` 时用它替换这一行**，不要再新增调用点。
+3. **全量测试的既有基线是 30 项**（identity 15 + sync 10 + sql 5），不是 75；文中已更正。
 
 ## 明确不做的（spec §1，任何实现都不得顺手加）
 
