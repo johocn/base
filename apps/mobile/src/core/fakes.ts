@@ -1,14 +1,8 @@
 // 测试用假实现：只在 Node 下跑，App 代码不引用本文件。
-import type {
-  Adapters,
-  FsAdapter,
-  HttpAdapter,
-  HttpResponse,
-  PackReader,
-  SqliteConnection,
-  StorageAdapter,
-} from '../platform/adapter';
-import type { ArticleRow, ItemRow, TombstoneRow } from './types';
+import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, PackReader, SqliteConnection, StorageAdapter } from '../platform/adapter';
+import { computeStats, favoriteNext, readAtNext } from './state';
+import { searchPattern } from './search';
+import type { ArticleRow, FavoriteRow, ItemRow, LearningStats, QuizRow, TombstoneRow } from './types';
 import type { LocalRepo, PackApply } from './repo';
 
 export class MemoryFs implements FsAdapter {
@@ -63,12 +57,14 @@ export class MemoryRepo implements LocalRepo {
       this.tombstones.set(t.itemId, t);
       this.items.delete(t.itemId);
       this.articles.delete(t.itemId);
+      this.quizzes.delete(t.itemId);
       for (const [id, b] of [...this.blobs]) {
         if (b.itemId === t.itemId) this.blobs.delete(id);
       }
     }
     for (const it of p.items) this.items.set(it.itemId, it);
     for (const a of p.articles) this.articles.set(a.itemId, a);
+    for (const q of p.quizzes) this.quizzes.set(q.itemId, q);
     this.config.set('content_version', String(p.version));
     this.config.set('pack_id', p.packId);
   }
@@ -102,6 +98,65 @@ export class MemoryRepo implements LocalRepo {
   }
   async listTombstones(): Promise<TombstoneRow[]> {
     return [...this.tombstones.values()];
+  }
+
+  favorites = new Map<string, string>(); // itemId -> favorited_at
+  reads = new Map<string, string>(); // itemId -> read_at
+  quizzes = new Map<string, QuizRow>();
+  attempts: Array<{ itemId: string; at: string; correct: number; total: number }> = [];
+
+  async toggleFavorite(itemId: string, at: string): Promise<boolean> {
+    const next = favoriteNext(this.favorites.get(itemId) ?? null, at);
+    if (next.favoritedAt === null) {
+      this.favorites.delete(itemId);
+    } else {
+      this.favorites.set(itemId, next.favoritedAt);
+    }
+    return next.isFavorite;
+  }
+  async isFavorite(itemId: string): Promise<boolean> {
+    return this.favorites.has(itemId);
+  }
+  async listFavorites(): Promise<FavoriteRow[]> {
+    const out: FavoriteRow[] = [];
+    for (const [itemId, favoritedAt] of this.favorites) {
+      const it = this.items.get(itemId);
+      if (!it) continue; // 条目被 tombstone 撤下后收藏自动消失
+      out.push({ itemId, title: it.title, favoritedAt });
+    }
+    return out.sort((a, b) => (a.favoritedAt < b.favoritedAt ? 1 : -1));
+  }
+  async markRead(itemId: string, at: string): Promise<void> {
+    this.reads.set(itemId, readAtNext(this.reads.get(itemId) ?? null, at));
+  }
+  async searchArticles(q: string): Promise<ArticleRow[]> {
+    const pattern = searchPattern(q);
+    if (pattern === null) return [];
+    const needle = pattern.slice(1, -1).replace(/\\(.)/g, '$1').toLowerCase();
+    return [...this.articles.values()]
+      .filter((a) => a.title.toLowerCase().includes(needle) || a.bodyMd.toLowerCase().includes(needle))
+      .slice(0, 50);
+  }
+  async listQuizItems(): Promise<ItemRow[]> {
+    return [...this.items.values()].filter((i) => i.type === 'quiz');
+  }
+  async getQuiz(itemId: string): Promise<QuizRow | null> {
+    return this.quizzes.get(itemId) ?? null;
+  }
+  async addAttempt(itemId: string, correct: number, total: number, at: string): Promise<void> {
+    this.attempts.push({ itemId, at, correct, total });
+  }
+  async learningStats(): Promise<LearningStats> {
+    const readLast = [...this.reads.values()].sort().at(-1) ?? '';
+    const quizLast = this.attempts.map((a) => a.at).sort().at(-1) ?? '';
+    return computeStats({
+      readCount: this.reads.size,
+      attempts: this.attempts.length,
+      correct: this.attempts.reduce((n, a) => n + a.correct, 0),
+      total: this.attempts.reduce((n, a) => n + a.total, 0),
+      readLast,
+      quizLast,
+    });
   }
 }
 

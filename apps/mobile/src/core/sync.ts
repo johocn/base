@@ -207,7 +207,7 @@ export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
     stalePaths.push(...(await o.repo.listBlobPathsByItem(t.itemId)));
   }
 
-  await o.repo.applyPack({ version: cat.content_version, packId: cat.pack_id, items, articles, tombstones, updatedAt: now });
+  await o.repo.applyPack({ version: cat.content_version, packId: cat.pack_id, items, articles, quizzes: [], tombstones, updatedAt: now });
 
   // 行已删、文件后删：删文件失败不阻断本轮（本地视图已一致，下次同步会重跑同一流程）
   for (const path of stalePaths) {
