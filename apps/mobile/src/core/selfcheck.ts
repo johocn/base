@@ -8,7 +8,7 @@ import { keyPairFromSeed, randomBytes, sign, utf8, verify } from '@base/protocol
 
 import type { Adapters, LocalDb } from '../platform/adapter';
 import { base64ToBytes, bytesToBase64, plusRuntime } from '../platform/uni';
-import { postComment } from './comment';
+import { CommentError, sendComment } from './comment';
 import type { LocalRepo } from './repo';
 import { fetchReleaseDoc } from './update';
 
@@ -292,12 +292,19 @@ const PROBES: Probe[] = [
     scope: 'local',
     async run(c) {
       if (!c.nodeBaseUrl) throw new ProbeSkip('未配置节点地址');
-      // 走真实发表链路：身份 → 签名 → POST /v1/event，正是 0.4.1 修坏过的那条
-      const r = await postComment(
-        { adapters: c.adapters, repo: c.repo, nodeBaseUrl: c.nodeBaseUrl },
-        { targetId: SELFCHECK_TARGET, text: SELFCHECK_TARGET },
-      );
-      return `200 回执 event_id ${r.eventId.slice(0, 8)}`;
+      // 走真实发送链路：身份 → 签名 → POST /v1/event，正是 0.4.1 修坏过的那条。
+      // 用 sendComment（纯发送）而不是 postComment：探针不得把 selfcheck 事件写进用户待发队列。
+      try {
+        const r = await sendComment(
+          { adapters: c.adapters, repo: c.repo, nodeBaseUrl: c.nodeBaseUrl },
+          { targetId: SELFCHECK_TARGET, text: SELFCHECK_TARGET },
+        );
+        return `200 回执 event_id ${r.eventId.slice(0, 8)}`;
+      } catch (e) {
+        // 网络不可达 ≠ 内容不可写：判 skip（不计入 writeOk），否则离线时自检会禁掉离线入队本身（本册 §7）
+        if (e instanceof CommentError && e.code === 'network') throw new ProbeSkip('节点不可达，未探测');
+        throw e;
+      }
     },
   },
   {

@@ -131,17 +131,35 @@ describe('runSelfCheck', () => {
     expect(await env.ctx.db.select('SELECT count(*) AS n FROM selfcheck_probe')).toEqual([{ n: 0 }]);
   });
 
-  it('用例 2：只坏一条时仅第 10 条 fail，writeOk 跟着降级', async () => {
+  it('用例 2：网络不可达时第 10 条 skip，writeOk 保持 unknown（离线入队不被自检禁掉）', async () => {
     const env = makeEnv({ withPack: true });
     env.http.post = async () => {
       throw new Error('网络不可达');
     };
     const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS });
 
-    const bad = r.items.filter((i) => i.status === 'fail');
-    expect(bad.map((i) => i.id)).toEqual(['net.event_write']);
-    expect(bad[0]?.detail).toContain('无法连接节点');
-    expect(r.flags).toEqual({ cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'fail' });
+    const p10 = r.items.find((i) => i.id === 'net.event_write');
+    expect(p10?.status).toBe('skip');
+    expect(p10?.detail).toBe('节点不可达，未探测');
+    expect(r.flags).toEqual({ cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'unknown' });
+    // unknown 不降级 → 发表可用 → 离线入队可用（本册 §7）
+    expect(canPostComment(r.flags)).toBe(true);
+    // 探针不污染队列：sendComment 是纯发送，不入队
+    expect(await env.repo.listCommentOut()).toEqual([]);
+  });
+
+  it('用例 11：节点明确拒绝时第 10 条 fail，writeOk 跟着降级', async () => {
+    const env = makeEnv({ withPack: true });
+    env.http.postRoutes.set(`${NODE}/v1/event`, {
+      status: 403,
+      body: utf8(JSON.stringify({ code: 'event_sig_invalid' })),
+    });
+    const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS });
+
+    const p10 = r.items.find((i) => i.id === 'net.event_write');
+    expect(p10?.status).toBe('fail');
+    expect(p10?.detail).toBe('提交被拒绝');
+    expect(r.flags.writeOk).toBe('fail');
   });
 
   it('用例 3：单条挂死只让该条超时，整页仍然出结果', async () => {
