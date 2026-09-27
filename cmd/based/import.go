@@ -12,6 +12,7 @@ func runImportMD(args []string) error {
 	fs := flag.NewFlagSet("import-md", flag.ExitOnError)
 	dir := fs.String("dir", "seed", "markdown 目录")
 	data := fs.String("data", "data", "数据目录")
+	retireLegacy := fs.Bool("retire-legacy", false, "退役旧形态（item_id 含 ':'）的 active 条目，默认关闭")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -20,7 +21,7 @@ func runImportMD(args []string) error {
 		return err
 	}
 	defer st.Close()
-	res, err := importer.Run(st, *dir)
+	res, err := importer.Run(st, *dir, importer.Options{RetireLegacy: *retireLegacy})
 	if err != nil {
 		return err
 	}

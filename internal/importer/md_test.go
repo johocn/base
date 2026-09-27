@@ -68,7 +68,7 @@ func TestRunImportIsIdempotent(t *testing.T) {
 	write("01-a.md", "---\nslug: a\ntitle: 甲\n---\n\n甲的正文")
 	write("02-b.md", "---\nslug: b\ntitle: 乙\n---\n\n乙的正文")
 
-	res, err := Run(st, mdDir)
+	res, err := Run(st, mdDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -79,19 +79,19 @@ func TestRunImportIsIdempotent(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("items = %d, want 2", len(items))
 	}
-	a, ok, _ := st.GetArticle("article:a")
+	a, ok, _ := st.GetArticle("article/a")
 	if !ok {
-		t.Fatal("article:a 未写入")
+		t.Fatal("article/a 未写入")
 	}
 	if a.BodyMD != "甲的正文" || a.ContentHash != protocol.SHA256Hex([]byte("甲的正文")) {
-		t.Fatalf("article:a 内容/哈希错误: %+v", a)
+		t.Fatalf("article/a 内容/哈希错误: %+v", a)
 	}
 	if a.SourceRev == "" || a.TagsJSON == "" || a.PublishedAt == "" {
-		t.Fatalf("article:a 派生字段不应为空: %+v", a)
+		t.Fatalf("article/a 派生字段不应为空: %+v", a)
 	}
 
 	write("01-a.md", "---\nslug: a\ntitle: 甲（改）\n---\n\n甲的新正文")
-	res2, err := Run(st, mdDir)
+	res2, err := Run(st, mdDir, Options{})
 	if err != nil {
 		t.Fatalf("Run(2): %v", err)
 	}
@@ -102,7 +102,7 @@ func TestRunImportIsIdempotent(t *testing.T) {
 	if len(items2) != 2 {
 		t.Fatalf("重跑后 items = %d, want 2（幂等键 source+item_id）", len(items2))
 	}
-	a2, _, _ := st.GetArticle("article:a")
+	a2, _, _ := st.GetArticle("article/a")
 	if a2.Title != "甲（改）" || a2.BodyMD != "甲的新正文" {
 		t.Fatalf("重跑未覆盖同一条目: %+v", a2)
 	}
