@@ -2,8 +2,8 @@
     "name" : "base 学习",
     "appid" : "__UNI__936A667",
     "description" : "base 分布式学习系统手机端",
-    "versionName" : "0.1.0",
-    "versionCode" : "1",
+    "versionName" : "0.2.0",
+    "versionCode" : "2",
     "transformPx" : false,
     "app-plus" : {
         "usingComponents" : true,
