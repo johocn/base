@@ -81,6 +81,7 @@ func (s *Server) publicMux() *http.ServeMux {
 	mux.HandleFunc("GET /v1/pack/{pack_id}", s.handlePack)
 	mux.HandleFunc("GET /v1/blob/{blob_id}", s.handleBlob)
 	mux.HandleFunc("HEAD /v1/blob/{blob_id}", s.handleBlobHead)
+	mux.HandleFunc("GET /v1/release", s.handleRelease)
 
 	// 身份（契约 5.1-5.5）：登记与公钥/托管读取匿名；托管写入与 /v1/me 需签名头。
 	mux.HandleFunc("POST /v1/identity/register", s.handleIdentityRegister)

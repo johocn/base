@@ -22,6 +22,8 @@ func main() {
 		err = runImportVideo(os.Args[2:])
 	case "export":
 		err = runExport(os.Args[2:])
+	case "release":
+		err = runRelease(os.Args[2:])
 	case "serve":
 		err = runServe(os.Args[2:])
 	case "pubkey":
@@ -42,7 +44,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: based <version|import-md|import-video|export|serve|pubkey|store-key|tls-cert|peer-sync|scrub> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: based <version|import-md|import-video|export|release|serve|pubkey|store-key|tls-cert|peer-sync|scrub> [flags]")
 }
 
 func must(err error) {
