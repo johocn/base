@@ -54,6 +54,15 @@ var packDDL = []string{
 	)`,
 }
 
+// exportableTables 是可导出 sqlite_table 的**显式白名单**。
+// 放宽一条就松掉一条护栏（册子 §10 风险 1），故保持集合式判断，不做前缀/正则匹配。
+var exportableTables = map[string]bool{
+	"articles":   true,
+	"media_meta": true,
+	"quizzes":    true,
+	"segments":   true,
+}
+
 // Options 是导出参数；Version 与 IssuedAt 注入固定值时导出结果确定（契约第 9 条）。
 type Options struct {
 	Issuer     string
@@ -92,8 +101,8 @@ func Export(st *store.Store, opt Options) (Result, error) {
 		if it.DistClass != "public" {
 			return Result{}, fmt.Errorf("packexport: 条目 %s dist_class=%s，受控内容不得进入内容包", it.ItemID, it.DistClass)
 		}
-		if it.SQLiteTable != "articles" && it.SQLiteTable != "media_meta" && it.SQLiteTable != "quizzes" {
-			return Result{}, fmt.Errorf("packexport: 条目 %s 的 sqlite_table=%s 在 P0 未支持导出", it.ItemID, it.SQLiteTable)
+		if !exportableTables[it.SQLiteTable] {
+			return Result{}, fmt.Errorf("packexport: 条目 %s 的 sqlite_table=%s 不在可导出白名单内", it.ItemID, it.SQLiteTable)
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ItemID < items[j].ItemID })
@@ -287,6 +296,26 @@ func writePackSQLite(path, packID string, version int64, merkle string, entries 
 				_ = tx.Rollback()
 				_ = db.Close()
 				return err
+			}
+		case "segments":
+			segs, err := st.ListSegments(e.ItemID)
+			if err != nil {
+				_ = tx.Rollback()
+				_ = db.Close()
+				return err
+			}
+			if len(segs) == 0 {
+				_ = tx.Rollback()
+				_ = db.Close()
+				return fmt.Errorf("packexport: 条目 %s 在 segments 表缺失", e.ItemID)
+			}
+			for _, seg := range segs {
+				if _, err := tx.Exec(`INSERT INTO segments(item_id,seq,kind,text,content_hash) VALUES(?,?,?,?,?)`,
+					seg.ItemID, seg.Seq, seg.Kind, seg.Text, seg.ContentHash); err != nil {
+					_ = tx.Rollback()
+					_ = db.Close()
+					return err
+				}
 			}
 		}
 	}
