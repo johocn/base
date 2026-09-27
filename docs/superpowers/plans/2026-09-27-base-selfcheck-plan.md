@@ -1501,7 +1501,24 @@ git push
 
 ## 执行期更正
 
-（执行时把与计划不符之处记在这里；未执行前本小节保持为空）
+**提交链（已 push 到 origin/master）**：T1 `b70f8ab` → T2 `30a306b` → T3 `4bf61b3` → T4 `2ff044e` → T5 `69b0f22` → T6 `a33080e` → T7 `a3571b5`（版本 0.5.0）。
+
+**测试基线**：mobile 77 → **85**（本册子新增 `selfcheck.test.ts` 8 项：T1 的 3 条判定 + T3 的 5 条探测）；protocol-ts 保持 51 项。
+
+1. **本机是 PowerShell 5.1，不支持 `&&`**：计划 T5/T6/T7 里的 `npx tsc --noEmit && npm run build:app`、`npx vitest run && npx tsc --noEmit` 要拆成逐条执行（`&&` 直接 ParserError）。
+2. **「Step 2 跑测试确认失败」的实际报错文案与预期不同**（不影响结论，失败仍如期发生）：T1 报 `Cannot find module './selfcheck'`（计划预期 `Failed to resolve import`）；T3 报 `runSelfCheck is not a function`（计划预期 `does not provide an export named`）——因为文件已存在、只是缺导出。
+3. **T6 的 `blocked` 文案落点**：`<text v-if="blocked">` 插在 `.composer` 之前，而 `.composer` 是 `position: fixed`，因此该文案落在列表末尾、固定输入栏上方（真机观感待 T9 第 5 项验收时确认）。
+4. **T8 打包与下载的环境适配**（均为环境问题，未改业务参数）：
+   - `keytool` 不在 PATH，用 HBuilderX 自带的 `D:\HBuilderX\plugins\amazon-corretto\bin\keytool.exe`。
+   - APK 内嵌 manifest 的真实路径是 `assets/apps/__UNI__936A667__/www/manifest.json`（不是计划假设的 `www/manifest.json`）。
+   - 本地 `curl.exe` 下载云打包临时地址报 `getaddrinfo() thread failed`（域名可解析），改用 `Invoke-WebRequest`（显式 TLS1.2）成功。
+   - PowerShell 里 `curl.exe -w` 的占位符写**单** `%`（`%%` 会输出字面量）；`ssh` 远程命令内的**双引号会被剥掉**（`ssh me 'curl -w "%{http_code} %{size_download}"'` 实测被拆成非法参数并回吐二进制），核对下载用 `curl -sSI` 看 `Content-Length` 更省事。
+5. **0.5.0 发布实况（对照计划 Task 8）**：
+   - APK：`dist/release/apk/base-0.5.0.apk`，**27373900 字节**，sha256 `4a327647850eaa18b07cdcf393606d3182f6257248e11b9b6e25833da6d598d7`；内嵌 `version.name=0.5.0` / `version.code=6`。
+   - 证书：DCloud 云证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`，与 0.4.1 一致（可覆盖安装）。
+   - 上线：APK → `/opt/appdl/base-0.5.0.apk`，`/opt/appdl/index.html` 指向 `base-0.5.0.apk`；`release.json` 落 `/opt/base-cache/data/release.json`（`issued_at 2026-09-27T16:49:21Z`，`min_version_name 0.4.0`，`notes` 为不含空格的一个 token，按计划签发）；未产生误写副本。
+   - 线上验证：`GET /v1/release` 200 且 `apk_size=27373900` 与文档一致；`/dl/base-0.5.0.apk` 200 / `Content-Length 27373900`；**验签用独立实现复核为 true**（Node 原生 ed25519 + JCS 规范化，不共享仓库 TS 验签器代码，公钥 `48c33db9…24f4`）。
+6. **T9 第 1 项（真机 6 条验收）待装机后回填**：计划 Step 1 的 6 条判定需要真机操作，本小节先记发布实况，真机结果待补。
 
 ---
 

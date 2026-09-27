@@ -3991,6 +3991,13 @@ git commit -m "chore(mobile): 版本递增到 0.2.0（四 tab + 答题 + 升级�
     - **`-notes` 带空格会吃掉后面的 flag（踩坑）**：Go 的 `flag` 在遇到第一个非 flag 参数后停止解析，`-notes 修复真机发表评论失败 阅读器字号四档与护眼主题 -out …` 会把第二个词当位置参数、`-out` 整条失效，文档被写到默认的 `/opt/base/data/release.json`（客户端读不到），且 `notes` 只剩半句。ssh 里没有引号可用，所以 `-notes` 必须写成**不含空格**的一个 token（用中文分号连接），或放到所有 flag 之后。
     - 验证：`/v1/release` 200、`/dl/base-0.4.1.apk` 200 且 `size_download=27370082` 与文档 `apk_size`/`apk_sha256`（`3908fbe5…`）一致；线上文档用客户端验签器（`verifyRelease` + 预置公钥 `48c33db9…24f4`）验过为 true。APK 内 `www/manifest.json` 为 `version.name=0.4.1`/`code=5`，`app-service.js` 含 `randomblob`、`兜底随机源`、`随机池不足`、`护眼` 四处特征串。
 
+13. **0.5.0（基座自检与功能级降级）发布实况（提交 `a3571b5`）**：
+    - 出包命令与 0.4.1 相同（`D:\HBuilderX\cli.exe pack --project e:\code\base\apps\mobile --platform android --android.packagename uni.app.UNI936A667 --android.androidpacktype 3`）。**本轮 `dist/release/apk/` 没有再落 HBuilderX 命名的 `__UNI__936A667__<时间戳>.apk`**，只能从 CLI 回的临时地址下载另存；且本地 `curl.exe` 下载该地址报 `getaddrinfo() thread failed`（域名可解析），改用 `Invoke-WebRequest`（显式 TLS1.2）成功。
+    - 内嵌 manifest 的真实路径是 `assets/apps/__UNI__936A667__/www/manifest.json`（0.4.1 记的 `www/manifest.json` 不准确）；本轮实测 `version.name=0.5.0` / `version.code=6`。
+    - `keytool` 不在 PATH，用 HBuilderX 自带的 `D:\HBuilderX\plugins\amazon-corretto\bin\keytool.exe`；证书 SHA1 `19:95:21:ED…FF:19` 与前两版一致。
+    - 发布：APK → `/opt/appdl/base-0.5.0.apk`（**27373900 字节**，sha256 `4a327647…598d7`）；`/opt/appdl/index.html` 指向新版本；`based release -version-name 0.5.0 -min-version-name 0.4.0 -apk-url http://118.190.217.242/dl/base-0.5.0.apk -apk-file /opt/appdl/base-0.5.0.apk -notes <无空格说明> -out /opt/base-cache/data/release.json`（`-notes` 仍必须是不含空格的单 token）。
+    - 验证：`/v1/release` 200 且 `apk_size` 与文档一致；`/dl/base-0.5.0.apk` 200 / `Content-Length 27373900`；线上文档用**独立实现**（Node 原生 ed25519 + JCS 规范化，不共享仓库 TS 验签器）复核为 true。**PowerShell 里 ssh 远程命令中的双引号会被剥掉**（`-w "%{http_code} %{size_download}"` 会被拆坏并回吐二进制），核下载用 `curl -sSI` 看 `Content-Length` 更省事。
+
 ## 明确不做的（spec §1，任何实现都不得顺手加）
 
 不做评论/圈子的真实功能、不做 App 侧 markdown 解析、不做答题结果上报、不做滚动位置恢复、不做全站深色主题、不做 FTS5、不做 wgt 热更新、不做 App 内下载 APK 与 `plus.runtime.install`、不做账号/设备身份上行、不做 tabBar 图标、不做节点侧分发与反熵改动（除 §6.3 导出增一类表与 §8.3 新增一个只读接口）。
