@@ -65,9 +65,7 @@
 | `apps/mobile/src/platform/index.ts` | `AppContext` 增加 `capabilities`（`CapabilityFlags`）；`bootstrap()` 用随机池预填结果设 `cryptoOk` 初值 |
 | `apps/mobile/src/pages/setting/setting.vue` | 诊断按钮旁加「自检」入口 |
 
-**依赖方向**：`selfcheck.ts` 只依赖 `AppContext`（`adapters` / `repo` / `db`）与 `platform/adapter.ts` 的接口类型，**不 import `uni` / `plus`**。
-
-**平台探针靠注入，不靠 core 反向依赖平台层**：条目 11（`plus.runtime.openURL` 存在性）与条目 12 的 `btoa`/`atob` 往返属于平台能力，由**页面**（可以 import `platform`）构造成一组 `platformProbes: CheckItem[]` 传进 `runSelfCheck`。core 只负责调度、超时、标志聚合；Node 单测里传一组假探针即可，无需碰 `plus`。
+**依赖方向**：`selfcheck.ts` 不 import `uni` 全局，平台访问与 `core/update.ts` 同一惯例——经 `platform/uni.ts` 导出的窄接口（`plusRuntime` / `bytesToBase64` / `base64ToBytes`）拿到。为了让 Node 单测能覆盖平台探针，`plus` 句柄由 `runSelfCheck` 的选项注入（默认取 `plusRuntime()`），测试传假对象即可。
 
 **不在启动时跑全量自检**：冷启动只做随机池预填（既有行为），其成败即 `cryptoOk` 初值；其余标志保持 `unknown`，等自检页跑完才定。自检页由用户主动进入。
 
@@ -116,7 +114,7 @@ interface CapabilityFlags {
 | --- | --- |
 | `cryptoOk === 'fail'` | 评论页发表按钮禁用，原位显示「随机源不可用：<条目 1–3 的真实原因>」；不再尝试注册身份 |
 | `fsOk === 'fail'` | 课程页「同步」按钮禁用并说明「无法写入本地文件」 |
-| `dbOk === 'fail'` | 不加新分支：`bootstrap()` 本身已抛错。**自检页必须在 `bootstrap()` 失败时仍能出结果**——此时只跑不依赖本地库的条目（3、8、9、11、12），条目 1、2、4–7、10 一律标 `fail` 且原因写「本地库不可用，未探测」 |
+| `dbOk === 'fail'` | 不加新分支：`bootstrap()` 本身已抛错。**自检页必须在 `bootstrap()` 失败时仍能出结果**——此时只跑不依赖本地库与节点地址的条目（3、11、12），条目 1、2、4–10 一律标 `fail` 且原因写「本地库不可用，未探测」（第 8、9 条要 `adapters` + `nodeBaseUrl`，而 `nodeBaseUrl` 存在本地库里，降级时拿不到） |
 | `writeOk === 'fail'` | 评论页发表禁用 + 显示节点返回的真实错误码文案（`comment.ts` 已映射） |
 
 `—`（第 8、9、11、12 条）不触发降级：读路径与升级通道本就有静默降级，再叠一层禁用只会增加无效分支。
