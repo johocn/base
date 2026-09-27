@@ -25,6 +25,10 @@
       "style": { "navigationBarTitleText": "设置" }
     },
     {
+      "path": "pages/selfcheck/selfcheck",
+      "style": { "navigationBarTitleText": "基座自检" }
+    },
+    {
       "path": "pages/search/search",
       "style": { "navigationBarTitleText": "搜索" }
     },

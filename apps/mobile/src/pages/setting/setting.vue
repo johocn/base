@@ -13,7 +13,10 @@
     <text v-if="tip" class="tip">{{ tip }}</text>
     <text v-if="error" class="error">{{ error }}</text>
 
-    <button size="mini" class="probe" @click="probe">能力诊断</button>
+    <view class="acts">
+      <button size="mini" class="probe" @click="probe">能力诊断</button>
+      <button size="mini" class="probe" @click="openSelfCheck">基座自检</button>
+    </view>
     <text v-for="(line, i) in probeLines" :key="i" class="meta">{{ line }}</text>
 
     <view class="ver">
@@ -114,6 +117,11 @@ async function checkUpdate() {
     // 静默：不把任何升级相关异常写进 error.value
   }
 }
+
+/** 自检页承载 12 条探测与降级标志；本页的「能力诊断」保持开发向的原始行输出不变。 */
+function openSelfCheck() {
+  uni.navigateTo({ url: '/pages/selfcheck/selfcheck' });
+}
 </script>
 
 <style>
@@ -125,6 +133,7 @@ async function checkUpdate() {
 .tip { display: block; color: #2f855a; font-size: 13px; margin-top: 8px; }
 .error { display: block; color: #c53030; font-size: 13px; margin-top: 8px; }
 .meta { display: block; color: #666666; font-size: 12px; margin-top: 4px; }
-.probe { margin-top: 24px; }
+.acts { display: flex; margin-top: 24px; }
+.probe { margin-right: 8px; }
 .ver { margin-top: 24px; }
 </style>
