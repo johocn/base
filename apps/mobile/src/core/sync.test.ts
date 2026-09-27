@@ -16,7 +16,7 @@ import {
 import type { Adapters } from '../platform/adapter';
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { syncOnce, type Catalog, type SyncOptions } from './sync';
-import type { ArticleRow, QuizRow } from './types';
+import type { ArticleRow, QuizRow, SegmentRow } from './types';
 
 const BASE = 'https://node.test';
 
@@ -51,11 +51,16 @@ function makeQuiz(itemId: string): QuizRow {
   return { itemId, questionJson: QUIZ_JSON, contentHash: sha256Hex(utf8(QUIZ_JSON)) };
 }
 
+function makeSeg(itemId: string, seq: number, kind: string, text: string): SegmentRow {
+  return { itemId, seq, kind, text, contentHash: sha256Hex(utf8(text)) };
+}
+
 interface NodeFixture {
   http: FakeHttp;
   pack: FakePackReader;
   catalog: Catalog;
   manifest: Manifest;
+  articles: ArticleRow[];
 }
 
 interface NodeOptions {
@@ -64,6 +69,8 @@ interface NodeOptions {
   omitArticles?: string[];
   withCover?: boolean;
   withQuiz?: boolean;
+  /** 容器条目（课程/课时）的 segments；传入时按 itemId 生成 manifest 条目并注入 pack */
+  segments?: SegmentRow[];
   http?: FakeHttp;
 }
 
@@ -121,6 +128,27 @@ function buildNode(version: number, options: NodeOptions = {}): NodeFixture {
     });
   }
 
+  const segmentRows = options.segments ?? [];
+  const segByItem = new Map<string, SegmentRow[]>();
+  for (const s of segmentRows) {
+    const list = segByItem.get(s.itemId) ?? [];
+    list.push(s);
+    segByItem.set(s.itemId, list);
+  }
+  for (const [itemId, list] of segByItem) {
+    const concat = [...list].sort((a, b) => a.seq - b.seq).map((s) => `${s.kind}\t${s.text}\n`).join('');
+    entries.push({
+      item_id: itemId,
+      source: 'course',
+      type: itemId.includes('/lesson/') ? 'lesson' : 'course',
+      title: itemId,
+      source_rev: 'rev-1',
+      content_hash: sha256Hex(utf8(concat)),
+      sqlite_table: 'segments',
+      dist_class: 'public',
+    });
+  }
+
   const merkle = merkleRoot(manifestBlobIds(entries));
   const packId = derivePackId('base-node-1', version, merkle);
   const manifest = signManifest(
@@ -141,7 +169,7 @@ function buildNode(version: number, options: NodeOptions = {}): NodeFixture {
     pack_id: packId,
     content_version: version,
     items: entries
-      .filter((e) => e.type === 'article' || e.type === 'quiz')
+      .filter((e) => e.type === 'article' || e.type === 'quiz' || e.type === 'course' || e.type === 'lesson')
       .map((e) => ({
         item_id: e.item_id,
         source: e.source,
@@ -159,8 +187,8 @@ function buildNode(version: number, options: NodeOptions = {}): NodeFixture {
   for (const [id, data] of blobs) http.routes.set(`${BASE}/v1/blob/${id}`, { status: 200, body: data });
 
   const pack = new FakePackReader();
-  pack.set(`/work/pack-${packId}.sqlite`, articles, quizRows);
-  return { http, pack, catalog, manifest };
+  pack.set(`/work/pack-${packId}.sqlite`, articles, quizRows, segmentRows);
+  return { http, pack, catalog, manifest, articles };
 }
 
 function setup(fx: NodeFixture) {
@@ -338,5 +366,44 @@ describe('syncOnce', () => {
 
     await expect(syncOnce(opts)).rejects.toThrow(/行级 hash 不符/);
     expect(await repo.getConfig('content_version')).toBeNull();
+  });
+
+  const COURSE_SEGMENTS: SegmentRow[] = [
+    makeSeg('course/c1', 0, 'digest', '课程简介\n'),
+    makeSeg('course/c1', 1, 'lesson', 'course/c1/lesson/l1'),
+    makeSeg('course/c1', 2, 'lesson', 'course/c1/lesson/l2'),
+  ];
+
+  it('容器 segments：课程容器按 seq 全链落库', async () => {
+    const fx = buildNode(7, { segments: COURSE_SEGMENTS });
+    const { repo, opts } = setup(fx);
+    await repo.setConfig('pubkey_hex', PUB);
+
+    const res = await syncOnce(opts);
+
+    expect(res.status).toBe('updated');
+    const rows = await repo.listSegments('course/c1');
+    expect(rows.map((r) => r.seq)).toEqual([0, 1, 2]);
+    expect(rows.map((r) => r.kind)).toEqual(['digest', 'lesson', 'lesson']);
+    expect(rows.map((r) => r.text)).toEqual(['课程简介\n', 'course/c1/lesson/l1', 'course/c1/lesson/l2']);
+  });
+
+  it('容器 segments 条目级 hash 不符：拒收且不落库', async () => {
+    const fx = buildNode(7, { segments: COURSE_SEGMENTS });
+    const { repo, opts } = setup(fx);
+    await repo.setConfig('pubkey_hex', PUB);
+
+    // 篡改 seq=1 的子项 id，并按新 text 重算行级 hash，使行级校验通过、命中条目级校验
+    const tampered: SegmentRow[] = [
+      COURSE_SEGMENTS[0]!,
+      makeSeg('course/c1', 1, 'lesson', 'course/c1/lesson/l9'),
+      COURSE_SEGMENTS[2]!,
+    ];
+    fx.pack.set(`/work/pack-${fx.catalog.pack_id}.sqlite`, fx.articles, [], tampered);
+
+    await expect(syncOnce(opts)).rejects.toThrow(/segments/);
+    expect(await repo.getConfig('content_version')).toBeNull();
+    expect(await repo.listSegments('course/c1')).toEqual([]);
+    expect((await repo.listItems()).map((i) => i.itemId)).not.toContain('course/c1');
   });
 });

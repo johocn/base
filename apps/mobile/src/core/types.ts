@@ -48,6 +48,15 @@ export interface QuizRow {
   contentHash: string;
 }
 
+/** 容器条目的一行 segments（与节点侧 segments 表同形；seq=0 为简介，seq>=1 为子项 item_id） */
+export interface SegmentRow {
+  itemId: string;
+  seq: number;
+  kind: string;
+  text: string;
+  contentHash: string;
+}
+
 /** question_json 里的一道题（spec §6.2） */
 export interface Question {
   q: string;

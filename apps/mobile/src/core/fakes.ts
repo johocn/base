@@ -2,7 +2,7 @@
 import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReader, SqliteConnection, StorageAdapter } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, QuizRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, QuizRow, SegmentRow, TombstoneRow } from './types';
 import type { LocalRepo, PackApply } from './repo';
 
 export class MemoryFs implements FsAdapter {
@@ -45,6 +45,7 @@ export class MemoryRepo implements LocalRepo {
   articles = new Map<string, ArticleRow>();
   blobs = new Map<string, { itemId: string; path: string; size: number; verifiedAt: string }>();
   tombstones = new Map<string, TombstoneRow>();
+  segments = new Map<string, SegmentRow[]>();
 
   async getConfig(key: string): Promise<string | null> {
     return this.config.get(key) ?? null;
@@ -58,6 +59,7 @@ export class MemoryRepo implements LocalRepo {
       this.items.delete(t.itemId);
       this.articles.delete(t.itemId);
       this.quizzes.delete(t.itemId);
+      this.segments.delete(t.itemId);
       for (const [id, b] of [...this.blobs]) {
         if (b.itemId === t.itemId) this.blobs.delete(id);
       }
@@ -65,6 +67,10 @@ export class MemoryRepo implements LocalRepo {
     for (const it of p.items) this.items.set(it.itemId, it);
     for (const a of p.articles) this.articles.set(a.itemId, a);
     for (const q of p.quizzes) this.quizzes.set(q.itemId, q);
+    const segItems = new Set(p.segments.map((s) => s.itemId));
+    for (const id of segItems) this.segments.set(id, []);
+    for (const s of p.segments) this.segments.set(s.itemId, [...(this.segments.get(s.itemId) ?? []), s]);
+    for (const [id, list] of this.segments) this.segments.set(id, [...list].sort((a, b) => a.seq - b.seq));
     this.config.set('content_version', String(p.version));
     this.config.set('pack_id', p.packId);
   }
@@ -76,6 +82,24 @@ export class MemoryRepo implements LocalRepo {
   }
   async getArticle(itemId: string): Promise<ArticleRow | null> {
     return this.articles.get(itemId) ?? null;
+  }
+  async listSegments(itemId: string): Promise<SegmentRow[]> {
+    return [...(this.segments.get(itemId) ?? [])].sort((a, b) => a.seq - b.seq);
+  }
+  async listLocalItemIds(): Promise<string[]> {
+    return [...this.items.keys()];
+  }
+  async renameItemId(from: string, to: string): Promise<void> {
+    if (this.favorites.has(from)) {
+      if (!this.favorites.has(to)) this.favorites.set(to, this.favorites.get(from)!);
+      this.favorites.delete(from);
+    }
+    if (this.reads.has(from)) {
+      if (!this.reads.has(to)) this.reads.set(to, this.reads.get(from)!);
+      this.reads.delete(from);
+    }
+    const kept = this.attempts.filter((a) => !(a.itemId === from && this.attempts.some((b) => b.itemId === to && b.at === a.at)));
+    this.attempts = kept.map((a) => (a.itemId === from ? { ...a, itemId: to } : a));
   }
   async hasBlob(id: string): Promise<boolean> {
     return this.blobs.has(id);
@@ -225,12 +249,13 @@ function sameQuery(a: string, b: string): boolean {
 interface PackRows {
   articles: ArticleRow[];
   quizzes: QuizRow[];
+  segments: SegmentRow[];
 }
 const PACK_STORE = new Map<string, PackRows>();
 
 export class FakePackReader implements PackReader {
-  set(path: string, articles: ArticleRow[], quizzes: QuizRow[] = []): void {
-    PACK_STORE.set(path, { articles, quizzes });
+  set(path: string, articles: ArticleRow[], quizzes: QuizRow[] = [], segments: SegmentRow[] = []): void {
+    PACK_STORE.set(path, { articles, quizzes, segments });
   }
   async open(path: string): Promise<SqliteConnection> {
     const rows = PACK_STORE.get(path);
@@ -243,6 +268,7 @@ export class FakePackReader implements PackReader {
           const t = String(cnt[1]);
           if (t === 'articles') return [{ n: rows.articles.length }];
           if (t === 'quizzes') return [{ n: rows.quizzes.length }];
+          if (t === 'segments') return [{ n: new Set(rows.segments.map((s) => s.itemId)).size }];
           throw new Error(`fake pack 不支持的计数: ${sql}`);
         }
         if (sql.includes('FROM quizzes')) {
@@ -251,6 +277,17 @@ export class FakePackReader implements PackReader {
             question_json: q.questionJson,
             content_hash: q.contentHash,
           }));
+        }
+        if (sql.includes('FROM segments')) {
+          return [...rows.segments]
+            .sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : a.seq - b.seq))
+            .map((s) => ({
+              item_id: s.itemId,
+              seq: s.seq,
+              kind: s.kind,
+              text: s.text,
+              content_hash: s.contentHash,
+            }));
         }
         if (!sql.includes('FROM articles')) throw new Error(`fake pack 不支持的查询: ${sql}`);
         return rows.articles.map((r) => ({

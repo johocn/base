@@ -1,7 +1,7 @@
 import type { LocalDb } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { SEARCH_SQL, searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, QuizRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, QuizRow, SegmentRow, TombstoneRow } from './types';
 
 export interface PackApply {
   version: number;
@@ -9,6 +9,7 @@ export interface PackApply {
   items: ItemRow[];
   articles: ArticleRow[];
   quizzes: QuizRow[];
+  segments: SegmentRow[];
   tombstones: TombstoneRow[];
   updatedAt: string;
 }
@@ -22,6 +23,12 @@ export interface LocalRepo {
   getItem(itemId: string): Promise<ItemRow | null>;
   listItems(): Promise<ItemRow[]>;
   getArticle(itemId: string): Promise<ArticleRow | null>;
+  /** 某容器条目的 segments 行，按 seq 升序 */
+  listSegments(itemId: string): Promise<SegmentRow[]>;
+  /** 本地全部条目 id（id 平移要先看全量集合） */
+  listLocalItemIds(): Promise<string[]>;
+  /** 把以旧 id 为键的用户数据（user_state / quiz_attempt）改指到新 id；目标已有行则保留目标 */
+  renameItemId(from: string, to: string): Promise<void>;
   hasBlob(blobId: string): Promise<boolean>;
   addBlob(blobId: string, itemId: string, path: string, size: number, verifiedAt: string): Promise<void>;
   /** 取某条目的本地块路径（文章页按 cover:<slug> 取封面，Task 19 用） */
@@ -74,6 +81,10 @@ export const SCHEMA_SQL: string[] = [
      event_id TEXT PRIMARY KEY, target_id TEXT NOT NULL, text TEXT NOT NULL, reply_to TEXT,
      wire TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, queued_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS idx_comment_out_queued ON comment_out(queued_at)`,
+  `CREATE TABLE IF NOT EXISTS segments(
+     item_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL,
+     content_hash TEXT NOT NULL, PRIMARY KEY(item_id, seq))`,
+  `CREATE INDEX IF NOT EXISTS idx_segments_item ON segments(item_id)`,
 ];
 
 /** SqlRepo 把 LocalRepo 语义落到 SQLite 上（Task 19 注入 plus.sqlite 连接）。 */
@@ -99,6 +110,7 @@ export class SqlRepo implements LocalRepo {
       stmts.push({ sql: `DELETE FROM blob_index WHERE item_id=?`, params: [t.itemId] });
       stmts.push({ sql: `DELETE FROM articles WHERE item_id=?`, params: [t.itemId] });
       stmts.push({ sql: `DELETE FROM quizzes WHERE item_id=?`, params: [t.itemId] });
+      stmts.push({ sql: `DELETE FROM segments WHERE item_id=?`, params: [t.itemId] });
       stmts.push({ sql: `DELETE FROM items WHERE item_id=?`, params: [t.itemId] });
     }
     for (const it of p.items) {
@@ -128,6 +140,16 @@ export class SqlRepo implements LocalRepo {
         params: [q.itemId, q.questionJson, q.contentHash],
       });
     }
+    const segItems = new Set(p.segments.map((s) => s.itemId));
+    for (const id of segItems) {
+      stmts.push({ sql: `DELETE FROM segments WHERE item_id=?`, params: [id] });
+    }
+    for (const s of p.segments) {
+      stmts.push({
+        sql: `INSERT INTO segments(item_id,seq,kind,text,content_hash) VALUES(?,?,?,?,?)`,
+        params: [s.itemId, s.seq, s.kind, s.text, s.contentHash],
+      });
+    }
     stmts.push({ sql: `INSERT INTO config(key,value) VALUES('content_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, params: [String(p.version)] });
     stmts.push({ sql: `INSERT INTO config(key,value) VALUES('pack_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, params: [p.packId] });
     await this.db.tx(stmts);
@@ -149,6 +171,28 @@ export class SqlRepo implements LocalRepo {
       [itemId],
     );
     return rows.length > 0 ? toArticleRow(rows[0]) : null;
+  }
+
+  async listSegments(itemId: string): Promise<SegmentRow[]> {
+    const rows = await this.db.select(
+      `SELECT item_id,seq,kind,text,content_hash FROM segments WHERE item_id=? ORDER BY seq ASC`,
+      [itemId],
+    );
+    return rows.map(toSegmentRow);
+  }
+
+  async listLocalItemIds(): Promise<string[]> {
+    const rows = await this.db.select(`SELECT item_id FROM items`);
+    return rows.map((r) => String(r.item_id));
+  }
+
+  async renameItemId(from: string, to: string): Promise<void> {
+    await this.db.tx([
+      { sql: `UPDATE OR IGNORE user_state SET item_id=? WHERE item_id=?`, params: [to, from] },
+      { sql: `DELETE FROM user_state WHERE item_id=?`, params: [from] },
+      { sql: `UPDATE OR IGNORE quiz_attempt SET item_id=? WHERE item_id=?`, params: [to, from] },
+      { sql: `DELETE FROM quiz_attempt WHERE item_id=?`, params: [from] },
+    ]);
   }
 
   async hasBlob(blobId: string): Promise<boolean> {
@@ -324,6 +368,16 @@ function toArticleRow(r: Record<string, unknown>): ArticleRow {
     bodyMd: String(r.body_md ?? ''),
     contentHash: String(r.content_hash ?? ''),
     rev: String(r.rev ?? ''),
+  };
+}
+
+function toSegmentRow(r: Record<string, unknown>): SegmentRow {
+  return {
+    itemId: String(r.item_id),
+    seq: Number(r.seq),
+    kind: String(r.kind ?? ''),
+    text: String(r.text ?? ''),
+    contentHash: String(r.content_hash),
   };
 }
 

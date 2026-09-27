@@ -2,7 +2,7 @@ import { blobId, sha256Hex, utf8, verifyManifest, type Manifest } from '@base/pr
 
 import type { Adapters, SqliteConnection } from '../platform/adapter';
 import type { LocalRepo } from './repo';
-import type { ArticleRow, ItemRow, QuizRow, TombstoneRow } from './types';
+import type { ArticleRow, ItemRow, QuizRow, SegmentRow, TombstoneRow } from './types';
 
 export interface CatalogItem {
   item_id: string;
@@ -116,6 +116,17 @@ async function readPackQuizzes(conn: SqliteConnection): Promise<QuizRow[]> {
   }));
 }
 
+async function readPackSegments(conn: SqliteConnection): Promise<SegmentRow[]> {
+  const rows = await conn.select(`SELECT item_id,seq,kind,text,content_hash FROM segments ORDER BY item_id ASC, seq ASC`);
+  return rows.map((r) => ({
+    itemId: String(r.item_id),
+    seq: Number(r.seq),
+    kind: String(r.kind ?? ''),
+    text: String(r.text ?? ''),
+    contentHash: String(r.content_hash),
+  }));
+}
+
 /**
  * 落盘自证：pack 是二进制 SQLite，真机上 plus.io 的 createWriter 一旦少写或写空，
  * 后面 plus.sqlite 打开它只会得到空库/空表而不会报错，症状就是「标题有、正文没有」。
@@ -160,9 +171,11 @@ export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
   const conn = await o.adapters.packReader.open(packPath);
   let articles: ArticleRow[];
   let quizzes: QuizRow[];
+  let segments: SegmentRow[];
   try {
     articles = await readPackArticles(conn);
     quizzes = await readPackQuizzes(conn);
+    segments = await readPackSegments(conn);
   } finally {
     await o.adapters.packReader.close(conn);
   }
@@ -190,6 +203,26 @@ export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
   const declaredQuizzes = man.entries.filter((e) => e.sqlite_table === 'quizzes').length;
   if (quizzes.length < declaredQuizzes) {
     throw new Error(`pack 题库行数不符：manifest 声明 ${declaredQuizzes} 条，pack 读出 ${quizzes.length} 条（${packPath}）`);
+  }
+
+  // segments：行级 hash 看 text，条目级 hash 看「按 seq 升序拼接的 <kind>\t<text>\n」
+  const byItem = new Map<string, SegmentRow[]>();
+  for (const s of segments) {
+    if (sha256Hex(utf8(s.text)) !== s.contentHash) throw new Error(`pack segments 行级 hash 不符: ${s.itemId} seq=${s.seq}`);
+    const list = byItem.get(s.itemId) ?? [];
+    list.push(s);
+    byItem.set(s.itemId, list);
+  }
+  for (const [itemId, list] of byItem) {
+    const signed = signedHashes.get(itemId);
+    if (signed === undefined) throw new Error(`pack segments 未被 manifest 声明: ${itemId}`);
+    const concat = list.map((s) => `${s.kind}\t${s.text}\n`).join('');
+    if (sha256Hex(utf8(concat)) !== signed) throw new Error(`pack segments 条目级 hash 不符: ${itemId}`);
+  }
+  // 按「条目数」对账，不是行数——一个容器有多行
+  const declaredSegments = man.entries.filter((e) => e.sqlite_table === 'segments').length;
+  if (byItem.size < declaredSegments) {
+    throw new Error(`pack segments 条目数不符：manifest 声明 ${declaredSegments} 个，pack 读出 ${byItem.size} 个（${packPath}）`);
   }
 
   const now = new Date().toISOString();
@@ -228,7 +261,7 @@ export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
     stalePaths.push(...(await o.repo.listBlobPathsByItem(t.itemId)));
   }
 
-  await o.repo.applyPack({ version: cat.content_version, packId: cat.pack_id, items, articles, quizzes, tombstones, updatedAt: now });
+  await o.repo.applyPack({ version: cat.content_version, packId: cat.pack_id, items, articles, quizzes, segments, tombstones, updatedAt: now });
 
   // 行已删、文件后删：删文件失败不阻断本轮（本地视图已一致，下次同步会重跑同一流程）
   for (const path of stalePaths) {
