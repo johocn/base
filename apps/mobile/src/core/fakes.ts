@@ -2,7 +2,7 @@
 import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReader, SqliteConnection, StorageAdapter } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
-import type { ArticleRow, FavoriteRow, ItemRow, LearningStats, QuizRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, QuizRow, TombstoneRow } from './types';
 import type { LocalRepo, PackApply } from './repo';
 
 export class MemoryFs implements FsAdapter {
@@ -157,6 +157,24 @@ export class MemoryRepo implements LocalRepo {
       readLast,
       quizLast,
     });
+  }
+
+  commentOut = new Map<string, CommentOutRow>(); // eventId -> row
+
+  async enqueueComment(row: CommentOutRow): Promise<void> {
+    // 同 event_id 重复入队无副作用（与 SqlRepo 的 ON CONFLICT DO NOTHING 对齐）
+    if (!this.commentOut.has(row.eventId)) this.commentOut.set(row.eventId, row);
+  }
+  async listCommentOut(): Promise<CommentOutRow[]> {
+    // Array.prototype.sort 是稳定排序：queued_at 相同时保持入队先后
+    return [...this.commentOut.values()].sort((a, b) => (a.queuedAt < b.queuedAt ? -1 : a.queuedAt > b.queuedAt ? 1 : 0));
+  }
+  async markCommentOutFailed(eventId: string, reason: string): Promise<void> {
+    const r = this.commentOut.get(eventId);
+    if (r) this.commentOut.set(eventId, { ...r, state: 'failed', reason });
+  }
+  async removeCommentOut(eventId: string): Promise<void> {
+    this.commentOut.delete(eventId);
   }
 }
 

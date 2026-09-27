@@ -61,3 +61,21 @@ export interface QuestionDoc {
   schema_version: number;
   questions: Question[];
 }
+
+/**
+ * 待发评论（本地 `comment_out` 表，本册 §3.1）。
+ * `wire` 是**已签名的完整请求体文本**：`event_id` / `created_at` / `sig` 全部冻结在内，
+ * 补发时逐字节重放（`sig` 覆盖的是 canonical 出来的确定字节序，重排即失效）。
+ */
+export interface CommentOutRow {
+  eventId: string;
+  targetId: string;
+  text: string;
+  replyTo: string | null;
+  wire: string;
+  state: 'pending' | 'failed';
+  /** state='failed' 时的用户可读原因 */
+  reason: string | null;
+  /** 入队时刻 ISO8601，排序用 */
+  queuedAt: string;
+}

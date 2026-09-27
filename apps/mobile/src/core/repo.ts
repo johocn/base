@@ -1,7 +1,7 @@
 import type { LocalDb } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { SEARCH_SQL, searchPattern } from './search';
-import type { ArticleRow, FavoriteRow, ItemRow, LearningStats, QuizRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, QuizRow, TombstoneRow } from './types';
 
 export interface PackApply {
   version: number;
@@ -38,6 +38,17 @@ export interface LocalRepo {
   getQuiz(itemId: string): Promise<QuizRow | null>;
   addAttempt(itemId: string, correct: number, total: number, at: string): Promise<void>;
   learningStats(): Promise<LearningStats>;
+  /**
+   * 入队一条待发评论。同 `event_id` 重复入队无副作用（本册 §3.2）。
+   * 只由「离线发表」调用；补发一律走 `flushPending`。
+   */
+  enqueueComment(row: CommentOutRow): Promise<void>;
+  /** 全部待发项，按 `queued_at ASC`（先入队先补发）。 */
+  listCommentOut(): Promise<CommentOutRow[]>;
+  /** 置为永久失败并记原因。单向：失败项不会回到 pending（本册 §5.1）。 */
+  markCommentOutFailed(eventId: string, reason: string): Promise<void>;
+  /** 删一条：用户对失败项点「删除」，或补发成功后清行。 */
+  removeCommentOut(eventId: string): Promise<void>;
 }
 
 /** 本地库建表语句（P0 只建用得到的 5 张表）。 */
@@ -59,6 +70,10 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS quiz_attempt(
      item_id TEXT NOT NULL, answered_at TEXT NOT NULL, correct INTEGER NOT NULL, total INTEGER NOT NULL,
      PRIMARY KEY(item_id, answered_at))`,
+  `CREATE TABLE IF NOT EXISTS comment_out(
+     event_id TEXT PRIMARY KEY, target_id TEXT NOT NULL, text TEXT NOT NULL, reply_to TEXT,
+     wire TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, queued_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS idx_comment_out_queued ON comment_out(queued_at)`,
 ];
 
 /** SqlRepo 把 LocalRepo 语义落到 SQLite 上（Task 19 注入 plus.sqlite 连接）。 */
@@ -257,6 +272,29 @@ export class SqlRepo implements LocalRepo {
       quizLast: String(quizRows[0]?.m ?? ''),
     });
   }
+
+  async enqueueComment(row: CommentOutRow): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO comment_out(event_id,target_id,text,reply_to,wire,state,reason,queued_at)
+       VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(event_id) DO NOTHING`,
+      [row.eventId, row.targetId, row.text, row.replyTo, row.wire, row.state, row.reason, row.queuedAt],
+    );
+  }
+
+  async listCommentOut(): Promise<CommentOutRow[]> {
+    const rows = await this.db.select(
+      `SELECT event_id,target_id,text,reply_to,wire,state,reason,queued_at FROM comment_out ORDER BY queued_at ASC`,
+    );
+    return rows.map(toCommentOutRow);
+  }
+
+  async markCommentOutFailed(eventId: string, reason: string): Promise<void> {
+    await this.db.execute(`UPDATE comment_out SET state='failed', reason=? WHERE event_id=?`, [reason, eventId]);
+  }
+
+  async removeCommentOut(eventId: string): Promise<void> {
+    await this.db.execute(`DELETE FROM comment_out WHERE event_id=?`, [eventId]);
+  }
 }
 
 function toNullableString(v: unknown): string | null {
@@ -286,5 +324,18 @@ function toArticleRow(r: Record<string, unknown>): ArticleRow {
     bodyMd: String(r.body_md ?? ''),
     contentHash: String(r.content_hash ?? ''),
     rev: String(r.rev ?? ''),
+  };
+}
+
+function toCommentOutRow(r: Record<string, unknown>): CommentOutRow {
+  return {
+    eventId: String(r.event_id),
+    targetId: String(r.target_id),
+    text: String(r.text),
+    replyTo: toNullableString(r.reply_to),
+    wire: String(r.wire),
+    state: String(r.state) === 'failed' ? 'failed' : 'pending',
+    reason: toNullableString(r.reason),
+    queuedAt: String(r.queued_at),
   };
 }
