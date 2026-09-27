@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { UNKNOWN_FLAGS, canPostComment, canSync, postBlockedReason } from './selfcheck';
+import { keyPairFromSeed, signRelease, utf8, type ReleaseDoc } from '@base/protocol-ts';
+
+import {
+  UNKNOWN_FLAGS,
+  canPostComment,
+  canSync,
+  postBlockedReason,
+  runSelfCheck,
+  type CheckContext,
+  type PlusHandle,
+} from './selfcheck';
+import { FakeHttp, FakePackReader, MemoryDb, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
+import type { ArticleRow } from './types';
 
 describe('能力标志与降级判定', () => {
   it('unknown 不降级：功能照常可用', () => {
@@ -24,5 +36,146 @@ describe('能力标志与降级判定', () => {
     expect(canPostComment(all)).toBe(true);
     expect(canSync(all)).toBe(true);
     expect(postBlockedReason(all)).toBe('');
+  });
+});
+
+const NODE = 'http://node.test';
+const ISSUER_SEED = '11'.repeat(32);
+const ISSUER_PUB = keyPairFromSeed(ISSUER_SEED).pubHex;
+const FAKE_PLUS: PlusHandle = { runtime: { version: '0.5.0', openURL: () => undefined } };
+
+const RELEASE: ReleaseDoc = signRelease(
+  {
+    schema_version: 1,
+    issuer: 'base-node-test',
+    issued_at: '2026-09-27T00:00:00Z',
+    version_name: '9.9.9',
+    min_version_name: '0.0.1',
+    apk_url: `${NODE}/dl/x.apk`,
+    apk_size: 1,
+    apk_sha256: 'ab'.repeat(32),
+    notes: 'test',
+  },
+  ISSUER_SEED,
+);
+
+const ARTICLE: ArticleRow = {
+  itemId: 'a1',
+  title: '自检用文章',
+  digest: '',
+  publishedAt: '2026-09-27',
+  tagsJson: '[]',
+  bodyMd: '# hi',
+  contentHash: 'cd'.repeat(32),
+  rev: '1',
+};
+
+/** 12 条探测的展示顺序（spec §3）。 */
+const ALL_IDS = [
+  'crypto.sqlite_random',
+  'crypto.pool',
+  'crypto.sign',
+  'fs.bigfile',
+  'fs.meta',
+  'db.tx',
+  'db.pack',
+  'net.tls_get',
+  'net.release_verify',
+  'net.event_write',
+  'net.open_url',
+  'render.memory',
+];
+
+function makeEnv(o: { withPack?: boolean } = {}) {
+  const http = new FakeHttp();
+  const fs = new MemoryFs();
+  const repo = new MemoryRepo();
+  const db = new MemoryDb();
+  const packReader = new FakePackReader();
+  const adapters = fakeAdapters(http, fs, packReader);
+
+  repo.config.set('pubkey_hex', ISSUER_PUB);
+  http.routes.set(`${NODE}/v1/comment?limit=1`, {
+    status: 200,
+    body: utf8(JSON.stringify({ comments: [], next_cursor: null })),
+  });
+  http.routes.set(`${NODE}/v1/release`, { status: 200, body: utf8(JSON.stringify(RELEASE)) });
+  http.postRoutes.set(`${NODE}/v1/identity/register`, { status: 200, body: utf8('{}') });
+  http.postRoutes.set(`${NODE}/v1/event`, {
+    status: 200,
+    body: utf8(JSON.stringify({ event_id: 'ab'.repeat(16), payload_cid: 'cd'.repeat(16) })),
+  });
+
+  if (o.withPack) {
+    const packPath = '/work/pack-p1.sqlite';
+    fs.files.set(packPath, new Uint8Array([1]));
+    packReader.set(packPath, [ARTICLE], []);
+    repo.config.set('pack_id', 'p1');
+  }
+
+  const ctx: CheckContext = { adapters, repo, db, nodeBaseUrl: NODE, workDir: '/work' };
+  return { http, fs, repo, db, ctx };
+}
+
+describe('runSelfCheck', () => {
+  it('用例 1：全可用时 12 条为 ok，标志全 ok，且不留探测残留', async () => {
+    const env = makeEnv({ withPack: true });
+    const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS });
+
+    expect(r.degraded).toBe(false);
+    expect(r.items.map((i) => i.id)).toEqual(ALL_IDS);
+    expect(r.items.map((i) => i.status)).toEqual(new Array(12).fill('ok'));
+    expect(r.flags).toEqual({ cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'ok' });
+    // 污染控制：probe.bin / meta.bin 已删，只剩 pack 文件；事务探测未留行
+    expect([...env.fs.files.keys()]).toEqual(['/work/pack-p1.sqlite']);
+    expect(await env.ctx.db.select('SELECT count(*) AS n FROM selfcheck_probe')).toEqual([{ n: 0 }]);
+  });
+
+  it('用例 2：只坏一条时仅第 10 条 fail，writeOk 跟着降级', async () => {
+    const env = makeEnv({ withPack: true });
+    env.http.post = async () => {
+      throw new Error('网络不可达');
+    };
+    const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS });
+
+    const bad = r.items.filter((i) => i.status === 'fail');
+    expect(bad.map((i) => i.id)).toEqual(['net.event_write']);
+    expect(bad[0]?.detail).toContain('无法连接节点');
+    expect(r.flags).toEqual({ cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'fail' });
+  });
+
+  it('用例 3：单条挂死只让该条超时，整页仍然出结果', async () => {
+    const env = makeEnv({ withPack: true });
+    env.http.get = () => new Promise<never>(() => undefined);
+    const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS, timeoutMs: 10 });
+
+    const timedOut = r.items.filter((i) => i.detail.includes('超时')).map((i) => i.id);
+    expect(timedOut).toEqual(['net.tls_get', 'net.release_verify']);
+    expect(r.items).toHaveLength(12);
+    expect(r.flags.cryptoOk).toBe('ok');
+  });
+
+  it('用例 4：降级模式（无 ctx）只跑 3、11、12，其余原因写明', async () => {
+    const r = await runSelfCheck(null, { plus: FAKE_PLUS });
+
+    expect(r.degraded).toBe(true);
+    expect(r.items.map((i) => i.id)).toEqual(ALL_IDS);
+    expect(r.items.filter((i) => i.status === 'ok').map((i) => i.id)).toEqual([
+      'crypto.sign',
+      'net.open_url',
+      'render.memory',
+    ]);
+    const skipped = r.items.find((i) => i.id === 'crypto.sqlite_random');
+    expect(skipped?.status).toBe('fail');
+    expect(skipped?.detail).toBe('本地库不可用，未探测');
+    expect(r.flags).toEqual({ cryptoOk: 'fail', fsOk: 'fail', dbOk: 'fail', writeOk: 'fail' });
+  });
+
+  it('用例 6：本地无 pack 时第 7 条为 skip，dbOk 仍为 ok', async () => {
+    const env = makeEnv();
+    const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS });
+
+    expect(r.items.find((i) => i.id === 'db.pack')?.status).toBe('skip');
+    expect(r.flags.dbOk).toBe('ok');
   });
 });
