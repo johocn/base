@@ -3984,6 +3984,13 @@ git commit -m "chore(mobile): 版本递增到 0.2.0（四 tab + 答题 + 升级�
     - **实测结果**：`/v1/catalog` 200、`/v1/manifest/{pack_id}` 200、`/v1/pack/{pack_id}` 200（45056 字节）、`/v1/release` 200 且 TS 侧验签通过（公钥=App 预置的 `48c33db9…24f4`）、`/dl/base-0.3.0.apk` 200 且 `size_download=27363355` 与签名文档 `apk_size`/`apk_sha256` 一致。APK 内嵌 `version.name=0.3.0`/`code=3`、tabBar 为课程/圈子/评论/我的，均与 spec §3 一致。
     - `/v1/pubkey` 在客户端侧返回 404 `{"error":"本节点未配置签名密钥（只读分发节点）"}` 是缓存节点的**正常**行为（客户端监听到的就是缓存节点），不是回归。
 
+12. **0.4.1（发评论修复 + 阅读器增强）部署实况（提交 `618c7ee`）**：
+    - 出包：`D:\HBuilderX\cli.exe pack --project e:\code\base\apps\mobile --platform android --android.packagename uni.app.UNI936A667 --android.androidpacktype 3`，云端打包完成后**必须自己把 APK 存到 `apps/mobile/dist/release/apk/`**（CLI 只回一个临时下载地址，5 次有效，`__UNI__936A667__<时间戳>.apk` 的命名文件不会自动落到该目录）。
+    - **证书一致性要核**：APK 的签名证书指纹用 `keytool -printcert -jarfile` 比对上一版（本次 0.4.0 与 0.4.1 同为 DCloud 云证书 `19:95:21:ED…`）。注意 `META-INF/CERT.RSA` 的**文件字节哈希会因打包细节不同而变**，不能用它判断换没换证书——只看 `keytool` 的指纹。
+    - 发布：APK → `/opt/appdl/base-0.4.1.apk`；`/opt/appdl/index.html` 指向新版本；`based release -version-name 0.4.1 -min-version-name 0.4.0 -apk-url http://118.190.217.242/dl/base-0.4.1.apk -apk-file /opt/appdl/base-0.4.1.apk -notes <无空格说明> -out /opt/base-cache/data/release.json`。
+    - **`-notes` 带空格会吃掉后面的 flag（踩坑）**：Go 的 `flag` 在遇到第一个非 flag 参数后停止解析，`-notes 修复真机发表评论失败 阅读器字号四档与护眼主题 -out …` 会把第二个词当位置参数、`-out` 整条失效，文档被写到默认的 `/opt/base/data/release.json`（客户端读不到），且 `notes` 只剩半句。ssh 里没有引号可用，所以 `-notes` 必须写成**不含空格**的一个 token（用中文分号连接），或放到所有 flag 之后。
+    - 验证：`/v1/release` 200、`/dl/base-0.4.1.apk` 200 且 `size_download=27370082` 与文档 `apk_size`/`apk_sha256`（`3908fbe5…`）一致；线上文档用客户端验签器（`verifyRelease` + 预置公钥 `48c33db9…24f4`）验过为 true。APK 内 `www/manifest.json` 为 `version.name=0.4.1`/`code=5`，`app-service.js` 含 `randomblob`、`兜底随机源`、`随机池不足`、`护眼` 四处特征串。
+
 ## 明确不做的（spec §1，任何实现都不得顺手加）
 
 不做评论/圈子的真实功能、不做 App 侧 markdown 解析、不做答题结果上报、不做滚动位置恢复、不做全站深色主题、不做 FTS5、不做 wgt 热更新、不做 App 内下载 APK 与 `plus.runtime.install`、不做账号/设备身份上行、不做 tabBar 图标、不做节点侧分发与反熵改动（除 §6.3 导出增一类表与 §8.3 新增一个只读接口）。
