@@ -38,15 +38,15 @@ func seedStore(t *testing.T, st *store.Store) packexport.Result {
 			t.Fatalf("UpsertArticle: %v", err)
 		}
 	}
-	add("article:aaa", "甲", "甲正文\n")
-	add("article:bbb", "乙", "乙正文\n")
+	add("article/aaa", "甲", "甲正文\n")
+	add("article/bbb", "乙", "乙正文\n")
 
 	hash := protocol.SHA256Hex(testCover)
-	if err := st.PutBlob(protocol.BlobID(testCover), testCover, "cover:aaa", 0); err != nil {
+	if err := st.PutBlob(protocol.BlobID(testCover), testCover, "article/aaa/cover", 0); err != nil {
 		t.Fatalf("PutBlob: %v", err)
 	}
 	if err := st.UpsertMediaItem(store.MediaItem{
-		ItemID: "cover:aaa", Source: "article", Type: "cover", Title: "甲封面",
+		ItemID: "article/aaa/cover", Source: "article", Type: "cover", Title: "甲封面",
 		SourceRev: "rev-1", ContentHash: hash, SQLiteTable: "media_meta", MIME: "image/png",
 		Size: int64(len(testCover)), ChunkSize: int64(len(testCover)),
 		ChunkHashes: []string{hash}, UpdatedAt: "2026-01-02T00:00:00Z",
@@ -153,7 +153,7 @@ func TestCatalogAnonymousFullList(t *testing.T) {
 		t.Fatalf("items = %d, want 3", len(items))
 	}
 	first := items[0].(map[string]any)
-	if first["item_id"] != "article:aaa" || first["type"] != "article" || first["source_rev"] != "rev-1" {
+	if first["item_id"] != "article/aaa" || first["type"] != "article" || first["source_rev"] != "rev-1" {
 		t.Fatalf("首条目录项异常: %v", first)
 	}
 	if body["next_cursor"] != nil {
@@ -181,23 +181,23 @@ func TestCatalogPagingCursorEndsWithNull(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("code=%d", code)
 	}
-	if len(body["items"].([]any)) != 1 || body["next_cursor"] != "article:aaa" {
+	if len(body["items"].([]any)) != 1 || body["next_cursor"] != "article/aaa" {
 		t.Fatalf("第一页异常: %v", body)
 	}
 
-	code, body = getJSON(t, ts.URL+"/v1/catalog?limit=1&cursor=article:aaa")
+	code, body = getJSON(t, ts.URL+"/v1/catalog?limit=1&cursor=article/aaa")
 	if code != http.StatusOK {
 		t.Fatalf("code=%d", code)
 	}
-	if body["items"].([]any)[0].(map[string]any)["item_id"] != "article:bbb" || body["next_cursor"] != "article:bbb" {
+	if body["items"].([]any)[0].(map[string]any)["item_id"] != "article/aaa/cover" || body["next_cursor"] != "article/aaa/cover" {
 		t.Fatalf("第二页异常: %v", body)
 	}
 
-	code, body = getJSON(t, ts.URL+"/v1/catalog?limit=1&cursor=article:bbb")
+	code, body = getJSON(t, ts.URL+"/v1/catalog?limit=1&cursor=article/aaa/cover")
 	if code != http.StatusOK {
 		t.Fatalf("code=%d", code)
 	}
-	if body["items"].([]any)[0].(map[string]any)["item_id"] != "cover:aaa" {
+	if body["items"].([]any)[0].(map[string]any)["item_id"] != "article/bbb" {
 		t.Fatalf("第三页异常: %v", body)
 	}
 	if body["next_cursor"] != nil {
@@ -270,7 +270,7 @@ func TestPackServesReadableSQLite(t *testing.T) {
 	}
 	defer db.Close()
 	var body string
-	if err := db.QueryRow(`SELECT body_md FROM articles WHERE item_id='article:aaa'`).Scan(&body); err != nil {
+	if err := db.QueryRow(`SELECT body_md FROM articles WHERE item_id='article/aaa'`).Scan(&body); err != nil {
 		t.Fatalf("读 pack.sqlite: %v", err)
 	}
 	if body != "甲正文\n" {

@@ -13,7 +13,7 @@ func TestImportVideoChunking(t *testing.T) {
 	// ChunkSize + 3 字节 → 2 块，末块 3 字节
 	path := writeTempFile(t, "clip.mp4", ChunkSize+3)
 
-	res, err := ImportVideo(st, VideoOptions{Path: path, Slug: "v1", Title: "第一课"})
+	res, err := ImportVideo(st, VideoOptions{Path: path, Slug: "v1", Course: "c1", Lesson: "l1", Title: "第一课"})
 	if err != nil {
 		t.Fatalf("ImportVideo: %v", err)
 	}
@@ -24,7 +24,7 @@ func TestImportVideoChunking(t *testing.T) {
 		t.Fatalf("总字节 = %d", res.TotalSize)
 	}
 
-	mime, size, dur, chunkSize, hashes, ok, err := st.GetMediaMeta("lesson:v1")
+	mime, size, dur, chunkSize, hashes, ok, err := st.GetMediaMeta("course/c1/lesson/l1/video/v1")
 	if err != nil || !ok {
 		t.Fatalf("GetMediaMeta: ok=%v err=%v", ok, err)
 	}
@@ -32,8 +32,23 @@ func TestImportVideoChunking(t *testing.T) {
 		t.Fatalf("media_meta = %s/%d/%d/%d/%d 块", mime, size, dur, chunkSize, len(hashes))
 	}
 
+	// 视频应已并入课时清单（segments 里出现该视频 id）
+	segs, err := st.ListSegments("course/c1/lesson/l1")
+	if err != nil {
+		t.Fatalf("ListSegments: %v", err)
+	}
+	merged := false
+	for _, s := range segs {
+		if s.Text == "course/c1/lesson/l1/video/v1" {
+			merged = true
+		}
+	}
+	if !merged {
+		t.Fatalf("课时清单未并入视频 id: %+v", segs)
+	}
+
 	// 幂等重导入：同字节块不重写
-	res2, err := ImportVideo(st, VideoOptions{Path: path, Slug: "v1"})
+	res2, err := ImportVideo(st, VideoOptions{Path: path, Slug: "v1", Course: "c1", Lesson: "l1"})
 	if err != nil {
 		t.Fatalf("重复导入: %v", err)
 	}
@@ -48,8 +63,19 @@ func TestImportVideoChunking(t *testing.T) {
 func TestImportVideoRejectsEmpty(t *testing.T) {
 	st := openTemp(t)
 	path := writeTempFile(t, "empty.mp4", 0)
-	if _, err := ImportVideo(st, VideoOptions{Path: path, Slug: "e"}); err == nil {
+	if _, err := ImportVideo(st, VideoOptions{Path: path, Slug: "e", Course: "c1", Lesson: "l1"}); err == nil {
 		t.Fatal("空文件应报错")
+	}
+}
+
+func TestImportVideoRejectsMissingCourseOrLesson(t *testing.T) {
+	st := openTemp(t)
+	path := writeTempFile(t, "clip.mp4", 10)
+	if _, err := ImportVideo(st, VideoOptions{Path: path, Slug: "v1", Lesson: "l1"}); err == nil {
+		t.Fatal("缺 Course 应报错")
+	}
+	if _, err := ImportVideo(st, VideoOptions{Path: path, Slug: "v1", Course: "c1"}); err == nil {
+		t.Fatal("缺 Lesson 应报错")
 	}
 }
 

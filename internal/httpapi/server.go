@@ -116,7 +116,7 @@ func (s *Server) publicMux() *http.ServeMux {
 	}
 
 	mux.HandleFunc("GET /{$}", s.handleIndex)
-	mux.HandleFunc("GET /a/{item_id}", s.handleArticlePage)
+	mux.HandleFunc("GET /a/{item_id...}", s.handleArticlePage)
 	return mux
 }
 

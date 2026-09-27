@@ -231,10 +231,10 @@ func TestExportKeepsDeclaredChunkCountUnderDedup(t *testing.T) {
 	if err := os.WriteFile(path, make([]byte, 2621440), 0o600); err != nil {
 		t.Fatalf("写视频: %v", err)
 	}
-	if _, err := importer.ImportVideo(st, importer.VideoOptions{Path: path, Slug: "zeros"}); err != nil {
+	if _, err := importer.ImportVideo(st, importer.VideoOptions{Path: path, Slug: "zeros", Course: "c1", Lesson: "l1"}); err != nil {
 		t.Fatalf("ImportVideo: %v", err)
 	}
-	itemID := "lesson:zeros"
+	itemID := "course/c1/lesson/l1/video/zeros"
 	res, err := Export(st, fixedOptions(st))
 	if err != nil {
 		t.Fatalf("Export: %v", err)

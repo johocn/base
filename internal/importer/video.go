@@ -19,7 +19,9 @@ const ChunkSize = 1 << 20
 // VideoOptions 是视频导入参数。
 type VideoOptions struct {
 	Path     string // 源文件路径
-	Slug     string // 条目 slug，item_id = lesson:<slug>
+	Slug     string // 条目 slug，item_id = course/<course>/lesson/<lesson>/video/<slug>
+	Course   string // 必填：无顶层 video 命名空间
+	Lesson   string // 必填：无顶层 video 命名空间
 	Title    string // 空则取文件名（不含扩展名）
 	MIME     string // 空则按扩展名推断
 	Duration int64  // 秒；0 = 未知
@@ -41,6 +43,9 @@ func ImportVideo(st *store.Store, opt VideoOptions) (VideoResult, error) {
 	if strings.TrimSpace(opt.Path) == "" || strings.TrimSpace(opt.Slug) == "" {
 		return VideoResult{}, fmt.Errorf("importer: -file 与 -slug 都是必填")
 	}
+	if strings.TrimSpace(opt.Course) == "" || strings.TrimSpace(opt.Lesson) == "" {
+		return VideoResult{}, fmt.Errorf("importer: -course 与 -lesson 都是必填（无顶层 video 命名空间）")
+	}
 	f, err := os.Open(opt.Path)
 	if err != nil {
 		return VideoResult{}, fmt.Errorf("importer: 打开视频: %w", err)
@@ -54,7 +59,7 @@ func ImportVideo(st *store.Store, opt VideoOptions) (VideoResult, error) {
 		return VideoResult{}, fmt.Errorf("importer: 视频为空（0 字节），分块后没有任何块文件，无法导出")
 	}
 
-	itemID := "lesson:" + opt.Slug
+	itemID := fmt.Sprintf("course/%s/lesson/%s/video/%s", opt.Course, opt.Lesson, opt.Slug)
 	res := VideoResult{ItemID: itemID, TotalSize: fi.Size()}
 	hashes := []string{}
 	buf := make([]byte, ChunkSize)
@@ -107,6 +112,9 @@ func ImportVideo(st *store.Store, opt VideoOptions) (VideoResult, error) {
 		ChunkHashes: hashes,
 	}); err != nil {
 		return res, fmt.Errorf("importer: 登记条目: %w", err)
+	}
+	if err := ensureLessonChild(st, opt.Course, opt.Lesson, itemID); err != nil {
+		return res, fmt.Errorf("importer: 并入课时清单: %w", err)
 	}
 	return res, nil
 }

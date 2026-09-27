@@ -9,11 +9,13 @@ import (
 )
 
 // runImportVideo 把一个视频按定长 1 MiB 分块导入内容库（契约 §4.2）。
-// item_id = lesson:<slug>；source=lesson、type=video、sqlite_table=media_meta、dist_class=public。
+// item_id = course/<course>/lesson/<lesson>/video/<slug>；source=lesson、type=video、sqlite_table=media_meta、dist_class=public。
 func runImportVideo(args []string) error {
 	fs := flag.NewFlagSet("import-video", flag.ExitOnError)
 	file := fs.String("file", "", "视频文件路径（必填）")
-	slug := fs.String("slug", "", "slug（必填）；条目 id = lesson:<slug>")
+	slug := fs.String("slug", "", "slug（必填）")
+	course := fs.String("course", "", "课程（必填）；条目 id = course/<course>/lesson/<lesson>/video/<slug>")
+	lesson := fs.String("lesson", "", "课时（必填）")
 	title := fs.String("title", "", "标题；空则取文件名")
 	mime := fs.String("mime", "", "MIME；空则按扩展名推断")
 	duration := fs.Int64("duration", 0, "时长（秒）；0 = 未知")
@@ -27,7 +29,7 @@ func runImportVideo(args []string) error {
 	}
 	defer st.Close()
 	res, err := importer.ImportVideo(st, importer.VideoOptions{
-		Path: *file, Slug: *slug, Title: *title, MIME: *mime, Duration: *duration,
+		Path: *file, Slug: *slug, Course: *course, Lesson: *lesson, Title: *title, MIME: *mime, Duration: *duration,
 	})
 	if err != nil {
 		return err

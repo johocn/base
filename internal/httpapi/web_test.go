@@ -30,7 +30,7 @@ func TestIndexPageListsPublicArticles(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("首页状态 = %d", code)
 	}
-	for _, want := range []string{"内容目录", "甲", "乙", `href="/a/article:aaa"`, `href="/a/article:bbb"`} {
+	for _, want := range []string{"内容目录", "甲", "乙", `href="/a/article/aaa"`, `href="/a/article/bbb"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("首页缺少 %q\n页面内容：\n%s", want, body)
 		}
@@ -42,7 +42,7 @@ func TestIndexPageListsPublicArticles(t *testing.T) {
 
 func TestArticlePageRendersBody(t *testing.T) {
 	_, _, ts := newTestServer(t)
-	code, body := getText(t, ts.URL+"/a/article:aaa")
+	code, body := getText(t, ts.URL+"/a/article/aaa")
 	if code != http.StatusOK {
 		t.Fatalf("文章页状态 = %d", code)
 	}
@@ -55,7 +55,7 @@ func TestArticlePageRendersBody(t *testing.T) {
 
 func TestArticlePageShowsCoverBlob(t *testing.T) {
 	_, _, ts := newTestServer(t)
-	code, body := getText(t, ts.URL+"/a/article:aaa")
+	code, body := getText(t, ts.URL+"/a/article/aaa")
 	if code != http.StatusOK {
 		t.Fatalf("文章页状态 = %d", code)
 	}
@@ -63,7 +63,7 @@ func TestArticlePageShowsCoverBlob(t *testing.T) {
 		t.Fatalf("有封面的文章页应引用封面块\n%s", body)
 	}
 
-	code, body = getText(t, ts.URL+"/a/article:bbb")
+	code, body = getText(t, ts.URL+"/a/article/bbb")
 	if code != http.StatusOK {
 		t.Fatalf("无封面文章页状态 = %d", code)
 	}
@@ -81,7 +81,7 @@ func TestArticlePageEscapesHTML(t *testing.T) {
 
 	evil := "<script>alert(1)</script>"
 	if err := st.UpsertArticle(store.Article{
-		ItemID: "article:evil", Title: "<b>坏标题</b>", Digest: "摘要",
+		ItemID: "article/evil", Title: "<b>坏标题</b>", Digest: "摘要",
 		PublishedAt: "2026-01-01T00:00:00Z", TagsJSON: `["演示"]`, BodyMD: evil,
 		ContentHash: protocol.SHA256Hex([]byte(evil)), SourceRev: "rev-1", UpdatedAt: "2026-01-02T00:00:00Z",
 	}); err != nil {
@@ -94,7 +94,7 @@ func TestArticlePageEscapesHTML(t *testing.T) {
 	ts := newInprocServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	code, body := getText(t, ts.URL+"/a/article:evil")
+	code, body := getText(t, ts.URL+"/a/article/evil")
 	if code != http.StatusOK {
 		t.Fatalf("文章页状态 = %d", code)
 	}
@@ -109,13 +109,46 @@ func TestArticlePageEscapesHTML(t *testing.T) {
 	}
 }
 
+func TestArticlePageRendersNestedCoursePath(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	body := "课程正文\n"
+	if err := st.UpsertArticle(store.Article{
+		ItemID: "course/c1/lesson/l1/article/deep", Title: "深文章", Digest: "深摘要",
+		PublishedAt: "2026-01-01T00:00:00Z", TagsJSON: `["演示"]`, BodyMD: body,
+		ContentHash: protocol.SHA256Hex([]byte(body)), SourceRev: "rev-1", UpdatedAt: "2026-01-02T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("UpsertArticle: %v", err)
+	}
+	srv, err := New(st, Options{Issuer: "base-node-1", Version: "test"})
+	if err != nil {
+		t.Fatalf("httpapi.New: %v", err)
+	}
+	ts := newInprocServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	code, page := getText(t, ts.URL+"/a/course/c1/lesson/l1/article/deep")
+	if code != http.StatusOK {
+		t.Fatalf("多级文章页状态 = %d", code)
+	}
+	for _, want := range []string{"深文章", "课程正文", "深摘要"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("多级文章页缺少 %q\n%s", want, page)
+		}
+	}
+}
+
 func TestArticlePageMissingIs404(t *testing.T) {
 	_, _, ts := newTestServer(t)
-	if code, _ := getText(t, ts.URL+"/a/article:nope"); code != http.StatusNotFound {
+	if code, _ := getText(t, ts.URL+"/a/article/nope"); code != http.StatusNotFound {
 		t.Fatalf("不存在的文章状态 = %d, want 404", code)
 	}
 	// 非 article 类型（这里是 cover）不能被当成文章页渲染
-	if code, _ := getText(t, ts.URL+"/a/cover:aaa"); code != http.StatusNotFound {
+	if code, _ := getText(t, ts.URL+"/a/article/aaa/cover"); code != http.StatusNotFound {
 		t.Fatalf("cover 条目当文章页的状态 = %d, want 404", code)
 	}
 }
@@ -138,7 +171,7 @@ func TestPagesShowPairingCode(t *testing.T) {
 	ts := newInprocServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	for _, path := range []string{"/", "/a/article:aaa"} {
+	for _, path := range []string{"/", "/a/article/aaa"} {
 		status, body := getText(t, ts.URL+path)
 		if status != http.StatusOK {
 			t.Fatalf("%s 状态 = %d", path, status)

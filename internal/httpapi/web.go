@@ -98,10 +98,9 @@ func (s *Server) handleArticlePage(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, articleTmpl, data)
 }
 
-// coverBlobID 按约定 cover:<slug> 找文章封面块；缺失返回空串，不阻塞渲染。
+// coverBlobID 按约定 <item_id>/cover 找文章封面块；缺失返回空串，不阻塞渲染。
 func (s *Server) coverBlobID(articleItemID string) string {
-	slug := strings.TrimPrefix(articleItemID, "article:")
-	refs, err := s.st.ListBlobsForItem("cover:" + slug)
+	refs, err := s.st.ListBlobsForItem(articleItemID + "/cover")
 	if err != nil || len(refs) == 0 {
 		return ""
 	}
