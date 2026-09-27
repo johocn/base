@@ -1556,3 +1556,13 @@ git push
 10. **工具 / 环境副作用**：Task 8 期间出现计划外文件改写（`internal/importer/{course.go,course_test.go,md.go}` 被 gofmt 重排、5 个已提交 mobile TS 文件尾换行被剥离），已 `git restore` 回 HEAD，未纳入任何提交。
 
 **Task 9 全量自测实况（0.7.0）**：`go build ./...` + `go test ./...` 全包 ok；`npx tsc --noEmit` 干净（exit 0）；`npx vitest run` 12 文件 / 112 项全绿；`npm run build:app` 产出 `dist/build/app` 无报错。`apps/mobile/src/manifest.json` 已升 `versionName "0.7.0"` / `versionCode "8"`。
+
+**Task 10 —— 0.7.0 发布实况（2026-09-28）**
+
+- 云打包：`D:\HBuilderX\cli.exe pack --project e:\code\base\apps\mobile --platform android --android.packagename uni.app.UNI936A667 --android.androidpacktype 3`；07:19:43 提交、07:22:43 成功；返回临时下载地址（限 5 次），已用 `Invoke-WebRequest` 另存。
+- APK：`apps/mobile/dist/release/apk/base-0.7.0.apk`，**27377089 字节**；sha256 `91f1143653cad9c6a33bd479ac3a45cac2bedbe81242aaad6611951949562776`。
+- 证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.6.0 一致，可覆盖安装）。
+- APK 内容核对：`assets/apps/__UNI__936A667/www/app-service.js` 命中 `未归类` / `id_migrate_v2` / `/cover` / `课程详情` / `第 `；`www/manifest.json` 的 `version.name=0.7.0`、`code=8`。（读法用 `[System.IO.Compression.ZipFile]` 取条目 + `[System.Text.Encoding]::UTF8` 解码，避免 PowerShell 5.1 的 ANSI 误判。）
+- 生产：`scp` 上传 `/opt/appdl/base-0.7.0.apk`；落地页 `sed` 后只余 `base-0.7.0.apk`；签发 `/opt/base-cache/data/release.json`（`/opt/base/data/release.json` 不存在，无需清理），release 公钥 `48c33db9cf859e107fe89651d15fc5faaa8b16ffbb7d4b483aa167a0cff824f4`。
+- 线上验证：`/v1/release` 返回 `version_name=0.7.0`、`min_version_name=0.6.0`、`apk_size=27377089`、`apk_sha256` 与本地一致；`http://118.190.217.242/dl/base-0.7.0.apk` → `200` / `Content-Length: 27377089`；客户端 `verifyRelease` 对线上文档实测 `true`。
+- 与计划的差异：① `-notes` 实写 `课程体系上线：课程_课时_三级浏览_未归类分组`（全角冒号、无空格，满足「单 token」）；② 线上验签用一次性临时 vitest 用例完成（`fetch` 线上 `/v1/release` + `verifyRelease`），跑完即删、未入库；③ **Step 7 真机 3 条验收未执行**（环境内无真机），留给人工。
