@@ -3963,6 +3963,7 @@ git commit -m "chore(mobile): 版本递增到 0.2.0（四 tab + 答题 + 升级�
 3. **全量测试的既有基线是 30 项**（identity 15 + sync 10 + sql 5），不是 75；文中已更正。
 4. **T4 原先要注册 `pages/search/search`，而 `search.vue` 在 T5 才创建** —— 那样 T4 的 `npm run build:app` 必然失败。已改为「谁建文件谁注册」：T4 只改 `course.vue`，T5 自己建页并注册。全计划统一这条规则。
 5. **`dist` 页面级 `.js` 不存在**：实测 uni-app 把页面逻辑汇进单个 `app-service.js`，页面目录下只有 `.css`。所有 `Test-Path ...pages/<name>/<name>.js` 的核对已改成 `Test-Path ...pages/<name>`（页面目录）。
+6. **T8 阅读器进度条的算法是坏的，已替换**：计划原文 `progress = Math.min(100, Math.round(e.scrollTop / 6))` —— 滚过 600px 就顶到 100%，长文里几乎全程假满格，会误导读者的阅读进度感。已改为**实测可滚动高度**：`scrollable = .wrap 高度 − uni.getSystemInfoSync().windowHeight`，进度 = `已滚 / scrollable`，并在正文渲染完（`nextTick` 后）与每次改字号后重新测量（字号变则总高变）。量不到时 `scrollable = 0`，进度条不显示（`v-if="progress > 0"`）而不是显示错的值。
 
 ## 明确不做的（spec §1，任何实现都不得顺手加）
 

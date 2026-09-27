@@ -22,7 +22,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { onLoad, onPageScroll } from '@dcloudio/uni-app';
 
 import { READER_FONT_SIZE, nextFontScale, normalizeFontScale, normalizeTheme, type ReaderFontScale, type ReaderTheme } from '../../core/state';
@@ -38,6 +38,9 @@ const theme = ref<ReaderTheme>('light');
 const fontScale = ref<ReaderFontScale>(2);
 const progress = ref(0);
 const itemId = ref('');
+/** 可滚动高度 = 正文实际高度 − 视口高度；为 0 表示还没量到，此时不显示进度条 */
+const scrollable = ref(0);
+const scrolled = ref(0);
 
 const wrapStyle = computed(() =>
   theme.value === 'dark' ? 'background:#1a1a1a;color:#e6e6e6;min-height:100vh;' : '',
@@ -71,14 +74,40 @@ onLoad(async (query) => {
     fav.value = await repo.isFavorite(row.itemId);
     // 进入即标记已读；readAtNext 保证只写首次
     await repo.markRead(row.itemId, new Date().toISOString());
+    await nextTick();
+    measure();
   } catch (e) {
     error.value = (e as Error).message;
   }
 });
 
 onPageScroll((e) => {
-  progress.value = Math.min(100, Math.max(0, Math.round(e.scrollTop / 6)));
+  scrolled.value = e.scrollTop;
+  paintProgress();
 });
+
+/**
+ * 进度 = 已滚 / 可滚。可滚高度必须实测：正文长短与字号都影响它，
+ * 用固定除数（如 scrollTop/6）会让长文滚一小段就顶到 100%，是误导。
+ */
+function paintProgress() {
+  progress.value =
+    scrollable.value > 0 ? Math.min(100, Math.max(0, Math.round((scrolled.value / scrollable.value) * 100))) : 0;
+}
+
+/** 正文渲染完、以及每次改字号之后都要重新量（字号变则总高变） */
+function measure() {
+  const winH = uni.getSystemInfoSync().windowHeight;
+  uni
+    .createSelectorQuery()
+    .select('.wrap')
+    .boundingClientRect()
+    .exec((res) => {
+      const rect = res && res[0] ? (res[0] as { height?: number }) : undefined;
+      scrollable.value = Math.max(0, (rect?.height ?? 0) - winH);
+      paintProgress();
+    });
+}
 
 async function toggleFav() {
   const { repo } = await bootstrap();
@@ -89,6 +118,8 @@ async function cycleFont() {
   fontScale.value = nextFontScale(fontScale.value);
   const { repo } = await bootstrap();
   await repo.setConfig('reader_font_scale', String(fontScale.value));
+  await nextTick();
+  measure();
 }
 
 async function cycleTheme() {
