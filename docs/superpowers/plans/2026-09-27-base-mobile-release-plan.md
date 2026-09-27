@@ -3969,6 +3969,8 @@ git commit -m "chore(mobile): 版本递增到 0.2.0（四 tab + 答题 + 升级�
 
 8. **T10 `importQuiz` 去掉未使用的 `meta` 参数**：计划给的签名带 `meta map[string]string`，计划自己的注里也承认当前用不上（`quizzes` 表没有 `tags` / `published_at` 列）。按「拒绝冗余、不为假想需求留参数」收敛为 `importQuiz(st *store.Store, filename string, raw []byte) error`，`Run` 的调用点同步改为 `importQuiz(st, name, raw)`（提交 `40bea8f`）。分流判断仍在 `Run` 里用 `meta["type"] == "quiz"`。
 
+9. **T15 顺带 `gofmt -w` 了 `tools/genvectors/main.go` 里既存的 6 行对齐**：`writeManifest` 的两处 map 字面量在改动前就是 gofmt 违规（`git show HEAD:tools/genvectors/main.go | gofmt -l` 可复现）。为满足「改动的文件 gofmt 干净」，对该文件整体跑了一次 `gofmt -w`，除新增的 `writeRelease` 外只多出这 6 行的空白重排，无语义变化（提交 `8e22004`）。
+
 ## 明确不做的（spec §1，任何实现都不得顺手加）
 
 不做评论/圈子的真实功能、不做 App 侧 markdown 解析、不做答题结果上报、不做滚动位置恢复、不做全站深色主题、不做 FTS5、不做 wgt 热更新、不做 App 内下载 APK 与 `plus.runtime.install`、不做账号/设备身份上行、不做 tabBar 图标、不做节点侧分发与反熵改动（除 §6.3 导出增一类表与 §8.3 新增一个只读接口）。
