@@ -1544,4 +1544,15 @@ git push
 
 ## 执行期更正（已实施后回填，后续 Task 请以本节为准）
 
-（实施开始后逐条追加：命令、字段、判定口径与计划的差异，以及 0.7.0 发布实况。）
+1. **Task 2 —— Windows 下连续两次 `packexport.Export` 同一路径会失败**：第二次导出前必须 `db.Close()`，否则报 `vacuum into: output file already exists`。
+2. **Task 4 —— `ensureLessonChild` 不得覆盖既有课时标题**：计划原写法会把既有课时 `items.title` 覆盖成裸 `lid`；落地改为「已存在则沿用既有 `title` 与 `seq=0` digest」。
+3. **Task 4 —— `internal/importer/quiz_test.go` 实际无需改动**（该文件无 `Run` 调用与旧 id 断言），未纳入任何变更。
+4. **Task 4 —— 用例 6 的夹具改走 store 直连**：计划原写 `ImportVideo(Course:..., Lesson:...)`，但 `VideoOptions.Course/Lesson` 属 Task 5；Task 4 改为直连 `UpsertMediaItem` + `ensureLessonChild`。
+5. **Task 5 —— 额外改了计划清单外的 `internal/packexport/export_test.go`**：`VideoOptions.Course/Lesson` 必填校验落地后，该测试的 `importVideo` 夹具必须同步，属保证全仓绿的最小必要改动。
+6. **Task 6 / Task 7 —— 前置依赖拆分**：计划 Task 6 Step 3.5 要求 `syncOnce` 调 `migrateLegacyIds`，但该模块属 Task 7，Task 6 引入会让 `tsc` 失败。落地为 Task 6 不接线，改由 Task 7 追加 `apps/mobile/src/core/sync.ts` 一行接线（Task 7 因此多改一个文件）。
+7. **Task 6 —— `sync.test.ts` 额外补 1 正 1 反两个 segments 用例**（计划文件清单未列），以真正覆盖行级 / 条目级校验与条目数守卫；vitest 由 96 → 98。
+8. **Task 7 —— `sync.test.ts` 额外补 1 条「同步成功后自动触发旧 id 平移」集成断言**；vitest 由 98 → 112。
+9. **`.vue` 不在 `tsc --noEmit` 覆盖范围**：`apps/mobile/tsconfig.json` 只 `include: ["src"]` 且无 vue 插件，`.vue` 的唯一真实编译检查是 `npm run build:app`（Task 8 起把 `build:app` 列为 `.vue` 验收项）。
+10. **工具 / 环境副作用**：Task 8 期间出现计划外文件改写（`internal/importer/{course.go,course_test.go,md.go}` 被 gofmt 重排、5 个已提交 mobile TS 文件尾换行被剥离），已 `git restore` 回 HEAD，未纳入任何提交。
+
+**Task 9 全量自测实况（0.7.0）**：`go build ./...` + `go test ./...` 全包 ok；`npx tsc --noEmit` 干净（exit 0）；`npx vitest run` 12 文件 / 112 项全绿；`npm run build:app` 产出 `dist/build/app` 无报错。`apps/mobile/src/manifest.json` 已升 `versionName "0.7.0"` / `versionCode "8"`。
