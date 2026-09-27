@@ -82,6 +82,7 @@ async function probe() {
     const { repo, db, opts } = await bootstrap();
     lines.push(`本地 items 条目：${(await repo.listItems()).length}`);
     lines.push(`本地 articles 正文：${Number((await db.select('SELECT count(*) AS n FROM articles'))[0]?.n ?? 0)}`);
+    lines.push(`答题记录行数：${Number((await db.select('SELECT count(*) AS n FROM quiz_attempt'))[0]?.n ?? 0)}`);
     lines.push(`工作目录：${opts.workDir}`);
   } catch (e) {
     lines.push(`库存量查询失败：${(e as Error).message}`);
