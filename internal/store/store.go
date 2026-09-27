@@ -56,6 +56,17 @@ type Article struct {
 	UpdatedAt   string
 }
 
+// Quiz 是一个题组条目（question_json 是结构化 JSON，明文存储：
+// quizzes 的 dist_class 恒为 public，pack 里也是明文，不需要 at-rest 加密）。
+type Quiz struct {
+	ItemID       string
+	Title        string
+	QuestionJSON string
+	ContentHash  string
+	SourceRev    string
+	UpdatedAt    string
+}
+
 // MediaItem 是带外部字节的条目（type=cover / video）。
 type MediaItem struct {
 	ItemID      string
@@ -185,6 +196,74 @@ func (s *Store) UpsertArticle(a Article) error {
 		return fmt.Errorf("store: upsert article: %w", err)
 	}
 	return tx.Commit()
+}
+
+// UpsertQuiz 幂等写入题库（items + quizzes 同事务），口径与文章一致。
+func (s *Store) UpsertQuiz(q Quiz) error {
+	updated := q.UpdatedAt
+	if updated == "" {
+		updated = nowUTC()
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(item_id) DO UPDATE SET
+			title=excluded.title, source_rev=excluded.source_rev, content_hash=excluded.content_hash,
+			sqlite_table=excluded.sqlite_table, dist_class=excluded.dist_class, state=excluded.state, updated_at=excluded.updated_at`,
+		q.ItemID, "lesson", "quiz", q.Title, q.SourceRev, q.ContentHash, "quizzes", "public", "active", updated); err != nil {
+		return fmt.Errorf("store: upsert quiz item: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO quizzes(item_id,question_json,content_hash)
+		VALUES(?,?,?)
+		ON CONFLICT(item_id) DO UPDATE SET question_json=excluded.question_json, content_hash=excluded.content_hash`,
+		q.ItemID, q.QuestionJSON, q.ContentHash); err != nil {
+		return fmt.Errorf("store: upsert quiz: %w", err)
+	}
+	return tx.Commit()
+}
+
+// GetQuiz 读取题库。
+func (s *Store) GetQuiz(itemID string) (Quiz, bool, error) {
+	row := s.db.QueryRow(`SELECT item_id,question_json,content_hash FROM quizzes WHERE item_id=?`, itemID)
+	var q Quiz
+	err := row.Scan(&q.ItemID, &q.QuestionJSON, &q.ContentHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Quiz{}, false, nil
+	}
+	if err != nil {
+		return Quiz{}, false, err
+	}
+	return q, true, nil
+}
+
+// ListQuizzes 返回指定 id 的题库；ids 为空表示全部。
+func (s *Store) ListQuizzes(ids []string) (map[string]Quiz, error) {
+	q := `SELECT item_id,question_json,content_hash FROM quizzes`
+	args := []any{}
+	if len(ids) > 0 {
+		q += ` WHERE item_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Quiz{}
+	for rows.Next() {
+		var item Quiz
+		if err := rows.Scan(&item.ItemID, &item.QuestionJSON, &item.ContentHash); err != nil {
+			return nil, err
+		}
+		out[item.ItemID] = item
+	}
+	return out, rows.Err()
 }
 
 // UpsertMediaItem 幂等写入带外部字节的条目（items + media_meta 同事务）。

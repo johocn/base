@@ -140,6 +140,16 @@ func Run(st *store.Store, dir string) (Result, error) {
 			res.Errors = append(res.Errors, name+": "+err.Error())
 			continue
 		}
+		meta, _ := SplitFrontMatter(raw)
+		if meta["type"] == "quiz" {
+			if err := importQuiz(st, name, raw); err != nil {
+				res.Failed++
+				res.Errors = append(res.Errors, name+": "+err.Error())
+				continue
+			}
+			res.Imported++
+			continue
+		}
 		doc, err := ParseMD(name, raw)
 		if err != nil {
 			res.Failed++
@@ -175,4 +185,26 @@ func Run(st *store.Store, dir string) (Result, error) {
 		res.Imported++
 	}
 	return res, nil
+}
+
+// importQuiz 把一份题库写进内容库：item_id = lesson:<slug>、type = quiz。
+// content_hash 与 articles 同口径：hex(sha256(question_json 的 UTF-8 字节))，不走 canonicalize。
+func importQuiz(st *store.Store, filename string, raw []byte) error {
+	q, err := ParseQuiz(filename, raw)
+	if err != nil {
+		return err
+	}
+	doc := QuestionDoc{SchemaVersion: 1, Questions: q.Questions}
+	questionJSON, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	hash := protocol.SHA256Hex(questionJSON)
+	return st.UpsertQuiz(store.Quiz{
+		ItemID:       "lesson:" + q.Slug,
+		Title:        q.Title,
+		QuestionJSON: string(questionJSON),
+		ContentHash:  hash,
+		SourceRev:    hash[:16],
+	})
 }
