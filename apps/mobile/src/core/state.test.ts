@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeStats, favoriteNext, readAtNext } from './state';
+import { computeStats, favoriteNext, nextFontScale, normalizeFontScale, normalizeTheme, readAtNext } from './state';
 
 describe('favoriteNext', () => {
   it('未收藏时写入时间并返回已收藏', () => {
@@ -50,5 +50,27 @@ describe('computeStats', () => {
       computeStats({ readCount: 1, attempts: 1, correct: 1, total: 1, readLast: '2026-09-27T10:00:00Z', quizLast: '2026-09-20T08:00:00Z' })
         .lastAt,
     ).toBe('2026-09-27T10:00:00Z');
+  });
+});
+
+describe('阅读偏好', () => {
+  it('主题未知取值回落 light', () => {
+    expect(normalizeTheme(null)).toBe('light');
+    expect(normalizeTheme('DARK')).toBe('light');
+    expect(normalizeTheme('dark')).toBe('dark');
+  });
+
+  it('字号未知取值回落 2（中）', () => {
+    expect(normalizeFontScale(null)).toBe(2);
+    expect(normalizeFontScale('')).toBe(2);
+    expect(normalizeFontScale('9')).toBe(2);
+    expect(normalizeFontScale('1')).toBe(1);
+    expect(normalizeFontScale('3')).toBe(3);
+  });
+
+  it('字号循环 1→2→3→1', () => {
+    expect(nextFontScale(1)).toBe(2);
+    expect(nextFontScale(2)).toBe(3);
+    expect(nextFontScale(3)).toBe(1);
   });
 });

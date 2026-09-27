@@ -38,3 +38,23 @@ export function computeStats(i: StatsInput): LearningStats {
     lastAt: i.readLast > i.quizLast ? i.readLast : i.quizLast,
   };
 }
+
+export type ReaderTheme = 'light' | 'dark';
+export type ReaderFontScale = 1 | 2 | 3;
+
+/** 字号三档 → 正文 px（spec §5.5） */
+export const READER_FONT_SIZE: Record<ReaderFontScale, number> = { 1: 15, 2: 17, 3: 20 };
+
+/** 非预期取值一律回落缺省值，不做校验报错（spec §4.2）。 */
+export function normalizeTheme(v: string | null): ReaderTheme {
+  return v === 'dark' ? 'dark' : 'light';
+}
+
+export function normalizeFontScale(v: string | null): ReaderFontScale {
+  const n = Number(v);
+  return n === 1 || n === 3 ? n : 2;
+}
+
+export function nextFontScale(cur: ReaderFontScale): ReaderFontScale {
+  return cur === 3 ? 1 : ((cur + 1) as ReaderFontScale);
+}

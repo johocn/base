@@ -1,19 +1,31 @@
 <template>
-  <view class="wrap">
+  <view class="wrap" :class="theme === 'dark' ? 'dark' : ''" :style="wrapStyle">
+    <view v-if="progress > 0" class="progress" :style="`width:${progress}%`"></view>
     <text v-if="error" class="error">{{ error }}</text>
     <block v-else>
+      <image v-if="coverPath" :src="coverPath" mode="widthFix" class="cover" />
       <text class="title">{{ article?.title }}</text>
       <text class="meta">{{ article?.publishedAt }}</text>
-      <image v-if="coverPath" :src="coverPath" mode="widthFix" class="cover" />
-      <text v-for="(p, i) in paragraphs" :key="i" class="para">{{ p }}</text>
+      <view class="actions">
+        <text class="act" :class="fav ? 'act-on' : ''" @click="toggleFav">{{ fav ? '已收藏' : '收藏' }}</text>
+        <text class="act" @click="cycleFont">A {{ fontScale }}</text>
+        <text class="act" @click="cycleTheme">{{ theme === 'dark' ? '浅色' : '深色' }}</text>
+      </view>
+      <text
+        v-for="(p, i) in paragraphs"
+        :key="i"
+        class="para"
+        :style="`font-size:${READER_FONT_SIZE[fontScale]}px`"
+      >{{ p }}</text>
     </block>
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { onLoad } from '@dcloudio/uni-app';
+import { computed, ref } from 'vue';
+import { onLoad, onPageScroll } from '@dcloudio/uni-app';
 
+import { READER_FONT_SIZE, nextFontScale, normalizeFontScale, normalizeTheme, type ReaderFontScale, type ReaderTheme } from '../../core/state';
 import type { ArticleRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 
@@ -21,18 +33,29 @@ const article = ref<ArticleRow | null>(null);
 const paragraphs = ref<string[]>([]);
 const coverPath = ref('');
 const error = ref('');
+const fav = ref(false);
+const theme = ref<ReaderTheme>('light');
+const fontScale = ref<ReaderFontScale>(2);
+const progress = ref(0);
+const itemId = ref('');
+
+const wrapStyle = computed(() =>
+  theme.value === 'dark' ? 'background:#1a1a1a;color:#e6e6e6;min-height:100vh;' : '',
+);
 
 onLoad(async (query) => {
-  const itemId = String((query as Record<string, string> | undefined)?.itemId ?? '');
+  const raw = String((query as Record<string, string> | undefined)?.itemId ?? '');
+  itemId.value = raw;
   try {
     const { repo } = await bootstrap();
-    const alt = decodedId(itemId);
-    const row = (await repo.getArticle(itemId)) ?? (alt === itemId ? null : await repo.getArticle(alt));
+    const alt = decodedId(raw);
+    const row = (await repo.getArticle(raw)) ?? (alt === raw ? null : await repo.getArticle(alt));
     if (!row) {
       error.value = '本地没有这篇正文，请返回先同步';
       return;
     }
     article.value = row;
+    itemId.value = row.itemId;
     paragraphs.value = row.bodyMd
       .replace(/\r\n/g, '\n')
       .split('\n\n')
@@ -42,10 +65,37 @@ onLoad(async (query) => {
     const slug = row.itemId.replace(/^article:/, '');
     const path = await repo.findBlobPathByItem(`cover:${slug}`);
     coverPath.value = path ? (path.startsWith('file://') ? path : `file://${path}`) : '';
+
+    theme.value = normalizeTheme(await repo.getConfig('reader_theme'));
+    fontScale.value = normalizeFontScale(await repo.getConfig('reader_font_scale'));
+    fav.value = await repo.isFavorite(row.itemId);
+    // 进入即标记已读；readAtNext 保证只写首次
+    await repo.markRead(row.itemId, new Date().toISOString());
   } catch (e) {
     error.value = (e as Error).message;
   }
 });
+
+onPageScroll((e) => {
+  progress.value = Math.min(100, Math.max(0, Math.round(e.scrollTop / 6)));
+});
+
+async function toggleFav() {
+  const { repo } = await bootstrap();
+  fav.value = await repo.toggleFavorite(itemId.value, new Date().toISOString());
+}
+
+async function cycleFont() {
+  fontScale.value = nextFontScale(fontScale.value);
+  const { repo } = await bootstrap();
+  await repo.setConfig('reader_font_scale', String(fontScale.value));
+}
+
+async function cycleTheme() {
+  theme.value = theme.value === 'dark' ? 'light' : 'dark';
+  const { repo } = await bootstrap();
+  await repo.setConfig('reader_theme', theme.value);
+}
 
 /** 页面间传参在个别机型上会保留百分号编码（itemId 含 `:` 会变成 %3A），按原样查不到就按解码后再查 */
 function decodedId(raw: string): string {
@@ -59,9 +109,17 @@ function decodedId(raw: string): string {
 
 <style>
 .wrap { padding: 16px; }
+.progress { position: fixed; top: 0; left: 0; height: 2px; background: #2b6cb0; z-index: 10; }
 .title { font-size: 22px; font-weight: 600; }
 .meta { display: block; color: #888888; font-size: 12px; margin-bottom: 12px; }
 .cover { width: 100%; margin-bottom: 12px; }
+.actions { display: flex; margin-bottom: 16px; }
+.act { margin-right: 18px; color: #2b6cb0; font-size: 14px; }
+.act-on { color: #b7791f; }
 .para { display: block; margin-bottom: 12px; line-height: 1.8; }
 .error { color: #c53030; font-size: 13px; }
+.dark .title { color: #f0f0f0; }
+.dark .meta { color: #999999; }
+.dark .para { color: #e6e6e6; }
+.dark .act { color: #63b3ed; }
 </style>
