@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/johocn/base/internal/protocol"
 )
 
 // PackEntry 是已通过 manifest 与 pack 行级校验、待入库的条目行。
-// 只承载 P0 真实存在的两族：articles（文章）与 media_meta（带外部字节的条目）。
+// 承载四族：articles（文章）、media_meta（带外部字节的条目）、quizzes（题库）、segments（容器清单）。
 type PackEntry struct {
 	ItemID      string
 	Source      string
@@ -35,6 +36,9 @@ type PackEntry struct {
 	Duration    int64
 	ChunkSize   int64
 	ChunkHashes []string
+
+	// SQLiteTable == "segments"
+	Segments []Segment
 }
 
 // ImportResult 是一次包入库的结果。
@@ -75,6 +79,7 @@ func (s *Store) ImportPack(version int64, entries []PackEntry, tombstones []prot
 		for _, q := range []string{
 			`DELETE FROM media_meta WHERE item_id=?`,
 			`DELETE FROM articles WHERE item_id=?`,
+			`DELETE FROM segments WHERE item_id=?`,
 			`DELETE FROM items WHERE item_id=?`,
 			`DELETE FROM blobs WHERE item_id=?`,
 		} {
@@ -111,6 +116,18 @@ func (s *Store) ImportPack(version int64, entries []PackEntry, tombstones []prot
 			return res, fmt.Errorf("store: 入库 items %s: %w", e.ItemID, err)
 		}
 		switch e.SQLiteTable {
+		case "segments":
+			ordered := append([]Segment{}, e.Segments...)
+			sort.Slice(ordered, func(i, j int) bool { return ordered[i].Seq < ordered[j].Seq })
+			if _, err := tx.Exec(`DELETE FROM segments WHERE item_id=?`, e.ItemID); err != nil {
+				return res, fmt.Errorf("store: 入库 segments 清旧行 %s: %w", e.ItemID, err)
+			}
+			for _, seg := range ordered {
+				if _, err := tx.Exec(`INSERT INTO segments(item_id,seq,kind,text,content_hash) VALUES(?,?,?,?,?)`,
+					e.ItemID, seg.Seq, seg.Kind, seg.Text, protocol.SHA256Hex([]byte(seg.Text))); err != nil {
+					return res, fmt.Errorf("store: 入库 segments %s seq=%d: %w", e.ItemID, seg.Seq, err)
+				}
+			}
 		case "articles":
 			bodyEnc, err := s.encText(e.BodyMD)
 			if err != nil {

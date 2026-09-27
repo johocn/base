@@ -86,6 +86,33 @@ func TestImportPackTombstoneRemovesRowsAndReportsBlobs(t *testing.T) {
 	}
 }
 
+func TestImportPackTombstoneClearsSegments(t *testing.T) {
+	st := openTemp(t)
+	if err := st.UpsertSegmentItem(SegmentItem{
+		ItemID: "course:old", Source: "course", Type: "course", Title: "旧课程",
+		Segments: []Segment{
+			{Seq: 0, Kind: "digest", Text: "简介"},
+			{Seq: 1, Kind: "lesson", Text: "course:old/lesson:l1"},
+		},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if _, err := st.ImportPack(6, nil, []protocol.Tombstone{{ItemID: "course:old", RevokedRev: 6}}); err != nil {
+		t.Fatalf("ImportPack: %v", err)
+	}
+	if _, ok, _ := st.GetItem("course:old"); ok {
+		t.Fatal("items 行应被删")
+	}
+	segs, err := st.ListSegments("course:old")
+	if err != nil {
+		t.Fatalf("ListSegments: %v", err)
+	}
+	if len(segs) != 0 {
+		t.Fatalf("墓碑应连带清掉 segments 行, got %+v", segs)
+	}
+}
+
 func TestImportPackRejectsRollback(t *testing.T) {
 	st := openTemp(t)
 	if err := st.AddTombstone("article:a", 7); err != nil {
