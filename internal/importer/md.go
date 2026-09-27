@@ -36,27 +36,7 @@ type Result struct {
 // ParseMD 解析带可选 front-matter 的 markdown。
 // front-matter：首行 --- 起、到下一个独立 --- 行止，内容为 `key: value`。
 func ParseMD(filename string, raw []byte) (Doc, error) {
-	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
-	meta := map[string]string{}
-	body := text
-	if strings.HasPrefix(text, "---\n") {
-		rest := text[len("---\n"):]
-		if idx := strings.Index(rest, "\n---\n"); idx >= 0 {
-			block := rest[:idx]
-			body = rest[idx+len("\n---\n"):]
-			for _, line := range strings.Split(block, "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" || strings.HasPrefix(line, "#") {
-					continue
-				}
-				k, v, ok := strings.Cut(line, ":")
-				if !ok {
-					continue
-				}
-				meta[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), `"'`)
-			}
-		}
-	}
+	meta, body := SplitFrontMatter(raw)
 	body = strings.Trim(body, "\n")
 	if body == "" {
 		return Doc{}, fmt.Errorf("importer: %s 正文为空", filename)
@@ -95,6 +75,36 @@ func ParseMD(filename string, raw []byte) (Doc, error) {
 		doc.Digest = firstLine(body)
 	}
 	return doc, nil
+}
+
+// SplitFrontMatter 拆出 front-matter（`key: value`）与剩余正文；正文未做首尾裁剪。
+// 文章与题库共用这一段解析，避免两套 front-matter 规则漂移。
+func SplitFrontMatter(raw []byte) (map[string]string, string) {
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	meta := map[string]string{}
+	body := text
+	if !strings.HasPrefix(text, "---\n") {
+		return meta, body
+	}
+	rest := text[len("---\n"):]
+	idx := strings.Index(rest, "\n---\n")
+	if idx < 0 {
+		return meta, body
+	}
+	block := rest[:idx]
+	body = rest[idx+len("\n---\n"):]
+	for _, line := range strings.Split(block, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		meta[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), `"'`)
+	}
+	return meta, body
 }
 
 func firstLine(body string) string {
