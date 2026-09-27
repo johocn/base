@@ -21,6 +21,8 @@ type Options struct {
 	PairingCode    string
 	// FetchMaxBlobs 是 POST /v1/fetch 单请求的块数上限；<=0 时取 defaultFetchMaxBlobs。
 	FetchMaxBlobs int
+	// ReviewKey 是运营审核密钥（BASE_REVIEW_KEY）；为空表示本节点不开放审核路由。
+	ReviewKey string
 }
 
 // defaultFetchMaxBlobs 与册子 §5.2 的缺省值一致。
@@ -28,11 +30,13 @@ const defaultFetchMaxBlobs = 64
 
 // Server 是节点 HTTP 服务。
 type Server struct {
-	st              *store.Store
-	opt             Options
-	pub             string
-	escrowLimiter   *ipLimiter
-	knownEventTypes map[string]struct{}
+	st               *store.Store
+	opt              Options
+	pub              string
+	escrowLimiter    *ipLimiter
+	eventLimiterByID *ipLimiter
+	eventLimiterByIP *ipLimiter
+	knownEventTypes  map[string]struct{}
 }
 
 // New 构造服务；配置了私钥时同时推导出公钥（用于 /v1/pubkey 与验签）。
@@ -42,8 +46,10 @@ func New(st *store.Store, opt Options) (*Server, error) {
 	}
 	s := &Server{
 		st: st, opt: opt,
-		escrowLimiter:   newIPLimiter(10, 10),
-		knownEventTypes: map[string]struct{}{},
+		escrowLimiter:    newIPLimiter(10, 10),
+		eventLimiterByID: newIPLimiter(eventPerMinutePerID, eventBurstPerID),
+		eventLimiterByIP: newIPLimiter(eventPerMinutePerIP, eventBurstPerIP),
+		knownEventTypes:  copyEventTypes(),
 	}
 	if opt.SignKeyHex != "" {
 		kp, err := protocol.KeyPairFromSeed(opt.SignKeyHex)
@@ -53,6 +59,15 @@ func New(st *store.Store, opt Options) (*Server, error) {
 		s.pub = kp.PubHex
 	}
 	return s, nil
+}
+
+// copyEventTypes 拷一份包级注册表：实例表可被单独增删（测试即如此），全局注册表不被污染。
+func copyEventTypes() map[string]struct{} {
+	m := make(map[string]struct{}, len(eventTypeRegistry))
+	for k := range eventTypeRegistry {
+		m[k] = struct{}{}
+	}
+	return m
 }
 
 // Handler 返回客户端监听用的路由：**只有公开路由**。
@@ -91,6 +106,15 @@ func (s *Server) publicMux() *http.ServeMux {
 	mux.Handle("GET /v1/me", s.requireAuth(s.handleMe))
 	mux.Handle("POST /v1/event", s.requireAuth(s.handleEventPost))
 
+	// 评论公开读（匿名，册子 §4.2）。
+	mux.HandleFunc("GET /v1/comment", s.handleCommentList)
+
+	// 审核路由：**未配置 BASE_REVIEW_KEY 的节点上这两条根本不存在**（册子 §4.3、风险 9）。
+	if s.opt.ReviewKey != "" {
+		mux.Handle("POST /v1/admin/review/fetch", s.requireReviewKey(s.handleReviewFetch))
+		mux.Handle("POST /v1/admin/review/reject", s.requireReviewKey(s.handleReviewReject))
+	}
+
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /a/{item_id}", s.handleArticlePage)
 	return mux
@@ -103,6 +127,7 @@ func (s *Server) mountInternal(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sync", s.handleSync)
 	mux.HandleFunc("POST /v1/fetch", s.handleFetch)
 	mux.HandleFunc("POST /v1/scrub", s.handleScrub)
+	mux.HandleFunc("POST /v1/event-sync", s.handleEventSync)
 }
 
 // withCommon 统一处理 CORS、OPTIONS 预检、panic 兜底与访问日志。

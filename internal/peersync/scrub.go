@@ -31,11 +31,40 @@ func (r ScrubResult) String() string {
 // peers 只用于给 blob_replicas 里的裸 url 补上 TLS 指纹；缺项按裸 url 试（局域网调试）。
 func (c Config) ScrubOnce(ctx context.Context, st *store.Store, peers []Peer, blobIDs []string) (ScrubResult, error) {
 	res := ScrubResult{Unrepaired: []string{}}
+
+	// 反熵护栏 3（册子 §4.5）：墓碑中的块**直接删本地副本**，绝不走「坏块 → 从邻居补齐」——
+	// 否则删除会被补齐拉回，且每轮都白跑一次注定拿不到的 fetch。
+	revoked, err := st.ListRevokedPayloads()
+	if err != nil {
+		return res, err
+	}
+	for cid := range revoked {
+		ok, _, err := st.HasBlob(cid)
+		if err != nil {
+			return res, err
+		}
+		if ok {
+			if err := st.DeleteBlob(cid); err != nil {
+				return res, err
+			}
+		}
+	}
+
 	checked, bad, err := st.VerifyBlobs(blobIDs)
 	if err != nil {
 		return res, err
 	}
 	res.Checked, res.Dropped = checked, len(bad)
+	if len(revoked) > 0 {
+		kept := bad[:0]
+		for _, b := range bad {
+			if _, dead := revoked[b.BlobID]; dead {
+				continue
+			}
+			kept = append(kept, b)
+		}
+		bad = kept
+	}
 	if len(bad) == 0 {
 		return res, nil
 	}
@@ -46,7 +75,7 @@ func (c Config) ScrubOnce(ctx context.Context, st *store.Store, peers []Peer, bl
 	}
 
 	// 归属索引：坏块此刻已被清掉，blobs 表里没有它的归属，只有 media_meta 的声明块序列知道
-	idx, err := st.MediaChunkIndex()
+	idx, err := ownershipIndex(st)
 	if err != nil {
 		return res, err
 	}

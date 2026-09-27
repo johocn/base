@@ -143,6 +143,10 @@ func Open(dataDir string, opts ...Option) (*Store, error) {
 			return nil, fmt.Errorf("store: schema: %w", err)
 		}
 	}
+	if err := migrate(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return st, nil
 }
 

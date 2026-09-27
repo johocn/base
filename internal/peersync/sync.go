@@ -30,6 +30,25 @@ func (r RoundResult) String() string {
 		r.Peer, r.ContentVersion, r.PackID, r.Imported, r.Equal, r.Missing, r.Extra, r.Fetched, r.BadFrames, r.NoReplica)
 }
 
+// ownershipIndex 汇总本地「声明持有」的块归属：内容包的 media_meta 声明块序列 + 评论事件引用的正文块。
+// 少了后者，评论正文块在缓存节点上无归属可挂，永远拉不下来（册子验收 8）。
+func ownershipIndex(st *store.Store) (map[string]store.BlobRef, error) {
+	idx, err := st.MediaChunkIndex()
+	if err != nil {
+		return nil, err
+	}
+	comments, err := st.CommentBlobIndex()
+	if err != nil {
+		return nil, err
+	}
+	for id, ref := range comments {
+		if _, ok := idx[id]; !ok {
+			idx[id] = ref
+		}
+	}
+	return idx, nil
+}
+
 // SyncPeer 对一个 peer 跑完整一轮：包级复制 → 比对 → 补齐 → 副本登记（册子 §7.2）。
 // 顺序不可换：条目视图与块视图必须同一轮内收敛，故先拉包再比块集合。
 func (c Config) SyncPeer(ctx context.Context, st *store.Store, p Peer, now int64) (RoundResult, error) {
@@ -84,7 +103,7 @@ func (c Config) SyncPeer(ctx context.Context, st *store.Store, p Peer, now int64
 	}
 
 	// 归属来自 media_meta 的声明块序列：此刻这些块还没进 blobs 表，只有 media_meta 知道它们属于谁。
-	idx, err := st.MediaChunkIndex()
+	idx, err := ownershipIndex(st)
 	if err != nil {
 		return res, err
 	}
@@ -116,6 +135,12 @@ func (c Config) SyncPeer(ctx context.Context, st *store.Store, p Peer, now int64
 
 	if len(missing) > 0 {
 		fr, err := c.FetchBlobs(ctx, p, missing, func(blobID string, data []byte) error {
+			// 反熵护栏 2（册子 §4.5）：落块前再查一次墓碑——对端可能是尚未收到墓碑的旧节点。
+			if dead, err := st.IsRevokedPayload(blobID); err != nil {
+				return err
+			} else if dead {
+				return nil
+			}
 			ref := idx[blobID]
 			return st.PutBlob(blobID, data, ref.ItemID, ref.Seq)
 		})
@@ -142,8 +167,17 @@ func (c Config) RunOnce(ctx context.Context, st *store.Store, peers []Peer, logf
 			break
 		}
 		pctx, cancel := context.WithTimeout(ctx, 2*requestTimeout)
+		// 事件先于块：事件带来评论正文块的归属，同一轮里块补齐才认得它可以拉（否则要多等一轮）。
+		// 且墓碑先落地，随后 SyncPeer 落块时的护栏 2 立即生效。
+		ev, evErr := c.SyncEvents(pctx, st, p)
 		res, err := c.SyncPeer(pctx, st, p, now)
 		cancel()
+		// 事件同步失败只记日志，不能让块反熵的结论丢失。
+		if evErr != nil {
+			logf("peersync: %s 事件同步失败: %v", p.URL, evErr)
+		} else if ev.Events > 0 || ev.Tombstones > 0 {
+			logf("peersync: %s %s", p.URL, ev)
+		}
 		if err != nil {
 			logf("peersync: %s 本轮失败: %v", p.URL, err)
 			continue

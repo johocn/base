@@ -133,6 +133,13 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 反熵护栏 1（册子 §4.5）：被审核删除的块**不返回**，否则删除会被邻居拉回复活。
+	revoked, err := s.st.ListRevokedPayloads()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	// 先做全量预检：存在性与总字节上限。任一不满足就返回错误，
 	// **绝不返回半截流**（客户端无法区分「对端没有」与「写了一半断了」）。
 	type hit struct {
@@ -147,6 +154,9 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seen[id] = struct{}{}
+		if _, dead := revoked[id]; dead {
+			continue
+		}
 		ok, size, err := s.st.HasBlob(id)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -185,6 +195,103 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		sent++
 	}
 	log.Printf("httpapi: fetch 请求 %d 块，本节点命中 %d 块，发送 %d 帧", len(req.BlobIDs), len(found), sent)
+}
+
+// —— 事件增量同步（册子 §4.4）：只能挂对端监听（mountInternal），
+// 一旦挂到 publicMux 就等于把事件库暴露给任意客户端。
+
+const (
+	eventSyncDefaultLimit = 200
+	eventSyncMaxLimit     = 500
+)
+
+type syncCursorDTO struct {
+	TS int64  `json:"ts"`
+	ID string `json:"id"`
+}
+
+type eventSyncRequest struct {
+	Kind  string        `json:"kind"`
+	After syncCursorDTO `json:"after"`
+	Limit int           `json:"limit"`
+}
+
+type eventSyncItemDTO struct {
+	EventID    string `json:"event_id"`
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	BodyJSON   string `json:"body_json"`
+	CreatedAt  int64  `json:"created_at"`
+	ReceivedAt int64  `json:"received_at"`
+}
+
+type tombstoneItemDTO struct {
+	EventID    string `json:"event_id"`
+	PayloadCID string `json:"payload_cid"`
+	Reason     string `json:"reason"`
+	At         int64  `json:"at"`
+	ReceivedAt int64  `json:"received_at"`
+}
+
+type eventSyncResponse struct {
+	Items []any          `json:"items"`
+	Next  *syncCursorDTO `json:"next"`
+}
+
+// handleEventSync 按 (received_at, event_id) 复合游标增量返回事件或墓碑。
+// 排序固定 received_at ASC, event_id ASC 且严格大于 after；next=null 表示本 kind 已拉完。
+func (s *Server) handleEventSync(w http.ResponseWriter, r *http.Request) {
+	var req eventSyncRequest
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Kind != "event" && req.Kind != "tombstone" {
+		s.writeError(w, http.StatusBadRequest, "event_param_invalid")
+		return
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = eventSyncDefaultLimit
+	}
+	if limit > eventSyncMaxLimit {
+		limit = eventSyncMaxLimit
+	}
+	resp := eventSyncResponse{Items: []any{}}
+	switch req.Kind {
+	case "event":
+		evs, err := s.st.ListEventsAfter(req.After.TS, req.After.ID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, e := range evs {
+			resp.Items = append(resp.Items, eventSyncItemDTO{
+				EventID: e.EventID, ID: e.ID, Type: e.Type, BodyJSON: e.BodyJSON,
+				CreatedAt: e.CreatedAt, ReceivedAt: e.ReceivedAt,
+			})
+		}
+		if len(evs) == limit {
+			last := evs[len(evs)-1]
+			resp.Next = &syncCursorDTO{TS: last.ReceivedAt, ID: last.EventID}
+		}
+	default:
+		ts, err := s.st.ListTombstonesAfter(req.After.TS, req.After.ID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, t := range ts {
+			resp.Items = append(resp.Items, tombstoneItemDTO{
+				EventID: t.EventID, PayloadCID: t.PayloadCID, Reason: t.Reason,
+				At: t.At, ReceivedAt: t.ReceivedAt,
+			})
+		}
+		if len(ts) == limit {
+			last := ts[len(ts)-1]
+			resp.Next = &syncCursorDTO{TS: last.ReceivedAt, ID: last.EventID}
+		}
+	}
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 type scrubRequest struct {

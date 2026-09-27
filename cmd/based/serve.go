@@ -90,6 +90,7 @@ func runServe(args []string) error {
 		FingerprintHex: info.FingerprintHex,
 		PairingCode:    info.PairingCode,
 		FetchMaxBlobs:  *pf.fetchMaxBlobs,
+		ReviewKey:      os.Getenv("BASE_REVIEW_KEY"),
 	})
 	if err != nil {
 		return err
