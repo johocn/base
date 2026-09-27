@@ -1,7 +1,7 @@
 <template>
   <view class="wrap">
     <view class="bar">
-      <text class="title">内容</text>
+      <text class="title">课程</text>
       <button size="mini" :disabled="busy" @click="doSync">{{ busy ? '同步中…' : '同步' }}</button>
     </view>
     <text v-if="tip" class="tip">{{ tip }}</text>
@@ -11,7 +11,6 @@
       <text class="item-title">{{ it.title }}</text>
       <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
     </view>
-    <navigator url="/pages/setting/setting" class="link">节点设置</navigator>
   </view>
 </template>
 
@@ -44,7 +43,7 @@ async function doSync() {
   try {
     const { opts } = await bootstrap();
     if (!opts.nodeBaseUrl) {
-      tip.value = '请先在「节点设置」里填写节点地址与公钥';
+      tip.value = '请先在「我的 → 设置」里填写节点地址与公钥';
       return;
     }
     const res = await syncOnce(opts);
@@ -79,5 +78,4 @@ onShow(() => {
 .hint { color: #888888; }
 .tip { color: #2f855a; font-size: 13px; }
 .error { color: #c53030; font-size: 13px; }
-.link { display: block; margin-top: 20px; color: #2b6cb0; }
 </style>

@@ -1,8 +1,20 @@
 {
   "pages": [
     {
-      "path": "pages/index/index",
-      "style": { "navigationBarTitleText": "内容" }
+      "path": "pages/course/course",
+      "style": { "navigationBarTitleText": "课程" }
+    },
+    {
+      "path": "pages/circle/circle",
+      "style": { "navigationBarTitleText": "圈子" }
+    },
+    {
+      "path": "pages/comment/comment",
+      "style": { "navigationBarTitleText": "评论" }
+    },
+    {
+      "path": "pages/mine/mine",
+      "style": { "navigationBarTitleText": "我的" }
     },
     {
       "path": "pages/article/article",
@@ -13,6 +25,18 @@
       "style": { "navigationBarTitleText": "设置" }
     }
   ],
+  "tabBar": {
+    "color": "#888888",
+    "selectedColor": "#2b6cb0",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/course/course", "text": "课程" },
+      { "pagePath": "pages/circle/circle", "text": "圈子" },
+      { "pagePath": "pages/comment/comment", "text": "评论" },
+      { "pagePath": "pages/mine/mine", "text": "我的" }
+    ]
+  },
   "globalStyle": {
     "navigationBarTextStyle": "black",
     "navigationBarBackgroundColor": "#ffffff",
