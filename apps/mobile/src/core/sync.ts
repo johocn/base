@@ -33,8 +33,39 @@ export type SyncResult =
   | { status: 'noop'; contentVersion: number }
   | { status: 'updated'; contentVersion: number; items: number; blobs: number };
 
+/**
+ * 手写 UTF-8 解码。
+ * App 运行时跑在系统 WebView 里，老版本连 URLSearchParams 都没有（真机已实测报错），
+ * TextDecoder 同样不保证存在，所以这两个 Web API 都不依赖。
+ */
 export function decodeUtf8(data: Uint8Array): string {
-  return new TextDecoder('utf-8').decode(data);
+  let out = '';
+  let i = 0;
+  while (i < data.length) {
+    const b0 = data[i]!;
+    let cp: number;
+    let extra: number;
+    if (b0 < 0x80) {
+      cp = b0;
+      extra = 0;
+    } else if (b0 < 0xe0) {
+      cp = b0 & 0x1f;
+      extra = 1;
+    } else if (b0 < 0xf0) {
+      cp = b0 & 0x0f;
+      extra = 2;
+    } else {
+      cp = b0 & 0x07;
+      extra = 3;
+    }
+    i++;
+    for (let k = 0; k < extra && i < data.length; k++, i++) cp = (cp << 6) | (data[i]! & 0x3f);
+    out +=
+      cp > 0xffff
+        ? String.fromCharCode(0xd800 + ((cp - 0x10000) >> 10), 0xdc00 + ((cp - 0x10000) & 0x3ff))
+        : String.fromCharCode(cp);
+  }
+  return out;
 }
 
 /** 按 cursor 翻页拉目录（契约第 1 条：最后一页 next_cursor 为 null）。 */
@@ -42,10 +73,11 @@ export async function fetchCatalog(o: SyncOptions, since: number): Promise<Catal
   const out: Catalog = { pack_id: '', content_version: 0, items: [], next_cursor: null };
   let cursor: string | null = null;
   for (;;) {
-    const q = new URLSearchParams();
-    if (since > 0) q.set('since', String(since));
-    if (cursor !== null) q.set('cursor', cursor);
-    const qs = q.toString();
+    // 手拼查询串：老 WebView 没有 URLSearchParams（真机报错点就在这）
+    const q: string[] = [];
+    if (since > 0) q.push(`since=${encodeURIComponent(String(since))}`);
+    if (cursor !== null) q.push(`cursor=${encodeURIComponent(cursor)}`);
+    const qs = q.join('&');
     const res = await o.adapters.http.get(`${o.nodeBaseUrl}/v1/catalog${qs ? `?${qs}` : ''}`);
     if (res.status !== 200) throw new Error(`catalog 拉取失败: HTTP ${res.status}`);
     const page = JSON.parse(decodeUtf8(res.body)) as Catalog;

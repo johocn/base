@@ -95,8 +95,10 @@ interface UniGlobal {
   }): void;
 }
 
+/** 老 WebView 没有 globalThis（与缺 URLSearchParams 是同一批老内核），退回 window */
 function g(): Record<string, unknown> {
-  return globalThis as unknown as Record<string, unknown>;
+  if (typeof globalThis !== 'undefined') return globalThis as unknown as Record<string, unknown>;
+  return window as unknown as Record<string, unknown>;
 }
 
 export function plusRuntime(): PlusRuntime | undefined {
@@ -409,6 +411,7 @@ export function base64ToBytes(b64: string): Uint8Array {
 export function toUint8(data: unknown): Uint8Array {
   if (data instanceof Uint8Array) return data;
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  if (typeof data === 'string') return new TextEncoder().encode(data);
+  // 请求固定 responseType: arraybuffer，字符串分支不存在；
+  // 也不用 TextEncoder（老 WebView 同样没有），非二进制一律当空
   return new Uint8Array(0);
 }
