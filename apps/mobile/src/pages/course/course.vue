@@ -2,13 +2,14 @@
   <view class="wrap">
     <view class="bar">
       <text class="title">课程</text>
-      <button size="mini" :disabled="busy" @click="doSync">{{ busy ? '同步中…' : '同步' }}</button>
+      <button size="mini" :disabled="busy || syncBlocked" @click="doSync">{{ busy ? '同步中…' : '同步' }}</button>
     </view>
     <view class="searchbox" @click="openSearch">
       <text class="searchtext">搜索标题与正文</text>
     </view>
     <text v-if="tip" class="tip">{{ tip }}</text>
     <text v-if="error" class="error">{{ error }}</text>
+    <text v-if="syncBlocked" class="error">本地文件不可写，无法同步（设置 → 基座自检 可看原因）</text>
     <text v-if="total === 0 && !error" class="hint">还没有内容，点「同步」从节点拉取。</text>
     <text v-if="articles.length > 0" class="group">文章</text>
     <view v-for="it in articles" :key="it.itemId" class="item" @click="openArticle(it.itemId)">
@@ -30,6 +31,7 @@ import { onShow } from '@dcloudio/uni-app';
 import { syncOnce } from '../../core/sync';
 import type { ItemRow } from '../../core/types';
 import { bootstrap } from '../../platform';
+import { canSync } from '../../core/selfcheck';
 
 const articles = ref<ItemRow[]>([]);
 const quizzes = ref<ItemRow[]>([]);
@@ -37,10 +39,12 @@ const total = computed(() => articles.value.length + quizzes.value.length);
 const error = ref('');
 const tip = ref('');
 const busy = ref(false);
+const syncBlocked = ref(false);
 
 async function load() {
   try {
-    const { repo } = await bootstrap();
+    const { repo, capabilities } = await bootstrap();
+    syncBlocked.value = !canSync(capabilities);
     const all = await repo.listItems();
     articles.value = all.filter((i) => i.type === 'article');
     quizzes.value = all.filter((i) => i.type === 'quiz');

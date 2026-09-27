@@ -31,6 +31,7 @@
       <text v-else-if="!error && list.length > 0 && nextCursor === null" class="hint">没有更多了</text>
     </block>
 
+    <text v-if="blocked" class="blocked">{{ blocked }}</text>
     <view class="composer">
       <input
         v-model="draft"
@@ -59,6 +60,13 @@ import {
 } from '../../core/comment';
 import type { ItemRow } from '../../core/types';
 import { bootstrap } from '../../platform';
+import {
+  UNKNOWN_FLAGS,
+  canPostComment,
+  postBlockedReason,
+  SELFCHECK_TARGET,
+  type CapabilityFlags,
+} from '../../core/selfcheck';
 
 /** 列表项 = 节点返回的投影 + 按 payload_cid 取回的正文（取不到则为占位文案）。 */
 interface Row extends CommentItem {
@@ -77,12 +85,18 @@ const loading = ref(false);
 const sending = ref(false);
 const draft = ref('');
 
-const canSend = computed(() => target.value !== '' && draft.value.trim() !== '' && !sending.value);
+/** 能力标志：启动时只有 cryptoOk 有值，其余 unknown（unknown 不降级） */
+const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
+const blocked = computed(() => postBlockedReason(caps.value));
+const canSend = computed(
+  () => canPostComment(caps.value) && target.value !== '' && draft.value.trim() !== '' && !sending.value,
+);
 
 async function load() {
   try {
     const ctx = await bootstrap();
     opts.value = { adapters: ctx.opts.adapters, repo: ctx.repo, nodeBaseUrl: ctx.opts.nodeBaseUrl };
+    caps.value = ctx.capabilities;
     // 本地已下载内容列表：零网络，用 itemId 作 target_id，与文章页入口同口径
     items.value = await ctx.repo.listItems();
     unconfigured.value = ctx.opts.nodeBaseUrl === '';
@@ -99,7 +113,7 @@ async function refresh() {
   try {
     const page = await listComments(opts.value, { targetId: target.value });
     nextCursor.value = page.nextCursor;
-    list.value = await withText(page.items, opts.value);
+    list.value = await withText(visible(page.items), opts.value);
   } catch (e) {
     error.value = e instanceof CommentError ? e.message : (e as Error).message;
     list.value = [];
@@ -115,12 +129,17 @@ async function loadMore() {
   try {
     const page = await listComments(opts.value, { targetId: target.value, cursor: nextCursor.value });
     nextCursor.value = page.nextCursor;
-    list.value = [...list.value, ...(await withText(page.items, opts.value))];
+    list.value = [...list.value, ...(await withText(visible(page.items), opts.value))];
   } catch (e) {
     error.value = e instanceof CommentError ? e.message : (e as Error).message;
   } finally {
     loading.value = false;
   }
+}
+
+/** 自检事件是探测产物，不是用户内容：任何列表都不展示（selfcheck spec §7）。 */
+function visible(rows: CommentItem[]): CommentItem[] {
+  return rows.filter((r) => r.targetId !== SELFCHECK_TARGET);
 }
 
 /** 逐条取正文：单条失败降级为占位，不让一条坏数据打断整页。 */
@@ -200,6 +219,7 @@ onReachBottom(() => {
 .cmt-text { display: block; margin-top: 4px; font-size: 15px; line-height: 1.6; }
 .hint { display: block; margin-top: 8px; color: #888888; font-size: 13px; }
 .error { display: block; color: #c53030; font-size: 13px; }
+.blocked { display: block; margin-bottom: 8px; color: #c05621; font-size: 13px; }
 .composer { position: fixed; left: 0; right: 0; bottom: 0; display: flex; align-items: center; padding: 8px 12px; background: #ffffff; border-top: 1px solid #eeeeee; }
 .input { flex: 1; height: 36px; margin-right: 8px; padding: 0 10px; background: #f5f5f5; border-radius: 6px; font-size: 14px; }
 </style>
