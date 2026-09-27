@@ -4,25 +4,36 @@
       <text class="title">课程</text>
       <button size="mini" :disabled="busy" @click="doSync">{{ busy ? '同步中…' : '同步' }}</button>
     </view>
+    <view class="searchbox" @click="openSearch">
+      <text class="searchtext">搜索标题与正文</text>
+    </view>
     <text v-if="tip" class="tip">{{ tip }}</text>
     <text v-if="error" class="error">{{ error }}</text>
-    <text v-if="items.length === 0 && !error" class="hint">还没有内容，点「同步」从节点拉取。</text>
-    <view v-for="it in items" :key="it.itemId" class="item" @click="open(it.itemId)">
+    <text v-if="total === 0 && !error" class="hint">还没有内容，点「同步」从节点拉取。</text>
+    <text v-if="articles.length > 0" class="group">文章</text>
+    <view v-for="it in articles" :key="it.itemId" class="item" @click="openArticle(it.itemId)">
       <text class="item-title">{{ it.title }}</text>
       <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
+    </view>
+    <text v-if="quizzes.length > 0" class="group">答题</text>
+    <view v-for="it in quizzes" :key="it.itemId" class="item" @click="openQuiz(it.itemId)">
+      <text class="item-title">{{ it.title }}</text>
+      <text class="meta">{{ it.itemId }}</text>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
 import { syncOnce } from '../../core/sync';
 import type { ItemRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 
-const items = ref<ItemRow[]>([]);
+const articles = ref<ItemRow[]>([]);
+const quizzes = ref<ItemRow[]>([]);
+const total = computed(() => articles.value.length + quizzes.value.length);
 const error = ref('');
 const tip = ref('');
 const busy = ref(false);
@@ -30,7 +41,9 @@ const busy = ref(false);
 async function load() {
   try {
     const { repo } = await bootstrap();
-    items.value = (await repo.listItems()).filter((i) => i.type === 'article');
+    const all = await repo.listItems();
+    articles.value = all.filter((i) => i.type === 'article');
+    quizzes.value = all.filter((i) => i.type === 'quiz');
     error.value = '';
   } catch (e) {
     error.value = (e as Error).message;
@@ -59,8 +72,16 @@ async function doSync() {
   }
 }
 
-function open(itemId: string) {
+function openSearch() {
+  uni.navigateTo({ url: '/pages/search/search' });
+}
+
+function openArticle(itemId: string) {
   uni.navigateTo({ url: `/pages/article/article?itemId=${encodeURIComponent(itemId)}` });
+}
+
+function openQuiz(itemId: string) {
+  uni.navigateTo({ url: `/pages/quiz/quiz?itemId=${encodeURIComponent(itemId)}` });
 }
 
 onShow(() => {
@@ -78,4 +99,7 @@ onShow(() => {
 .hint { color: #888888; }
 .tip { color: #2f855a; font-size: 13px; }
 .error { color: #c53030; font-size: 13px; }
+.searchbox { padding: 10px 12px; margin: 8px 0 12px; background: #f5f5f5; border-radius: 6px; }
+.searchtext { color: #999999; font-size: 14px; }
+.group { display: block; margin: 16px 0 4px; color: #888888; font-size: 13px; }
 </style>
