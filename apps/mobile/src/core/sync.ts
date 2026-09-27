@@ -108,6 +108,21 @@ async function readPackArticles(conn: SqliteConnection): Promise<ArticleRow[]> {
 }
 
 /**
+ * 落盘自证：pack 是二进制 SQLite，真机上 plus.io 的 createWriter 一旦少写或写空，
+ * 后面 plus.sqlite 打开它只会得到空库/空表而不会报错，症状就是「标题有、正文没有」。
+ * 写完立刻回读比对字节数与摘要，把这种静默损坏挡在落库之前。
+ */
+async function assertPackOnDisk(o: SyncOptions, path: string, expected: Uint8Array): Promise<void> {
+  const back = await o.adapters.fs.readFile(path);
+  if (back.length !== expected.length) {
+    throw new Error(`pack 落盘字节数不符：期望 ${expected.length}，实际 ${back.length}（${path}）`);
+  }
+  if (sha256Hex(back) !== sha256Hex(expected)) {
+    throw new Error(`pack 落盘内容摘要不符（${path}）`);
+  }
+}
+
+/**
  * 同步一轮。顺序即不变量：先验签 → 再校验 pack → 再拉块 → 最后一次性落库。
  * 任何一步失败都不会在本地留下半截数据。
  */
@@ -131,6 +146,7 @@ export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
   if (packRes.status !== 200) throw new Error(`pack 拉取失败: HTTP ${packRes.status}`);
   const packPath = `${o.workDir}/pack-${cat.pack_id}.sqlite`;
   await o.adapters.fs.writeFile(packPath, packRes.body);
+  await assertPackOnDisk(o, packPath, packRes.body);
 
   const conn = await o.adapters.packReader.open(packPath);
   let articles: ArticleRow[];
@@ -147,6 +163,12 @@ export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
     if (signed === undefined || a.contentHash !== signed || sha256Hex(utf8(a.bodyMd)) !== signed) {
       throw new Error(`pack 行级 hash 不符: ${a.itemId}`);
     }
+  }
+  // 行数守卫：plus.sqlite 打开一个「不存在/空的」库时会新建空库，查询只会得到空数组，
+  // 于是整轮同步会「成功」却一条正文都没有。拿已签名的 manifest 声明数对账，宁可报错也不静默丢正文。
+  const declared = man.entries.filter((e) => e.sqlite_table === 'articles').length;
+  if (articles.length < declared) {
+    throw new Error(`pack 正文行数不符：manifest 声明 ${declared} 条，pack 读出 ${articles.length} 条（${packPath}）`);
   }
 
   const now = new Date().toISOString();

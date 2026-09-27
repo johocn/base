@@ -60,15 +60,24 @@ async function save() {
   }
 }
 
-// 能力诊断：真机验收第一步，把平台能力有没有一次看清（Task 20）
-function probe() {
+// 能力诊断：真机验收第一步，把平台能力与「本地到底存了多少正文」一次看清（Task 20）
+async function probe() {
   const p = plusRuntime();
-  probeLines.value = [
+  const lines = [
     `plus 运行时：${p ? '有' : '无'}`,
     `plus.sqlite：${p?.sqlite ? '有' : '无'}`,
     `plus.io 文件接口：${p?.io.resolveLocalFileSystemURL ? '有' : '无'}`,
     `_doc 绝对路径：${p ? p.io.convertLocalFileSystemURL('_doc') : '-'}`,
   ];
+  try {
+    const { repo, db, opts } = await bootstrap();
+    lines.push(`本地 items 条目：${(await repo.listItems()).length}`);
+    lines.push(`本地 articles 正文：${Number((await db.select('SELECT count(*) AS n FROM articles'))[0]?.n ?? 0)}`);
+    lines.push(`工作目录：${opts.workDir}`);
+  } catch (e) {
+    lines.push(`库存量查询失败：${(e as Error).message}`);
+  }
+  probeLines.value = lines;
 }
 </script>
 

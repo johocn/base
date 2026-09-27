@@ -26,7 +26,8 @@ onLoad(async (query) => {
   const itemId = String((query as Record<string, string> | undefined)?.itemId ?? '');
   try {
     const { repo } = await bootstrap();
-    const row = await repo.getArticle(itemId);
+    const alt = decodedId(itemId);
+    const row = (await repo.getArticle(itemId)) ?? (alt === itemId ? null : await repo.getArticle(alt));
     if (!row) {
       error.value = '本地没有这篇正文，请返回先同步';
       return;
@@ -38,13 +39,22 @@ onLoad(async (query) => {
       .map((s) => s.trim())
       .filter((s) => s !== '');
 
-    const slug = itemId.replace(/^article:/, '');
+    const slug = row.itemId.replace(/^article:/, '');
     const path = await repo.findBlobPathByItem(`cover:${slug}`);
     coverPath.value = path ? (path.startsWith('file://') ? path : `file://${path}`) : '';
   } catch (e) {
     error.value = (e as Error).message;
   }
 });
+
+/** 页面间传参在个别机型上会保留百分号编码（itemId 含 `:` 会变成 %3A），按原样查不到就按解码后再查 */
+function decodedId(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
 </script>
 
 <style>

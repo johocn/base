@@ -13,7 +13,8 @@ import type {
 } from './adapter';
 
 interface PlusSqlite {
-  isOpenDatabase(name: string): boolean;
+  /** 官方签名是 {name,path} 对象（plus.d.ts PlusSqliteIsOpenDatabaseOptions） */
+  isOpenDatabase(o: { name: string; path: string }): boolean;
   openDatabase(o: { name: string; path: string; success: () => void; fail: (e: unknown) => void }): void;
   closeDatabase(o: { name: string; success: () => void; fail: (e: unknown) => void }): void;
   selectSql(o: {
@@ -124,10 +125,18 @@ const LOCAL_DB = 'base';
 const PACK_DB = 'pack';
 
 class PlusConn implements SqliteConnection {
+  private path = '';
+
   constructor(private readonly p: PlusRuntime, private readonly name: string) {}
 
+  /** 传裸字符串时 Android 端恒返回 false，会把「已打开的库」再 open 一次（走 fail），故必须带 path */
+  private isOpen(): boolean {
+    return this.path !== '' && this.p.sqlite.isOpenDatabase({ name: this.name, path: this.path });
+  }
+
   async open(path: string): Promise<void> {
-    if (this.p.sqlite.isOpenDatabase(this.name)) await this.close();
+    this.path = path;
+    if (this.isOpen()) await this.close();
     await new Promise<void>((resolve, reject) => {
       this.p.sqlite.openDatabase({
         name: this.name,
@@ -139,7 +148,7 @@ class PlusConn implements SqliteConnection {
   }
 
   async close(): Promise<void> {
-    if (!this.p.sqlite.isOpenDatabase(this.name)) return;
+    if (!this.isOpen()) return;
     await new Promise<void>((resolve, reject) => {
       this.p.sqlite.closeDatabase({
         name: this.name,
