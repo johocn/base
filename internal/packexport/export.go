@@ -92,7 +92,7 @@ func Export(st *store.Store, opt Options) (Result, error) {
 		if it.DistClass != "public" {
 			return Result{}, fmt.Errorf("packexport: 条目 %s dist_class=%s，受控内容不得进入内容包", it.ItemID, it.DistClass)
 		}
-		if it.SQLiteTable != "articles" && it.SQLiteTable != "media_meta" {
+		if it.SQLiteTable != "articles" && it.SQLiteTable != "media_meta" && it.SQLiteTable != "quizzes" {
 			return Result{}, fmt.Errorf("packexport: 条目 %s 的 sqlite_table=%s 在 P0 未支持导出", it.ItemID, it.SQLiteTable)
 		}
 	}
@@ -213,12 +213,22 @@ func writePackSQLite(path, packID string, version int64, merkle string, entries 
 		return err
 	}
 	articleIDs := []string{}
+	quizIDs := []string{}
 	for _, e := range entries {
-		if e.SQLiteTable == "articles" {
+		switch e.SQLiteTable {
+		case "articles":
 			articleIDs = append(articleIDs, e.ItemID)
+		case "quizzes":
+			quizIDs = append(quizIDs, e.ItemID)
 		}
 	}
 	articles, err := st.ListArticles(articleIDs)
+	if err != nil {
+		_ = tx.Rollback()
+		_ = db.Close()
+		return err
+	}
+	quizzes, err := st.ListQuizzes(quizIDs)
 	if err != nil {
 		_ = tx.Rollback()
 		_ = db.Close()
@@ -237,6 +247,19 @@ func writePackSQLite(path, packID string, version int64, merkle string, entries 
 			if _, err := tx.Exec(`INSERT INTO articles(item_id,title,digest,published_at,tags_json,body_md,content_hash,source_rev)
 				VALUES(?,?,?,?,?,?,?,?)`,
 				a.ItemID, a.Title, a.Digest, a.PublishedAt, a.TagsJSON, a.BodyMD, a.ContentHash, a.SourceRev); err != nil {
+				_ = tx.Rollback()
+				_ = db.Close()
+				return err
+			}
+		case "quizzes":
+			q, ok := quizzes[e.ItemID]
+			if !ok {
+				_ = tx.Rollback()
+				_ = db.Close()
+				return fmt.Errorf("packexport: 条目 %s 在 quizzes 表缺失", e.ItemID)
+			}
+			if _, err := tx.Exec(`INSERT INTO quizzes(item_id,question_json,content_hash) VALUES(?,?,?)`,
+				q.ItemID, q.QuestionJSON, q.ContentHash); err != nil {
 				_ = tx.Rollback()
 				_ = db.Close()
 				return err
