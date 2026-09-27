@@ -74,8 +74,7 @@ onLoad(async (query) => {
       .map((s) => s.trim())
       .filter((s) => s !== '');
 
-    const slug = row.itemId.replace(/^article:/, '');
-    const path = await repo.findBlobPathByItem(`cover:${slug}`);
+    const path = await repo.findBlobPathByItem(`${row.itemId}/cover`);
     coverPath.value = path ? (path.startsWith('file://') ? path : `file://${path}`) : '';
 
     theme.value = normalizeTheme(await repo.getConfig('reader_theme'));

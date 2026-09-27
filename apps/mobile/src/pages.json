@@ -17,6 +17,10 @@
       "style": { "navigationBarTitleText": "我的" }
     },
     {
+      "path": "pages/course/detail",
+      "style": { "navigationBarTitleText": "课程详情" }
+    },
+    {
       "path": "pages/article/article",
       "style": { "navigationBarTitleText": "文章" }
     },

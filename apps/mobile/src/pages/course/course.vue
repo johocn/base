@@ -11,15 +11,15 @@
     <text v-if="error" class="error">{{ error }}</text>
     <text v-if="syncBlocked" class="error">本地文件不可写，无法同步（设置 → 基座自检 可看原因）</text>
     <text v-if="total === 0 && !error" class="hint">还没有内容，点「同步」从节点拉取。</text>
-    <text v-if="articles.length > 0" class="group">文章</text>
-    <view v-for="it in articles" :key="it.itemId" class="item" @click="openArticle(it.itemId)">
+    <text v-if="courses.length > 0" class="group">课程</text>
+    <view v-for="it in courses" :key="it.itemId" class="item" @click="openCourse(it.itemId)">
       <text class="item-title">{{ it.title }}</text>
       <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
     </view>
-    <text v-if="quizzes.length > 0" class="group">答题</text>
-    <view v-for="it in quizzes" :key="it.itemId" class="item" @click="openQuiz(it.itemId)">
+    <text v-if="ungrouped.length > 0" class="group">未归类</text>
+    <view v-for="it in ungrouped" :key="it.itemId" class="item" @click="openArticle(it.itemId)">
       <text class="item-title">{{ it.title }}</text>
-      <text class="meta">{{ it.itemId }}</text>
+      <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
     </view>
   </view>
 </template>
@@ -29,13 +29,14 @@ import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
 import { syncOnce } from '../../core/sync';
+import { splitCourses } from '../../core/course-tree';
 import type { ItemRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 import { canSync } from '../../core/selfcheck';
 
-const articles = ref<ItemRow[]>([]);
-const quizzes = ref<ItemRow[]>([]);
-const total = computed(() => articles.value.length + quizzes.value.length);
+const courses = ref<ItemRow[]>([]);
+const ungrouped = ref<ItemRow[]>([]);
+const total = computed(() => courses.value.length + ungrouped.value.length);
 const error = ref('');
 const tip = ref('');
 const busy = ref(false);
@@ -46,8 +47,10 @@ async function load() {
     const { repo, capabilities } = await bootstrap();
     syncBlocked.value = !canSync(capabilities);
     const all = await repo.listItems();
-    articles.value = all.filter((i) => i.type === 'article');
-    quizzes.value = all.filter((i) => i.type === 'quiz');
+    const active = all.filter((i) => i.state !== 'removed');
+    const tree = splitCourses(active);
+    courses.value = tree.courses;
+    ungrouped.value = tree.ungrouped;
     error.value = '';
   } catch (e) {
     error.value = (e as Error).message;
@@ -84,8 +87,8 @@ function openArticle(itemId: string) {
   uni.navigateTo({ url: `/pages/article/article?itemId=${encodeURIComponent(itemId)}` });
 }
 
-function openQuiz(itemId: string) {
-  uni.navigateTo({ url: `/pages/quiz/quiz?itemId=${encodeURIComponent(itemId)}` });
+function openCourse(itemId: string) {
+  uni.navigateTo({ url: `/pages/course/detail?courseId=${encodeURIComponent(itemId)}` });
 }
 
 onShow(() => {
