@@ -3973,6 +3973,17 @@ git commit -m "chore(mobile): 版本递增到 0.2.0（四 tab + 答题 + 升级�
 
 10. **T18 三处收敛（提交 `322c090`）**：①计划把 `import { decodeUtf8 } from './sync'` 等写在 `update.ts` **文件末尾**，那是错的，已合并到文件顶部的 import 块；②`PlusRuntime` 只补**一个**字段 `runtime?: { version?: string; openURL?: (url: string) => void }`，避免计划里 `openApkUrl` 那两处 `as unknown as` 强制转换；③把设置页与 `App.vue` 里各写一份的「拉取验签 + 打开下载链接 + 弹窗」抽成 `fetchReleaseDoc` / `openApkUrl` / `promptUpdate` 三个函数放在 `update.ts`，两处调用点复用——否则计划原文会出现「设置页用浏览器打开、App.vue 复制到剪贴板」的行为漂移（计划自己标注的 `uni.navigateTo(...) || openApkUrl(...)` 错写法也已按注改为直接调 `openApkUrl`）。`uni` 全局有 `@dcloudio/types` 的 `declare const uni`，故这三个函数可以留在 `core/` 而不需要挪回页面。
 
+11. **T19 Step 3 的部署实况与计划假设不符，已按实际执行**：
+    - **主机**：分发节点是 `ssh me`（`HostName 118.190.217.242`，root）；`ssh joho` 是另一台机器（39.97.54.5，Strapi 那台），与分发无关。
+    - **同机双节点**：源节点 `base.service`（`/opt/base`，客户端监听 **:443 TLS**，对端 :8081）+ 缓存节点 `base-cache.service`（`/opt/base-cache`，客户端监听 `127.0.0.1:8083` **明文**，对端 127.0.0.1:8082）。两个单元 `ExecStart` 都指向 `/opt/base/based`；`/opt/base-cache/based` 是历史遗留副本，替换时需一并覆盖，否则哪条路径生效取决于单元文件，容易只换一半。
+    - **nginx :80**：`location /` → `http://127.0.0.1:8083`（**缓存节点**）；`location /dl/` → `127.0.0.1:8080`（`appdl.service`，python3 静态服务，docroot `/opt/appdl`）。因此 `release.json` 必须落在**缓存节点**（`/opt/base-cache/data/release.json`）——写进源节点 `/opt/base/data` 客户端永远读不到。计划 Step 3 的 `based release` 默认输出 `<data>/release.json`，本次用 `-out` 显式指到缓存节点数据目录。
+    - **Step 3 漏了「部署新二进制」这一步**：`GET /v1/release` 是 T17 才新增的路由，而节点上跑的是 2026-09-26 构建的旧二进制——它在 `/v1/release` 上返回 Go 默认的 `404 page not found`（无 CORS、`text/plain`），也就是「升级通道静默失效」，光签发 release.json 不会生效。已按 `scripts/build-release.ps1` 的口径交叉编译 linux/amd64（`CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=0.3.0"`，产物 14303392 字节），备份为 `based.bak-20260926` 后替换两处二进制、`systemctl daemon-reload` 并按 `base.service` → `base-cache.service` 顺序重启。上线判据是 `/v1/release` 返回**我们的** `{"error":"本节点无升级信息"}`（带 CORS + `application/json`），而不是 Go 的裸 404。
+    - **APK 与落地页**：APK 用固定名放 `/opt/appdl/base-0.3.0.apk`（`/dl/base-0.3.0.apk`，与签名文档里的 `apk_url` 一致），`/opt/appdl/index.html` 同步从 0.1.0 改为指向它；0.1.0 的 APK 与页面内容保留不删。
+    - **`-min-version-name` 取 0.2.0**：0.1.0 装机 → 强制更新；0.2.0 → 可取消；0.3.0 → 已是最新。这一条进签名载荷，改口径要重签。
+    - **验证签名的落盘方式（踩坑）**：不要用 PowerShell 5.1 的 `Out-File -Encoding ascii|utf8` 保存从 HTTP 抓下来的 release 文档——`ascii` 会把 `notes` 里的中文写成 `?`，`utf8` 会加 BOM，两种都会让 TS 侧 `verifyRelease` 假阴性（本次先误判成 Go/TS 签名互操作有 bug，用 ASCII-notes 与中文-notes 各签一份对照才定位到是落盘环节）。正确做法：`ssh ... "curl -s <url> | base64 -w0"` 传输，本地 `[Convert]::FromBase64String` 写字节，再喂给客户端验签器。
+    - **实测结果**：`/v1/catalog` 200、`/v1/manifest/{pack_id}` 200、`/v1/pack/{pack_id}` 200（45056 字节）、`/v1/release` 200 且 TS 侧验签通过（公钥=App 预置的 `48c33db9…24f4`）、`/dl/base-0.3.0.apk` 200 且 `size_download=27363355` 与签名文档 `apk_size`/`apk_sha256` 一致。APK 内嵌 `version.name=0.3.0`/`code=3`、tabBar 为课程/圈子/评论/我的，均与 spec §3 一致。
+    - `/v1/pubkey` 在客户端侧返回 404 `{"error":"本节点未配置签名密钥（只读分发节点）"}` 是缓存节点的**正常**行为（客户端监听到的就是缓存节点），不是回归。
+
 ## 明确不做的（spec §1，任何实现都不得顺手加）
 
 不做评论/圈子的真实功能、不做 App 侧 markdown 解析、不做答题结果上报、不做滚动位置恢复、不做全站深色主题、不做 FTS5、不做 wgt 热更新、不做 App 内下载 APK 与 `plus.runtime.install`、不做账号/设备身份上行、不做 tabBar 图标、不做节点侧分发与反熵改动（除 §6.3 导出增一类表与 §8.3 新增一个只读接口）。
