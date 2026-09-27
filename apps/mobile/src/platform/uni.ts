@@ -81,6 +81,8 @@ export interface PlusRuntime {
     FileReader: new () => PlusReader;
   };
   sqlite: PlusSqlite;
+  /** App 运行时信息（plus.runtime）：version 用于升级判定，openURL 用于打开下载链接 */
+  runtime?: { version?: string; openURL?: (url: string) => void };
 }
 
 interface UniGlobal {

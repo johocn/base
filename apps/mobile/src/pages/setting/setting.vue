@@ -15,6 +15,12 @@
 
     <button size="mini" class="probe" @click="probe">能力诊断</button>
     <text v-for="(line, i) in probeLines" :key="i" class="meta">{{ line }}</text>
+
+    <view class="ver">
+      <text class="meta">当前版本：{{ localVersion }}</text>
+      <button size="mini" @click="checkUpdate">检查更新</button>
+      <text v-if="updateLine" class="meta">{{ updateLine }}</text>
+    </view>
   </view>
 </template>
 
@@ -24,6 +30,7 @@ import { onShow } from '@dcloudio/uni-app';
 
 import { bootstrap, updateNodeBaseUrl } from '../../platform';
 import { plusRuntime } from '../../platform/uni';
+import { decideUpdate, fetchReleaseDoc, promptUpdate } from '../../core/update';
 
 // 生产默认值：只读分发节点（明文 :80）+ 源节点签发方公钥（based pubkey -issuer base-node-1）。
 // 仅在本地未保存过配置时预填，保存后以本地配置为准；公钥是公开值，不是私钥。
@@ -35,6 +42,8 @@ const pubkey = ref('');
 const tip = ref('');
 const error = ref('');
 const probeLines = ref<string[]>([]);
+const localVersion = ref(String(plusRuntime()?.runtime?.version ?? '0.0.0'));
+const updateLine = ref('');
 
 onShow(async () => {
   try {
@@ -79,6 +88,31 @@ async function probe() {
   }
   probeLines.value = lines;
 }
+
+/**
+ * 升级通道的任何失败都静默：节点是明文 HTTP，不能让它成为可被用来 DoS 客户端的入口（spec §8.4 红线）。
+ * 只有「已是最新」写结果行，其余情形不写任何 error。
+ */
+async function checkUpdate() {
+  updateLine.value = '';
+  try {
+    const { repo, opts } = await bootstrap();
+    if (!opts.nodeBaseUrl) return;
+    const pubHex = await repo.getConfig('pubkey_hex');
+    if (!pubHex) return;
+    const doc = await fetchReleaseDoc(opts.adapters.http, opts.nodeBaseUrl, pubHex);
+    if (!doc) return;
+    const decision = decideUpdate(localVersion.value, doc.payload);
+    if (decision === 'latest') {
+      updateLine.value = `已是最新 ${localVersion.value}`;
+      return;
+    }
+    if (decision === 'ignore') return;
+    promptUpdate(doc, decision);
+  } catch {
+    // 静默：不把任何升级相关异常写进 error.value
+  }
+}
 </script>
 
 <style>
@@ -91,4 +125,5 @@ async function probe() {
 .error { display: block; color: #c53030; font-size: 13px; margin-top: 8px; }
 .meta { display: block; color: #666666; font-size: 12px; margin-top: 4px; }
 .probe { margin-top: 24px; }
+.ver { margin-top: 24px; }
 </style>
