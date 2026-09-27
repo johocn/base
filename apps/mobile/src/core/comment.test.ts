@@ -17,8 +17,10 @@ import {
   CommentError,
   ensureRegistered,
   fetchCommentText,
+  flushPending,
   listComments,
   postComment,
+  sendComment,
   setPendingTarget,
   takePendingTarget,
   type CommentOptions,
@@ -37,6 +39,23 @@ function fixture() {
   const adapters = fakeAdapters(http, new MemoryFs(), new FakePackReader());
   const o: CommentOptions = { adapters, repo, nodeBaseUrl: BASE };
   return { http, repo, o };
+}
+
+/**
+ * 可开关的「网络不可达」模拟：只让 `POST /v1/event` 抛错，其余请求照常走路由。
+ * `offline=true` 时失败尝试也会记进 `posted`，便于断言「只试了一条」（用例 7）。
+ */
+function gatePost(http: FakeHttp): { offline: boolean } {
+  const real = http.post.bind(http);
+  const state = { offline: true };
+  http.post = async (url, body, headers) => {
+    if (state.offline && url.endsWith('/v1/event')) {
+      http.posted.push({ url, body, headers: headers ?? {} });
+      throw new Error('断网');
+    }
+    return real(url, body, headers);
+  };
+  return state;
 }
 
 /** 从登记请求体里取出节点侧记录的公钥（供本地验签断言）。 */
@@ -206,17 +225,18 @@ describe('comment', () => {
     expect(err.code).toBe('server');
     expect(err.message).toBe('提交失败（HTTP 500）');
 
-    // 登记时断网
+    // 登记时断网：不再抛错，改为离线入队（本册 §4.2）
     const off = fixture();
     off.o.adapters.http = {
       get: () => Promise.reject(new Error('断网')),
       post: () => Promise.reject(new Error('断网')),
     };
-    const netErr = (await postComment(off.o, { targetId: 'article/a', text: 'x' }).catch((e: unknown) => e)) as CommentError;
-    expect(netErr.code).toBe('network');
-    expect(netErr.message).toBe('无法连接节点，请稍后重试');
+    const offRes = await postComment(off.o, { targetId: 'article/a', text: 'x' });
+    expect(offRes.queued).toBe(true);
+    expect(offRes.payloadCid).toBeNull();
+    expect(await off.repo.listCommentOut()).toHaveLength(1);
 
-    // 列表断网
+    // 列表断网仍抛 CommentError（读取没有离线兜底）
     const listErr = (await listComments(off.o).catch((e: unknown) => e)) as CommentError;
     expect(listErr.code).toBe('network');
   });
@@ -226,5 +246,84 @@ describe('comment', () => {
     setPendingTarget('article/hello');
     expect(takePendingTarget()).toBe('article/hello');
     expect(takePendingTarget()).toBeNull();
+  });
+});
+
+describe('离线发表入队', () => {
+  it('用例 1：离线发表入队，字段与入参一致', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    const gate = gatePost(http);
+    gate.offline = true;
+
+    const res = await postComment(o, { targetId: 'article/a', text: '离线写的', replyTo: 'a'.repeat(32) });
+
+    expect(res.queued).toBe(true);
+    expect(res.payloadCid).toBeNull();
+    const rows = await repo.listCommentOut();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.targetId).toBe('article/a');
+    expect(rows[0]!.text).toBe('离线写的');
+    expect(rows[0]!.replyTo).toBe('a'.repeat(32));
+    expect(rows[0]!.state).toBe('pending');
+    expect(rows[0]!.reason).toBeNull();
+    expect(rows[0]!.eventId).toHaveLength(32);
+    // wire 是已签名的完整请求体：内容签名与 event_id 都在里面
+    expect(rows[0]!.wire).toContain('"type":"comment.v1"');
+    expect(rows[0]!.wire).toContain('"sig"');
+    expect(JSON.parse(rows[0]!.wire).event_id).toBe(rows[0]!.eventId);
+  });
+
+  it('用例 2：在线发表不入队', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/event`, json({ payload_cid: 'cid1' }));
+    const gate = gatePost(http);
+    gate.offline = false;
+
+    const res = await postComment(o, { targetId: 'article/a', text: '在线的' });
+
+    expect(res.queued).toBe(false);
+    expect(res.payloadCid).toBe('cid1');
+    expect(await repo.listCommentOut()).toEqual([]);
+  });
+
+  it('用例 3：节点明确拒绝不入队（原文留给页面原地重试）', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/event`, { status: 500, body: utf8('boom') });
+    const gate = gatePost(http);
+    gate.offline = false;
+
+    const err = (await postComment(o, { targetId: 'article/a', text: 'x' }).catch((e: unknown) => e)) as CommentError;
+
+    expect(err).toBeInstanceOf(CommentError);
+    expect(err.code).toBe('server');
+    expect(await repo.listCommentOut()).toEqual([]);
+  });
+
+  it('用例 4：未配置节点不入队', async () => {
+    const { repo, o } = fixture();
+    const err = (await postComment({ ...o, nodeBaseUrl: '' }, { targetId: 'article/a', text: 'x' }).catch(
+      (e: unknown) => e,
+    )) as CommentError;
+
+    expect(err).toBeInstanceOf(CommentError);
+    expect(err.code).toBe('client');
+    expect(await repo.listCommentOut()).toEqual([]);
+  });
+
+  it('sendComment 是纯发送：断网抛 network，绝不入队（探针与补发共用它）', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    const gate = gatePost(http);
+    gate.offline = true;
+
+    const err = (await sendComment(o, { targetId: 'article/a', text: 'x' }).catch((e: unknown) => e)) as CommentError;
+
+    expect(err).toBeInstanceOf(CommentError);
+    expect(err.code).toBe('network');
+    expect(err.message).toBe('无法连接节点，请稍后重试');
+    expect(await repo.listCommentOut()).toEqual([]);
   });
 });

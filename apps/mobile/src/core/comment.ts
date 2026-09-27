@@ -44,6 +44,30 @@ export interface CommentList {
 
 export type CommentErrorCode = 'unregistered' | 'rate_limited' | 'revoked' | 'rejected' | 'network' | 'server' | 'client';
 
+/** 一条评论的入参。`wire` / `eventId` 只在补发时传入（逐字节重放冻结的请求体，本册 §3.1）。 */
+export interface CommentInput {
+  targetId: string;
+  text: string;
+  replyTo?: string;
+  wire?: string;
+  eventId?: string;
+}
+
+/** `postComment` 的结果。`queued=true` 即已落本地待发队列（本册 §4.2）。 */
+export interface PostResult {
+  eventId: string;
+  payloadCid: string | null;
+  queued: boolean;
+}
+
+/** `flushPending` 的结果。**只经返回值体现，绝不抛错**（本册 §4.3）。 */
+export interface FlushResult {
+  sent: number;
+  failed: number;
+  remaining: number;
+  error: string;
+}
+
 /** 发表/读取失败的用户可读错误（册子 §6.4 的映射结果）。 */
 export class CommentError extends Error {
   constructor(
@@ -149,33 +173,51 @@ export async function fetchCommentText(o: CommentOptions, payloadCid: string): P
   }
 }
 
-/** 发表一条评论：内容签名（归属）+ 请求签名头（准入）都要带。 */
-export async function postComment(
+/**
+ * 本地构造一条评论事件：`event_id` / `created_at` / 内容签名都在这里冻结。
+ * `sig` 覆盖 `canonical({event_id,type,created_at,body})`，与请求头无关：事件搬到别的节点仍可独立验签。
+ */
+function buildCommentWire(ident: Identity, input: CommentInput): { eventId: string; wire: string } {
+  const eventId = bytesToHex(randomBytes(16));
+  const inner: Json = { target_id: input.targetId, text: input.text };
+  if (input.replyTo) (inner as Record<string, Json>).reply_to = input.replyTo;
+  const payload: Json = { event_id: eventId, type: 'comment.v1', created_at: Date.now(), body: inner };
+  const sig = sign(ident.seedHex, utf8(canonicalize(payload)));
+  return { eventId, wire: JSON.stringify({ ...(payload as Record<string, Json>), sig }) };
+}
+
+/**
+ * 直接发送一条评论：登记 →（构造）→ 带签名头 POST `/v1/event`。失败抛 `CommentError`，**不落本地队列**。
+ *
+ * 传 `input.wire` 即逐字节重放该请求体（补发路径）：内容签名与 `event_id` 冻结在 wire 内，
+ * 请求签名头每轮新算（`ts` 本就一次性、`nonce` 会被节点去重）。
+ * 本函数是**补发与自检探针共用的唯一发送入口**。
+ */
+export async function sendComment(
   o: CommentOptions,
-  input: { targetId: string; text: string; replyTo?: string },
+  input: CommentInput,
 ): Promise<{ eventId: string; payloadCid: string }> {
   const ident = await ensureRegistered(o);
 
-  const inner: Json = { target_id: input.targetId, text: input.text };
-  if (input.replyTo) (inner as Record<string, Json>).reply_to = input.replyTo;
-  // 事件 id、内容签名、请求签名头都在本地算：任一步失败都要给出真实原因
-  const { eventId, wire, headers } = localStep('构造请求', () => {
-    const eid = bytesToHex(randomBytes(16));
-    const payload: Json = {
-      event_id: eid,
-      type: 'comment.v1',
-      created_at: Date.now(),
-      body: inner,
-    };
-    // sig 覆盖 canonical({event_id,type,created_at,body})，与请求头无关：事件搬到别的节点仍可独立验签。
-    const sig = sign(ident.seedHex, utf8(canonicalize(payload)));
-    const w = utf8(JSON.stringify({ ...(payload as Record<string, Json>), sig }));
-    return { eventId: eid, wire: w, headers: signRequestHeaders(ident, { method: 'POST', path: '/v1/event', body: w }) };
-  });
+  let eventId: string;
+  let wire: string;
+  if (input.wire !== undefined && input.eventId !== undefined) {
+    eventId = input.eventId;
+    wire = input.wire;
+  } else {
+    const built = localStep('构造请求', () => buildCommentWire(ident, input));
+    eventId = built.eventId;
+    wire = built.wire;
+  }
+
+  const bytes = localStep('编码请求', () => utf8(wire));
+  const headers = localStep('签名请求', () =>
+    signRequestHeaders(ident, { method: 'POST', path: '/v1/event', body: bytes }),
+  );
 
   let res;
   try {
-    res = await o.adapters.http.post(`${o.nodeBaseUrl}/v1/event`, wire, {
+    res = await o.adapters.http.post(`${o.nodeBaseUrl}/v1/event`, bytes, {
       'Content-Type': 'application/json',
       ...headers,
     });
@@ -183,13 +225,43 @@ export async function postComment(
     throw new CommentError('network', '无法连接节点，请稍后重试');
   }
   if (res.status === 200) {
-    const out = localStep(
-      '解析响应',
-      () => JSON.parse(decodeUtf8(res.body)) as { event_id?: string; payload_cid?: string },
-    );
+    const out = localStep('解析响应', () => JSON.parse(decodeUtf8(res.body)) as { event_id?: string; payload_cid?: string });
     return { eventId: String(out.event_id ?? eventId), payloadCid: String(out.payload_cid ?? '') };
   }
   throw mapPostFailure(res.status, decodeUtf8(res.body));
+}
+
+/**
+ * 发表一条评论：正常走 `sendComment`；**只有网络不可达**才入本地待发队列（本册 §4.2）。
+ *
+ * 节点给了任何 HTTP 响应（4xx / 5xx）都不入队——用户就在页面上、草稿还在输入框里，
+ * 立即原地重试比静默入队清楚。未配置节点同样不入队（否则队列会变成永远发不出去的垃圾桶）。
+ */
+export async function postComment(o: CommentOptions, input: CommentInput): Promise<PostResult> {
+  if (o.nodeBaseUrl === '') throw new CommentError('client', '未配置节点地址，无法发表');
+
+  try {
+    const r = await sendComment(o, input);
+    return { eventId: r.eventId, payloadCid: r.payloadCid, queued: false };
+  } catch (e) {
+    if (e instanceof CommentError && e.code === 'network') {
+      // 身份生成本地可用、不需要节点，故断网时仍能冻结一条合法 wire 入队
+      const ident = await localStepAsync('身份准备', () => localIdentity(o));
+      const { eventId, wire } = localStep('构造请求', () => buildCommentWire(ident, input));
+      await o.repo.enqueueComment({
+        eventId,
+        targetId: input.targetId,
+        text: input.text,
+        replyTo: input.replyTo ?? null,
+        wire,
+        state: 'pending',
+        reason: null,
+        queuedAt: new Date().toISOString(),
+      });
+      return { eventId, payloadCid: null, queued: true };
+    }
+    throw e;
+  }
 }
 
 /** 节点错误码 → 用户可读提示（册子 §6.4）。 */
