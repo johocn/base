@@ -304,6 +304,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 | `GET /v1/pack/:pack_id` | 取 pack.sqlite |
 | `GET /v1/blob/:blob_id` | 取块（① 明文 / ② 密文，节点不区分语义） |
 | `HEAD /v1/blob/:blob_id` | 存在性（近场互传秒传判定） |
+| `GET /v1/comment?target_id=&cursor=&limit=` | 公开评论索引（`target_id` 可缺省 = 全站最新）；正文另走 `GET /v1/blob/:blob_id`（2026-09-27 补） |
 | `GET /` | 节点自带只读浏览页 |
 
 写（客户端自签身份，非 JWT）：认证统一走**签名头** `X-Base-Id` / `X-Base-Alg` / `X-Base-Ts` / `X-Base-Nonce` / `X-Base-Sig`，签名覆盖 `canonical({method, path, query, body_sha256, ts, nonce})`。无 JWT、无 session；详见 S1 册子（#3）。
@@ -312,7 +313,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 |---|---|
 | `POST /v1/identity/register` | 登记公钥（首次出现即登记，节点回执 id） |
 | `GET /v1/identity/:id` | 取公钥（用于验签他人事件与私信） |
-| `POST /v1/event` | 提交评论/进度/小组/私信事件；`id` 与 `sig` 走签名头，节点验签后落库 |
+| `POST /v1/event` | 提交评论/进度/小组/私信事件；签名头管**准入**，事件体另带**内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`）管**归属**；节点验签后落库（2026-09-27 补） |
 | `GET /v1/identity/escrow/:username` | 取密码托管的加密私钥密文（换设备取回） |
 | `PUT /v1/identity/escrow/:username` | 写入/更新托管密文 |
 | `GET /v1/me` | 按请求签名中的 id 返回该身份已登记的事件与学习进度 |
@@ -324,6 +325,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 | `GET /v1/inventory?since=&cursor=` | 分页块清单 + Merkle root |
 | `POST /v1/sync` | 开启反熵会话（提交我方 root） |
 | `POST /v1/fetch` | 批量拉块（多哈希） |
+| `POST /v1/event-sync` | 按 `received_at` + `event_id` 游标增量拉事件与评论墓碑（`kind=event\|tombstone`）（2026-09-27 补） |
 | `POST /v1/scrub` | 触发该校验修复 |
 
 运营（审核密钥）：
@@ -331,6 +333,9 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 | 接口 | 说明 |
 |---|---|
 | `POST /v1/admin/review/fetch` | 按 `payload_cid` 取评论正文供审核；**仅 ① 类可命中** |
+| `POST /v1/admin/review/reject` | 审核结论：删块 + 写评论墓碑（随反熵传播）（2026-09-27 补） |
+
+审核密钥由节点环境变量 `BASE_REVIEW_KEY` 提供，请求头 `X-Base-Review-Key`；**未配置该变量的节点上这两条路由不存在**（404），密钥不符也返回 404（2026-09-27 补）。
 
 ### 7.4 反熵与节点恢复
 
@@ -418,10 +423,10 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 | 学习小组 / 圈子 | 小组 id | ② 加密可分发 | 小组密文 blob + 成员名单 |
 | 私信 | 收件人 id | ② 加密可分发 | 密文 blob + 收发双方 id |
 
-- 事件通用结构：`{type, target_id, actor, payload, causal_parent}`。正文作为 blob 存节点；`actor` = 客户端公钥派生 id；`sig` = 客户端对事件的签名。
+- 事件通用结构（2026-09-27 按落地订正）：线上形态为 `{event_id, type, created_at, body}`；`body` 承载目标与载荷，`body.reply_to` 即原 `causal_parent`；`actor` = 签名头的 `id`（客户端公钥派生）；**`event_id` 由客户端自带（16 hex），节点只登记、不签发**。正文作为 blob 存节点。归属证明用**与请求无关的内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`），因为签名头绑定了 ts/nonce，事件搬到别的节点后无法重验。
 - **① 类讨论**：正文按 `payload_cid` 公开可读（同 `GET /v1/blob/:blob_id`），不做读取鉴权（先发后审 + 审核通道）。
 - **② 类（小组 / 私信）**：正文**在客户端加密后**才产生 `blob_id`。节点只见密文与收发方 id，可存取、可反熵、**不可读、不可审**。审核不适用于 ② 类是隐私的明确代价，须写入隐私政策。
-- 写路径：客户端 `POST /v1/event`（带 `id` + `sig`）→ 节点验签 → 存正文 blob（① 明文 / ② 密文）→ 节点签发 `event_id`（ULID）→ 反熵时传播邻居。
+- 写路径（2026-09-27 按落地订正）：客户端 `POST /v1/event`（签名头管准入 + 事件体内容签名 `sig` 管归属）→ 节点验签 → 存正文 blob（① 明文 / ② 密文）→ 落事件行（`event_id` 由客户端自带）→ 反熵时经 `POST /v1/event-sync` 传播邻居。
 - **身份**：`internal/auth` 只做「公钥 → id 派生 + 事件验签 + 密码托管密文存取」，**不签发 JWT**。节点之间互信不依赖身份签名，靠 `X-Base-Node-Key`。
 - 分享归因：分享链接携带 `share_id`，只记 id 与点击；guest 分享仅统计，携带身份签名后可计入奖励。
 - 审核：先发后审（仅 ① 类）。运营经审核通道按 `payload_cid` 取正文；结论 `rejected` → 删块 + 写入墓碑 → 客户端下次同步删除。

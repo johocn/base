@@ -150,6 +150,7 @@
 
 - 本册子**只落地验签管线与落库骨架**，不定义任何事件类型；`type` 取值与语义由 B 阶段册子定义。
 - 未登记 `type` → 400 `event_type_unknown`。
+- **回填（2026-09-27，评论事件同步册子）**：B 阶段落地时会登记类型、给事件体加**内容签名** `sig`、给节点 `events` 表加 `target_id` / `payload_cid` / `reply_to` 三列，并在 `handleEventPost` 内按类型写投影。`internal/httpapi/event.go` 与 `internal/store/event.go` 里「B 阶段只需往类型表登记、管线与处理器都不用改」的注释**不成立**，实施时一并订正。
 
 ## 6. TLS 信任模型
 
