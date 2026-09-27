@@ -1,5 +1,5 @@
 // 测试用假实现：只在 Node 下跑，App 代码不引用本文件。
-import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, PackReader, SqliteConnection, StorageAdapter } from '../platform/adapter';
+import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReader, SqliteConnection, StorageAdapter } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
 import type { ArticleRow, FavoriteRow, ItemRow, LearningStats, QuizRow, TombstoneRow } from './types';
@@ -219,6 +219,14 @@ export class FakePackReader implements PackReader {
     if (!rows) throw new Error(`fake pack 未登记: ${path}`);
     return {
       select: async (sql: string) => {
+        // 自检条目 7 用的是 count 查询；真实 pack 是真 SQLite，这里只需给出正确行数
+        const cnt = /count\(\*\)\s+AS\s+n\s+FROM\s+(\w+)/i.exec(sql);
+        if (cnt) {
+          const t = String(cnt[1]);
+          if (t === 'articles') return [{ n: rows.articles.length }];
+          if (t === 'quizzes') return [{ n: rows.quizzes.length }];
+          throw new Error(`fake pack 不支持的计数: ${sql}`);
+        }
         if (sql.includes('FROM quizzes')) {
           return rows.quizzes.map((q) => ({
             item_id: q.itemId,
@@ -244,6 +252,56 @@ export class FakePackReader implements PackReader {
     };
   }
   async close(): Promise<void> {}
+}
+
+/**
+ * `LocalDb` 的假实现：只实现自检探测会用到的那几条语句。
+ * 不认识的 SQL 一律抛错——假实现悄悄放过新语句，比测试失败更难查（与 FakePackReader 同一取舍）。
+ */
+export class MemoryDb implements LocalDb {
+  private tables = new Map<string, Array<Record<string, unknown>>>([['selfcheck_probe', []]]);
+
+  async select(sql: string): Promise<Record<string, unknown>[]> {
+    const rb = /randomblob\((\d+)\)/i.exec(sql);
+    if (rb) return [{ b: 'ab'.repeat(Number(rb[1])) }];
+    const cnt = /count\(\*\)\s+AS\s+n\s+FROM\s+(\w+)/i.exec(sql);
+    if (cnt) return [{ n: (this.tables.get(String(cnt[1])) ?? []).length }];
+    throw new Error(`MemoryDb 不支持的查询: ${sql}`);
+  }
+
+  async execute(sql: string): Promise<void> {
+    await this.tx([{ sql }]);
+  }
+
+  /** 先存快照，任一条语句失败即整体还原（真实事务的回滚语义）。 */
+  async tx(statements: Array<{ sql: string; params?: unknown[] }>): Promise<void> {
+    const before = new Map<string, Array<Record<string, unknown>>>();
+    for (const [k, v] of this.tables) before.set(k, v.map((r) => ({ ...r })));
+    try {
+      for (const s of statements) this.apply(s.sql, s.params ?? []);
+    } catch (e) {
+      this.tables = before;
+      throw e;
+    }
+  }
+
+  private apply(sql: string, params: unknown[]): void {
+    const create = /CREATE TABLE IF NOT EXISTS\s+(\w+)/i.exec(sql);
+    if (create) {
+      const name = String(create[1]);
+      if (!this.tables.has(name)) this.tables.set(name, []);
+      return;
+    }
+    const ins = /INSERT INTO\s+(\w+)/i.exec(sql);
+    if (ins) {
+      const name = String(ins[1]);
+      const rows = this.tables.get(name);
+      if (!rows) throw new Error(`no such table: ${name}`);
+      rows.push({ k: params[0] ?? null });
+      return;
+    }
+    throw new Error(`MemoryDb 不支持的语句: ${sql}`);
+  }
 }
 
 export function fakeAdapters(
