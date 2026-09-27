@@ -90,8 +90,10 @@ interface UniGlobal {
   setStorageSync(key: string, value: string): void;
   request(o: {
     url: string;
-    method: 'GET';
+    method: 'GET' | 'POST';
     header?: Record<string, string>;
+    /** POST 用；arraybuffer 收发，不经过字符串编解码 */
+    data?: ArrayBuffer;
     responseType: 'arraybuffer';
     success: (res: { statusCode: number; data: unknown }) => void;
     fail: (e: unknown) => void;
@@ -363,10 +365,26 @@ export class PlusFs implements FsAdapter {
 
 export class PlusHttp implements HttpAdapter {
   async get(url: string, headers?: Record<string, string>): Promise<HttpResponse> {
+    return this.send(url, 'GET', undefined, headers);
+  }
+
+  async post(url: string, body: Uint8Array, headers?: Record<string, string>): Promise<HttpResponse> {
+    // Uint8Array 可能是 subarray：切片到独立 ArrayBuffer，避免把整段底层缓冲区发出去。
+    const buf = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer;
+    return this.send(url, 'POST', buf, headers);
+  }
+
+  private async send(
+    url: string,
+    method: 'GET' | 'POST',
+    data: ArrayBuffer | undefined,
+    headers?: Record<string, string>,
+  ): Promise<HttpResponse> {
     const res = await new Promise<{ statusCode: number; data: unknown }>((resolve, reject) => {
       uniGlobal().request({
         url,
-        method: 'GET',
+        method,
+        data,
         header: headers,
         responseType: 'arraybuffer',
         success: resolve,

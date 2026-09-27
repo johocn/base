@@ -10,6 +10,7 @@
         <text class="act" :class="fav ? 'act-on' : ''" @click="toggleFav">{{ fav ? '已收藏' : '收藏' }}</text>
         <text class="act" @click="cycleFont">A {{ fontScale }}</text>
         <text class="act" @click="cycleTheme">{{ theme === 'dark' ? '浅色' : '深色' }}</text>
+        <text class="act" @click="openComments">评论</text>
       </view>
       <text
         v-for="(p, i) in paragraphs"
@@ -26,6 +27,7 @@ import { computed, nextTick, ref } from 'vue';
 import { onLoad, onPageScroll } from '@dcloudio/uni-app';
 
 import { READER_FONT_SIZE, nextFontScale, normalizeFontScale, normalizeTheme, type ReaderFontScale, type ReaderTheme } from '../../core/state';
+import { setPendingTarget } from '../../core/comment';
 import type { ArticleRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 
@@ -126,6 +128,12 @@ async function cycleTheme() {
   theme.value = theme.value === 'dark' ? 'light' : 'dark';
   const { repo } = await bootstrap();
   await repo.setConfig('reader_theme', theme.value);
+}
+
+/** 评论 tab 不能带 query，target_id 走模块级锚定态（册子 §6.3） */
+function openComments() {
+  setPendingTarget(itemId.value);
+  uni.switchTab({ url: '/pages/comment/comment' });
 }
 
 /** 页面间传参在个别机型上会保留百分号编码（itemId 含 `:` 会变成 %3A），按原样查不到就按解码后再查 */

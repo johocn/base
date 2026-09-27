@@ -24,6 +24,8 @@ export interface HttpResponse {
 export interface HttpAdapter {
   /** 非 2xx 不抛错，由调用方按 status 判定 */
   get(url: string, headers?: Record<string, string>): Promise<HttpResponse>;
+  /** 同上；body 为原始字节，签名覆盖的就是它 */
+  post(url: string, body: Uint8Array, headers?: Record<string, string>): Promise<HttpResponse>;
 }
 
 export interface SqliteConnection {

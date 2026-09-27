@@ -163,6 +163,9 @@ export class MemoryRepo implements LocalRepo {
 /** 按 URL 精确应答；再按「同路径 + 同查询参数（解码后）」应答；最后忽略 query 兜底。 */
 export class FakeHttp implements HttpAdapter {
   routes = new Map<string, HttpResponse>();
+  /** POST 按 URL 精确应答；可记录请求体与头，供签名断言 */
+  postRoutes = new Map<string, HttpResponse>();
+  posted: Array<{ url: string; body: Uint8Array; headers: Record<string, string> }> = [];
   async get(url: string): Promise<HttpResponse> {
     const exact = this.routes.get(url);
     if (exact) return exact;
@@ -174,6 +177,10 @@ export class FakeHttp implements HttpAdapter {
     const byPath = this.routes.get(path);
     if (byPath) return byPath;
     return { status: 404, body: new Uint8Array() };
+  }
+  async post(url: string, body: Uint8Array, headers?: Record<string, string>): Promise<HttpResponse> {
+    this.posted.push({ url, body, headers: headers ?? {} });
+    return this.postRoutes.get(url) ?? { status: 404, body: new Uint8Array() };
   }
 }
 
