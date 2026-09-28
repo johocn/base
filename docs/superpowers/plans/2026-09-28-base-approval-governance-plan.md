@@ -719,7 +719,7 @@ func TestAddVoteReviveNeedsTwoVotes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProposal(remove): %v", err)
 	}
-	if _, err := st.RetireItem("article/gv2", 1); err != nil {
+	if err := st.RetireItem("article/gv2", 1); err != nil {
 		t.Fatalf("RetireItem: %v", err)
 	}
 	_ = rid
@@ -942,7 +942,7 @@ func TestAddVoteEmptyRosterDegrades(t *testing.T) {
 }
 ```
 
-同文件 import 块补 `errors` 与 `github.com/johocn/base/internal/protocol`。
+同文件 `govern_test.go` 的 import 块补 `github.com/johocn/base/internal/protocol`（`strings` / `testing` 已在 Task 1 引入）。
 
 - [ ] **Step 2: 跑测试确认失败**
 
@@ -951,7 +951,7 @@ Expected: FAIL —— `undefined: ErrAlreadyVoted` / `undefined: (*Store).AddVot
 
 - [ ] **Step 3: 写最小实现**
 
-在 `internal/store/govern.go` 追加（并在 import 块补 `strings`、`time`、`github.com/johocn/base/internal/protocol`）：
+在 `internal/store/govern.go` 追加（并在 import 块补 `time` 与 `github.com/johocn/base/internal/protocol`；`errors` / `database/sql` / `fmt` 已在 Task 2 引入，`st.encText` 是 store 包内方法）：
 
 ```go
 // ErrAlreadyVoted 表示该身份已对本提案投过票（册子 §3.2 的 409）。
