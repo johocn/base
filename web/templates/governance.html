@@ -1,0 +1,47 @@
+{{define "content"}}
+<h1>治理看板</h1>
+<p class="small">
+	下架 {{.RemoveThreshold}} 票、改写与复活各 {{.EditThreshold}} 票 · 票数按当前名册实时复判
+	{{if not .RosterReady}}· 名册暂不可用，按空名册计{{end}}
+</p>
+
+{{if .Proposals}}
+<ul class="board">
+{{range .Proposals}}
+	<li>
+		<h2>
+			<span class="badge">{{.ActionLabel}}</span>
+			{{if .Linkable}}<a href="/a/{{.ItemID}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}
+			{{if .ItemStateLabel}}<span class="badge {{if eq .ItemState "removed"}}badge-off{{else}}badge-on{{end}}">{{.ItemStateLabel}}</span>{{end}}
+		</h2>
+		<div class="small">{{.Reason}}</div>
+		<div class="bar"><i style="width:{{.Percent}}%"></i></div>
+		<div class="small">{{.VoteCount}} / {{.Threshold}} 票 · {{.StatusLabel}} · {{.CreatedAt}}</div>
+		{{if .Voters}}
+		<div class="small">投票人：{{range $i, $v := .Voters}}{{if $i}}、{{end}}{{$v.Name}}{{end}}</div>
+		{{end}}
+		{{if .Edit}}
+		<details>
+			<summary class="small">拟改标题与正文</summary>
+			<pre>{{.Edit.Title}}</pre>
+			<pre>{{.Edit.BodyMD}}</pre>
+		</details>
+		{{end}}
+	</li>
+{{end}}
+</ul>
+{{else}}
+<p>本节点暂无提案。</p>
+{{end}}
+
+<h2>贡献者名册</h2>
+{{if .Roster}}
+<ul class="board">
+{{range .Roster}}
+	<li>{{.Name}} · {{.Count}} 条 <span class="small">{{.ID}}</span></li>
+{{end}}
+</ul>
+{{else}}
+<p>暂无贡献者。</p>
+{{end}}
+{{end}}

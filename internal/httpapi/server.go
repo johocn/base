@@ -135,6 +135,7 @@ func (s *Server) publicMux() *http.ServeMux {
 		mux.Handle("POST /v1/admin/review/reject", s.requireReviewKey(s.handleReviewReject))
 	}
 
+	mux.HandleFunc("GET /governance", s.handleGovernancePage)
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /a/{item_id...}", s.handleArticlePage)
 	return mux

@@ -189,3 +189,62 @@ func TestPagesShowPairingCode(t *testing.T) {
 		t.Fatalf("未启用 TLS 的节点不应展示配对码：\n%s", body)
 	}
 }
+
+func TestGovernanceBoardRendersProposal(t *testing.T) {
+	st, _, ts := newTestServer(t)
+	if _, err := st.CreateProposal(store.Proposal{
+		Action: store.GovernActionRemove, ItemID: "article/aaa", ProposerID: "proposer-1",
+		Reason: "内容不准确", BaseContentHash: "deadbeef", CreatedAt: 1790000000000,
+	}); err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+
+	code, body := getText(t, ts.URL+"/governance")
+	if code != http.StatusOK {
+		t.Fatalf("看板状态 = %d", code)
+	}
+	// 动作徽章 / 理由 / 门槛（remove 3 票）/ 状态 / 公开条目的文章页链接
+	for _, want := range []string{"治理看板", "下架", "内容不准确", "0 / 3 票", "待决", `href="/a/article/aaa"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("看板缺少 %q\n页面内容：\n%s", want, body)
+		}
+	}
+}
+
+func TestGovernanceBoardHidesRemovedItemLink(t *testing.T) {
+	st, _, ts := newTestServer(t)
+	if err := st.RetireItem("article/aaa", 1); err != nil {
+		t.Fatalf("RetireItem: %v", err)
+	}
+	if _, err := st.CreateProposal(store.Proposal{
+		Action: store.GovernActionRemove, ItemID: "article/aaa", ProposerID: "proposer-1",
+		Reason: "已下架", BaseContentHash: "deadbeef", CreatedAt: 1790000000000,
+	}); err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+
+	code, body := getText(t, ts.URL+"/governance")
+	if code != http.StatusOK {
+		t.Fatalf("看板状态 = %d", code)
+	}
+	if !strings.Contains(body, "已下架") {
+		t.Fatalf("下架条目应显示状态徽章\n%s", body)
+	}
+	// 护栏 2：handleArticlePage 对 removed 条目回 404，看板不能给死链
+	if strings.Contains(body, `href="/a/article/aaa"`) {
+		t.Fatalf("下架条目不应给文章页死链\n%s", body)
+	}
+}
+
+func TestGovernanceBoardEmptyState(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	code, body := getText(t, ts.URL+"/governance")
+	if code != http.StatusOK {
+		t.Fatalf("看板状态 = %d", code)
+	}
+	for _, want := range []string{"本节点暂无提案。", "暂无贡献者。"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("空态缺少 %q\n%s", want, body)
+		}
+	}
+}
