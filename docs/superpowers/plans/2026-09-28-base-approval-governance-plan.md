@@ -2531,15 +2531,36 @@ git commit -m "docs(plans): 治理主线第 3 册实施计划与执行实况回�
 1. **下架传播**：在节点 1 上按 AC 1–3 让 `remove` 生效（`state='removed'` + `tombstones` 有行）。执行一次导出（既有 `packexport` 路径，例如 `go run ./cmd/... export`，与 #13 / #22 的导出命令一致），把包投给节点 2（`peersync` 或手工分发）。节点 2 侧应表现为**既有墓碑路径**：该 `item_id` 从 `items` 中消失、对应块文件被删（`state='removed'` 的条目不再进入目录，接收侧按 `revoked_rev` 删行删块）。
 2. **复活传播**：回到节点 1，对该 `item_id` 提 `revive` 并投到门槛使其生效（`state='active'`、墓碑行消失）。**再导出一次**。节点 2 侧应表现为「**更大 `content_version` 的重新发布**」——该 `item_id` 重新入库为 `active`，而不是被当作用户历史墓碑拒绝。
 
-验证命令（在两台机器上分别执行）：
+验证命令（在两台机器上分别执行；公开路由里**没有** `/v1/items`，实际用 `GET /v1/catalog`，见执行记录偏差 1）：
 
 ```bash
-curl -s http://<node>/v1/items | grep <item_id>          # 目录里是否还在
-ls <data-dir>/blobs | wc -l                              # 块数（下架后应减少，复活+反熵后回升）
+curl -s http://<node>/v1/catalog | grep <item_id>        # 目录里是否还在
+find <data-dir>/blobs -type f | wc -l                    # 块文件数（下架后应减少，复活+反熵后回升）
 curl -s http://<node>/v1/proposal                        # status / threshold 一致性
 ```
 
 若节点 2 长时间离线，复活后的块需等反熵补齐才可用——**「导出成功」不等于「接收侧立即可用」**，这是册子 §9 风险 4 的已知边界，不是缺陷。
+
+### 执行记录（2026-09-28，**通过**）
+
+在服务器上另起一对隔离节点（独立 data 目录 / 端口 / 身份，端口绑 `127.0.0.1`，零生产影响）：
+
+- 源节点 `node-a`：`node-a/data`，客户端 `127.0.0.1:8093`（`-tls-cert off` 明文）、对端 `127.0.0.1:8091`，`issuer=base-acc-1`，指纹 `714b2705…cac1e`。
+- 缓存节点 `node-b`：`node-b/data`，客户端 `127.0.0.1:8094`、对端 `127.0.0.1:8092`，`issuer=base-acc-2`，指纹 `5a37a504…2d95`，`BASE_ISSUER_PUBKEYS` 信任 `base-acc-1`。
+- 两节点互指、`-sync-interval 10s` 自动收敛；驱动走真实 HTTP 签名写路径（登记 3 个 Ed25519 身份 → 各投一篇 ≥200 字文章入名册 → `POST /v1/proposal` → 空体 `POST /v1/proposal/{id}/vote`）。
+- 目标条目取**视频**（3 MiB / 3 块）`course/acc/lesson/l1/video/demo`，使「块文件被删」可观测。
+
+| 步骤 | node-a 版本 | node-b 版本 | node-b 含该条目 | node-b 块文件数 | node-b 反熵日志 |
+| --- | --- | --- | --- | --- | --- |
+| 初始 v1 | 1 | 1 | 是 | 3 | `version=1 imported=true fetched=3` |
+| `remove` 生效（3/3 票）→ 导出 v2 | 2 | 2 | **否** | **0** | `version=2 imported=true missing=0` |
+| `revive` 生效（2/2 票）→ 导出 v3 | 3 | 3 | **是** | **3** | `version=3 imported=true missing=3 fetched=3` |
+
+- **下架传播通过**：`remove` 生效后导出 v2，包内已无该条目（`export entries` 5→7；`ListItems("active")` 天然排除 `removed`），manifest 带墓碑；node-b 走既有墓碑路径删 `items`/`media_meta` 行并删掉 3 个块文件（块文件 3→0）。node-a 侧内容行与块文件保留（`RetireItem` 只置状态 + 写墓碑）。
+- **复活传播通过**：`revive` 生效后 node-a 墓碑行被删、条目回到 `active`；导出 v3 的 `merkle_root` 与 v1 完全相同（`55eff587…f28d`，即同一块集合），node-b 以**更大 `content_version`（3 > 2）**通过防回卷判定重新入库为 `active`，并反熵补齐 3 个块文件（0→3）。
+- 两条提案均 `status=effective`（remove `vote_count=3 / threshold=3`；revive `2/2`）。
+- 执行期偏差（1 条）：计划的验证命令写 `GET /v1/items`，实际公开路由为 `GET /v1/catalog`（`internal/httpapi/server.go` 的公开路由清单里没有 `/v1/items`）；已按真实路由取证并在此更正。
+- 隔离环境已整体删除，生产节点对（`/opt/base/based`，8081/8082/8083）未受影响；一次性验收客户端与临时产物已清理，未提交。
 
 ---
 
@@ -2569,7 +2590,7 @@ curl -s http://<node>/v1/proposal                        # status / threshold �
   - 执行期更正的三次计划回写：`3229ed9`（Task 1 测试对 Task 2 符号的前向依赖）、`ee29b33`（单连接池不得嵌套查询）、`7b0d651`（Task 3 的 RetireItem 返回值）
 - 门禁：`go build ./...` / `go vet ./...` 无输出；`go test ./...` 全包 ok。
   `gofmt -l internal/` 在本机 `go1.27.1` 下会列出 25 个**工作区为 CRLF 行尾**的既有文件（索引侧均为 LF，与本册无关）；本册涉及的 9 个 Go 文件在 `gofmt -l` 下无输出。
-- AC 1–12、14：自动通过（`go test ./internal/httpapi/ -run TestGovernAC`）；**AC 13（下架导出 → 接收侧删行删块；复活再导出 → 重新发布入库）待人工**
+- AC 1–12、14：自动通过（`go test ./internal/httpapi/ -run TestGovernAC`）；**AC 13：已通过**（2026-09-28 服务器隔离节点对人工验收，两段结论与取证见「手工验收 → 执行记录」）
 - 执行期更正：3 条，已在册子 `docs/superpowers/specs/2026-09-28-base-approval-governance-design.md` §0.4 同步
   1. 计划原文：Task 5 / 6 用例用 `newGovernNode` + 只给 B 投一篇来造节点。实际做法：把 Task 7 的 `fourGovernors` 提前到 Task 5 定义，Task 5 / 6 用例统一以「A/B/C/D 各投一篇」建立 4 人名册（目标条目仍归 B：`article/gb`）。原因：提案人与投票人必须在名册内（册子 §4.3），只给 B 投一篇时 A 的提案与 C 的投票都会被 403，用例前提与名册派生互斥；`newGovernNode` 保持「只登记身份、不种名册」，供 AC 8 冷启动与 AC 14 使用。
   2. 计划原文：Task 7 的 AC 1–3 在 `internal/store` 新增 `Store.TombstoneRev` 供测试断言墓碑行。实际做法：直接用既有公开读法 `Store.ListTombstones()` 过滤目标 `item_id`，不新增任何生产代码。
