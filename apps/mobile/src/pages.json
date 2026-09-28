@@ -55,6 +55,10 @@
     {
       "path": "pages/governance/governance",
       "style": { "navigationBarTitleText": "提案与投票" }
+    },
+    {
+      "path": "pages/contribution/contribution",
+      "style": { "navigationBarTitleText": "我的贡献" }
     }
   ],
   "tabBar": {
