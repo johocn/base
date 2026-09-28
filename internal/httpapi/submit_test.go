@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"testing"
 
+	"github.com/johocn/base/internal/packexport"
 	"github.com/johocn/base/internal/protocol"
 	"github.com/johocn/base/internal/store"
 )
@@ -352,5 +354,215 @@ func TestSubmitRateLimited(t *testing.T) {
 	}
 	if code != http.StatusTooManyRequests || out["code"] != "item_rate_limited" {
 		t.Fatalf("超限应 429: code=%d out=%v", code, out)
+	}
+}
+
+// longBody 造一段 ≥ 200 rune 的正文（跨过名册的 article 质量门槛）。
+func longBody(marker string) string { return marker + repeat("文", 200) }
+
+const quizJSON3 = `{"schema_version":1,"questions":[{"q":"1","options":["a"],"answer":0,"explain":""},{"q":"2","options":["b"],"answer":0,"explain":""},{"q":"3","options":["c"],"answer":0,"explain":""}]}`
+const quizJSON2 = `{"schema_version":1,"questions":[{"q":"1","options":["a"],"answer":0,"explain":""},{"q":"2","options":["b"],"answer":0,"explain":""}]}`
+
+// AC 1：投 article/<aid>（body_md ≥ 200 rune）→ 200，归属落库，名册 +1。
+func TestSubmitAC1Create(t *testing.T) {
+	n := newSubmitNode(t)
+	id, _ := identityFromSeed(t, testSeed)
+	body := submitBody(t, testSeed, "article", "article/ac1", "标题", "body_md", longBody("甲"))
+	code, out := postSubmit(t, n, testSeed, body)
+	if code != http.StatusOK || out["created"] != true || out["author_id"] != id {
+		t.Fatalf("code=%d out=%v", code, out)
+	}
+	if out["content_hash"] != protocol.SHA256Hex([]byte(longBody("甲"))) {
+		t.Fatalf("content_hash=%v", out["content_hash"])
+	}
+	it, ok, _ := n.st.GetItem("article/ac1")
+	if !ok || it.AuthorID != id {
+		t.Fatalf("归属未落库: ok=%v it=%+v", ok, it)
+	}
+	if got := n.rosterCount(t, id); got != 1 {
+		t.Fatalf("名册条数=%d want 1", got)
+	}
+}
+
+// AC 2：同请求体重复提交 → 200、content_hash 不变、名册仍 1 条。
+func TestSubmitAC2Idempotent(t *testing.T) {
+	n := newSubmitNode(t)
+	id, _ := identityFromSeed(t, testSeed)
+	body := submitBody(t, testSeed, "article", "article/ac2", "标题", "body_md", longBody("乙"))
+	code, first := postSubmit(t, n, testSeed, body)
+	if code != http.StatusOK || first["created"] != true {
+		t.Fatalf("首投 code=%d out=%v", code, first)
+	}
+	code, second := postSubmit(t, n, testSeed, body)
+	if code != http.StatusOK || second["created"] != false {
+		t.Fatalf("重投 code=%d out=%v", code, second)
+	}
+	if second["content_hash"] != first["content_hash"] {
+		t.Fatalf("content_hash 变了: %v → %v", first["content_hash"], second["content_hash"])
+	}
+	if got := n.rosterCount(t, id); got != 1 {
+		t.Fatalf("名册条数=%d want 1", got)
+	}
+}
+
+// AC 3 / AC 4：改正文不重签必失败；改正文并重签则通过且名册仍 1 条。
+func TestSubmitAC3AC4Resign(t *testing.T) {
+	n := newSubmitNode(t)
+	id, _ := identityFromSeed(t, testSeed)
+	oldBody := longBody("丙")
+	body := submitBody(t, testSeed, "article", "article/ac3", "标题", "body_md", oldBody)
+	if code, out := postSubmit(t, n, testSeed, body); code != http.StatusOK {
+		t.Fatalf("首投 code=%d out=%v", code, out)
+	}
+
+	// AC 3：换正文、沿用旧签名。
+	stale := withExtraKey(t, body, "body_md", longBody("丁"))
+	code, out := postSubmit(t, n, testSeed, stale)
+	if code != http.StatusBadRequest || out["code"] != "author_sig_invalid" {
+		t.Fatalf("AC3 code=%d out=%v", code, out)
+	}
+	a, _, _ := n.st.GetArticle("article/ac3")
+	if a.BodyMD != oldBody {
+		t.Fatalf("AC3 拒绝时不得覆盖: %q", a.BodyMD)
+	}
+
+	// AC 4：换正文并重签。
+	re := submitBody(t, testSeed, "article", "article/ac3", "标题", "body_md", longBody("丁"))
+	code, out = postSubmit(t, n, testSeed, re)
+	if code != http.StatusOK || out["created"] != false {
+		t.Fatalf("AC4 code=%d out=%v", code, out)
+	}
+	if out["content_hash"] != protocol.SHA256Hex([]byte(longBody("丁"))) {
+		t.Fatalf("AC4 content_hash=%v", out["content_hash"])
+	}
+	if got := n.rosterCount(t, id); got != 1 {
+		t.Fatalf("AC4 名册条数=%d want 1", got)
+	}
+}
+
+// AC 5：他人投同一 item_id → 403，原条目与归属不变。
+func TestSubmitAC5OtherAuthorRejected(t *testing.T) {
+	n := newSubmitNode(t)
+	idA, _ := identityFromSeed(t, testSeed)
+	idB := n.registerSeed(t, subOtherSeed)
+	bodyA := submitBody(t, testSeed, "article", "article/ac5", "甲标题", "body_md", longBody("甲"))
+	if code, out := postSubmit(t, n, testSeed, bodyA); code != http.StatusOK {
+		t.Fatalf("甲投稿 code=%d out=%v", code, out)
+	}
+	bodyB := submitBody(t, subOtherSeed, "article", "article/ac5", "乙标题", "body_md", longBody("乙"))
+	code, out := postSubmit(t, n, subOtherSeed, bodyB)
+	if code != http.StatusForbidden || out["code"] != "item_id_taken" {
+		t.Fatalf("AC5 code=%d out=%v", code, out)
+	}
+	it, _, _ := n.st.GetItem("article/ac5")
+	if it.AuthorID != idA || it.Title != "甲标题" {
+		t.Fatalf("AC5 原条目被改: %+v", it)
+	}
+	if n.rosterCount(t, idB) != 0 {
+		t.Fatal("AC5 被拒的投稿不得计入名册")
+	}
+}
+
+// AC 6：占用导入器产出的空归属存量条目 → 403。
+func TestSubmitAC6LegacyUnattributedRejected(t *testing.T) {
+	n := newSubmitNode(t)
+	legacy := "运营导入的正文\n"
+	if err := n.st.UpsertArticle(store.Article{
+		ItemID: "article/ac6", Title: "存量", BodyMD: legacy,
+		ContentHash: protocol.SHA256Hex([]byte(legacy)), SourceRev: "rev-1",
+	}); err != nil {
+		t.Fatalf("UpsertArticle: %v", err)
+	}
+	body := submitBody(t, testSeed, "article", "article/ac6", "认领", "body_md", longBody("认领"))
+	code, out := postSubmit(t, n, testSeed, body)
+	if code != http.StatusForbidden || out["code"] != "item_id_taken" {
+		t.Fatalf("AC6 code=%d out=%v", code, out)
+	}
+	a, _, _ := n.st.GetArticle("article/ac6")
+	if a.BodyMD != legacy {
+		t.Fatalf("AC6 存量正文被覆盖: %q", a.BodyMD)
+	}
+}
+
+// AC 8：无签名头 400；未登记身份 403（AC 8 的第二半）。
+func TestSubmitAC8AuthErrors(t *testing.T) {
+	n := newSubmitNode(t)
+	body := submitBody(t, testSeed, "article", "article/ac8", "标题", "body_md", longBody("戊"))
+	code, out := doJSONMap(t, http.MethodPost, n.public+"/v1/submit", body, nil)
+	if code != http.StatusBadRequest || out["code"] != "auth_missing_header" {
+		t.Fatalf("AC8 无签名头 code=%d out=%v", code, out)
+	}
+	code, out = postSubmit(t, n, subUnregSeed, body)
+	if code != http.StatusForbidden || out["code"] != "identity_unregistered" {
+		t.Fatalf("AC8 未登记 code=%d out=%v", code, out)
+	}
+	if _, ok, _ := n.st.GetItem("article/ac8"); ok {
+		t.Fatal("AC8 拒绝时不得写入")
+	}
+}
+
+// AC 9：3 题题库计贡献；2 题题库入库但不计贡献（名册条数仍为 1）。
+func TestSubmitAC9QuizGate(t *testing.T) {
+	n := newSubmitNode(t)
+	id, _ := identityFromSeed(t, testSeed)
+	body3 := submitBody(t, testSeed, "quiz", "quiz/ac9a", "三题", "question_json", quizJSON3)
+	if code, out := postSubmit(t, n, testSeed, body3); code != http.StatusOK {
+		t.Fatalf("AC9 三题 code=%d out=%v", code, out)
+	}
+	if got := n.rosterCount(t, id); got != 1 {
+		t.Fatalf("AC9 三题名册条数=%d want 1", got)
+	}
+	body2 := submitBody(t, testSeed, "quiz", "quiz/ac9b", "两题", "question_json", quizJSON2)
+	code, out := postSubmit(t, n, testSeed, body2)
+	if code != http.StatusOK || out["created"] != true {
+		t.Fatalf("AC9 两题 code=%d out=%v", code, out)
+	}
+	if _, ok, _ := n.st.GetQuiz("quiz/ac9b"); !ok {
+		t.Fatal("AC9 两题题库应已入库")
+	}
+	if got := n.rosterCount(t, id); got != 1 {
+		t.Fatalf("AC9 两题不应计贡献: 名册条数=%d want 1", got)
+	}
+}
+
+// AC 10：导出后 entries[] 带作者归属、contributors 带公钥，且用包内公钥可独立复验通过。
+func TestSubmitAC10ExportCarriesAttribution(t *testing.T) {
+	n := newSubmitNode(t)
+	id, pub := identityFromSeed(t, testSeed)
+	body := submitBody(t, testSeed, "article", "article/ac10", "标题", "body_md", longBody("己"))
+	if code, out := postSubmit(t, n, testSeed, body); code != http.StatusOK {
+		t.Fatalf("投稿 code=%d out=%v", code, out)
+	}
+	res, err := packexport.Export(n.st, packexport.Options{Issuer: "base-node-1", SignKeyHex: testSeed})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	raw, err := os.ReadFile(res.ManifestPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var mf protocol.Manifest
+	if err := json.Unmarshal(raw, &mf); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if mf.Contributors[id] != pub {
+		t.Fatalf("contributors 缺该 id 的公钥: %v", mf.Contributors)
+	}
+	found := false
+	for _, e := range mf.Entries {
+		if e.ItemID != "article/ac10" {
+			continue
+		}
+		found = true
+		if e.AuthorID != id || !isHexN(e.AuthorSig, 64) {
+			t.Fatalf("entries 归属未回填: %+v", e)
+		}
+		ok, err := protocol.VerifyAuthorSig(mf.Contributors[e.AuthorID], e.ItemID, e.ContentHash, e.AuthorID, e.AuthorSig)
+		if err != nil || !ok {
+			t.Fatalf("用包内公钥复验应通过: ok=%v err=%v", ok, err)
+		}
+	}
+	if !found {
+		t.Fatal("manifest 里没有 article/ac10")
 	}
 }
