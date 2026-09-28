@@ -1,7 +1,10 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -181,4 +184,123 @@ func (s *Server) handleProposalPost(w http.ResponseWriter, r *http.Request) {
 		"threshold":   store.GovernThreshold(req.Action),
 		"status":      store.GovernStatusPending,
 	})
+}
+
+type voteReq struct {
+	VoterID  json.RawMessage `json:"voter_id"`
+	AuthorID json.RawMessage `json:"author_id"`
+	ID       json.RawMessage `json:"id"`
+}
+
+// handleVotePost 是签名写路径 POST /v1/proposal/{proposal_id}/vote（册子 §3.2）。
+// 投票请求**可能带副作用**：这一票把有效票推到该动作门槛时，在同一事务内执行动作。
+func (s *Server) handleVotePost(w http.ResponseWriter, r *http.Request) {
+	actor := identityFrom(r)
+	// 请求体可空（册子 §3.2）：空体与 {} 等价，故不能直接用 decodeJSON。
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxJSONBody))
+	if err != nil {
+		s.writeAuthErr(w, http.StatusBadRequest, "auth_body_read_failed")
+		return
+	}
+	_ = r.Body.Close()
+	if len(bytes.TrimSpace(raw)) > 0 {
+		var req voteReq
+		if err := json.Unmarshal(raw, &req); err != nil {
+			s.writeError(w, http.StatusBadRequest, "bad_json")
+			return
+		}
+		// 投票人只能取自鉴权身份：请求体携带任何身份字段都等于替他人投票。
+		if len(req.VoterID) > 0 || len(req.AuthorID) > 0 || len(req.ID) > 0 {
+			s.writeAuthErr(w, http.StatusBadRequest, "author_id_forbidden")
+			return
+		}
+	}
+	pid, ok := parseProposalID(r.PathValue("proposal_id"))
+	if !ok {
+		s.writeAuthErr(w, http.StatusNotFound, "proposal_not_found")
+		return
+	}
+	if !s.voteLimiterByID.allow(actor) || !s.governLimiterByIP.allow(clientIP(r)) {
+		s.writeAuthErr(w, http.StatusTooManyRequests, "govern_rate_limited")
+		return
+	}
+	if _, ok, err := s.st.GetProposal(pid); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if !ok {
+		s.writeAuthErr(w, http.StatusNotFound, "proposal_not_found")
+		return
+	}
+	roster, rosterOK := s.governRoster()
+	if rosterOK && !roster[actor] {
+		s.writeAuthErr(w, http.StatusForbidden, "voter_not_governor")
+		return
+	}
+	res, err := s.st.AddVote(pid, actor, roster)
+	if errors.Is(err, store.ErrAlreadyVoted) {
+		s.writeAuthErr(w, http.StatusConflict, "already_voted")
+		return
+	}
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"proposal_id": strconv.FormatInt(res.ProposalID, 10),
+		"vote_count":  res.VoteCount,
+		"threshold":   res.Threshold,
+		"status":      res.Status,
+	})
+}
+
+type proposalDTO struct {
+	ProposalID string   `json:"proposal_id"`
+	Action     string   `json:"action"`
+	ItemID     string   `json:"item_id"`
+	ProposerID string   `json:"proposer_id"`
+	Reason     string   `json:"reason"`
+	Title      string   `json:"title"`
+	BodyMD     string   `json:"body_md"`
+	Status     string   `json:"status"`
+	Votes      []string `json:"votes"`
+	VoteCount  int      `json:"vote_count"`
+	Threshold  int      `json:"threshold"`
+	CreatedAt  int64    `json:"created_at"`
+	ExecutedAt int64    `json:"executed_at"`
+	VoidedAt   int64    `json:"voided_at"`
+}
+
+type proposalsResponse struct {
+	Proposals []proposalDTO `json:"proposals"`
+}
+
+// handleProposalList 匿名返回全部提案与**当前有效票**（册子 §3.3）：无需登录、无需签名头。
+// 不分页、不支持过滤（量级假设见册子 §9 风险 6）；空列表返回 []（不是 null）。
+func (s *Server) handleProposalList(w http.ResponseWriter, r *http.Request) {
+	roster, _ := s.governRoster() // 派生失败按空名册降级（册子 §6.2）
+	views, err := s.st.ListProposalViews(roster)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := proposalsResponse{Proposals: []proposalDTO{}}
+	for _, v := range views {
+		resp.Proposals = append(resp.Proposals, proposalDTO{
+			ProposalID: strconv.FormatInt(v.ProposalID, 10),
+			Action:     v.Action,
+			ItemID:     v.ItemID,
+			ProposerID: v.ProposerID,
+			Reason:     v.Reason,
+			Title:      v.Title,
+			BodyMD:     v.BodyMD,
+			Status:     v.Status,
+			Votes:      v.Votes,
+			VoteCount:  len(v.Votes),
+			Threshold:  v.Threshold,
+			CreatedAt:  v.CreatedAt,
+			ExecutedAt: v.ExecutedAt,
+			VoidedAt:   v.VoidedAt,
+		})
+	}
+	s.writeJSON(w, http.StatusOK, resp)
 }

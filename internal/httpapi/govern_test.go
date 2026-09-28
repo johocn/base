@@ -278,3 +278,158 @@ func TestProposalCreated(t *testing.T) {
 		t.Fatalf("proposal_id 必须是字符串: %v", out["proposal_id"])
 	}
 }
+
+// propose 发一个提案并返回 proposal_id（断言 201）。
+func (n *governNode) propose(t *testing.T, seed, action, itemID string, extra map[string]any) string {
+	t.Helper()
+	code, out := n.post(t, seed, "/v1/proposal", proposalBody(t, action, itemID, extra))
+	if code != http.StatusCreated {
+		t.Fatalf("提案 %s %s: code=%d out=%v", action, itemID, code, out)
+	}
+	id, _ := out["proposal_id"].(string)
+	return id
+}
+
+// vote 投一票（空请求体）并返回响应。
+func (n *governNode) vote(t *testing.T, seed, proposalID string) (int, map[string]any) {
+	t.Helper()
+	return n.post(t, seed, "/v1/proposal/"+proposalID+"/vote", "")
+}
+
+// proposals 拉匿名列表。
+func (n *governNode) proposals(t *testing.T) []map[string]any {
+	t.Helper()
+	code, body := getJSON(t, n.public+"/v1/proposal")
+	if code != http.StatusOK {
+		t.Fatalf("GET /v1/proposal code=%d", code)
+	}
+	list, _ := body["proposals"].([]any)
+	out := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		m, _ := item.(map[string]any)
+		out = append(out, m)
+	}
+	return out
+}
+
+// longBody 造 ≥200 rune 的正文（供 edit 用例直写 articles）。
+func (n *governNode) longBody(marker string) string { return marker + repeat("文", 200) }
+
+func TestVoteRejectsUnknownProposalNonGovernorAndDuplicate(t *testing.T) {
+	n := fourGovernors(t)
+
+	// 404：提案不存在（含非数字路径段）。
+	if code, out := n.vote(t, govSeedA, "999"); code != http.StatusNotFound || out["code"] != "proposal_not_found" {
+		t.Fatalf("不存在: code=%d out=%v", code, out)
+	}
+	if code, out := n.vote(t, govSeedA, "abc"); code != http.StatusNotFound || out["code"] != "proposal_not_found" {
+		t.Fatalf("非数字 id: code=%d out=%v", code, out)
+	}
+	// 403：投票人不在名册（X 无内容）。
+	id := n.propose(t, govSeedA, "remove", "article/gb", nil)
+	if code, out := n.vote(t, govSeedX, id); code != http.StatusForbidden || out["code"] != "voter_not_governor" {
+		t.Fatalf("非治理者投票: code=%d out=%v", code, out)
+	}
+	// 409：提案人给自己已投的提案再投。
+	if code, out := n.vote(t, govSeedA, id); code != http.StatusConflict || out["code"] != "already_voted" {
+		t.Fatalf("提案人重复投票: code=%d out=%v", code, out)
+	}
+	// 400：请求体携带身份字段。
+	if code, out := n.post(t, govSeedB, "/v1/proposal/"+id+"/vote", `{"voter_id":"00000000000000000000000000000000"}`); code != http.StatusBadRequest || out["code"] != "author_id_forbidden" {
+		t.Fatalf("携带 voter_id: code=%d out=%v", code, out)
+	}
+}
+
+// remove 分档：第 2 票仍 pending、第 3 票才生效（册子 §2.1 的关键分界）。
+func TestVoteRemoveThresholdIsThree(t *testing.T) {
+	n := fourGovernors(t)
+	id := n.propose(t, govSeedA, "remove", "article/gb", nil)
+
+	code, out := n.vote(t, govSeedC, id)
+	if code != http.StatusOK || out["vote_count"] != float64(2) || out["threshold"] != float64(3) || out["status"] != "pending" {
+		t.Fatalf("第 2 票: code=%d out=%v", code, out)
+	}
+	if it, _, _ := n.st.GetItem("article/gb"); it.State != "active" {
+		t.Fatalf("第 2 票不得下架: %s", it.State)
+	}
+	code, out = n.vote(t, govSeedD, id)
+	if code != http.StatusOK || out["vote_count"] != float64(3) || out["status"] != "effective" {
+		t.Fatalf("第 3 票: code=%d out=%v", code, out)
+	}
+	if it, _, _ := n.st.GetItem("article/gb"); it.State != "removed" {
+		t.Fatalf("应已下架: %s", it.State)
+	}
+}
+
+// 匿名列表：不需签名头即 200；阈值随动作；votes 随名册实时增减。
+func TestProposalListAnonymousAndRealtimeVotes(t *testing.T) {
+	n := fourGovernors(t)
+	id := n.propose(t, govSeedA, "remove", "article/gb", nil)
+	if _, out := n.vote(t, govSeedC, id); out["status"] != "pending" {
+		t.Fatalf("第 2 票应 pending: %v", out)
+	}
+	list := n.proposals(t)
+	if len(list) != 1 {
+		t.Fatalf("应有 1 条提案: %v", list)
+	}
+	p := list[0]
+	if p["threshold"] != float64(3) || p["vote_count"] != float64(2) || p["status"] != "pending" {
+		t.Fatalf("列表字段不对: %v", p)
+	}
+	votes, _ := p["votes"].([]any)
+	if len(votes) != 2 {
+		t.Fatalf("有效票应为 2: %v", votes)
+	}
+
+	// C 出榜：把它的文章改成不足门槛的短正文 → C 的条数归零。
+	if err := n.st.UpsertArticle(store.Article{
+		ItemID: "article/gc", Title: "短", BodyMD: "短",
+		ContentHash: protocol.SHA256Hex([]byte("短")), SourceRev: "rev-2",
+	}); err != nil {
+		t.Fatalf("UpsertArticle: %v", err)
+	}
+	p = n.proposals(t)[0]
+	if p["vote_count"] != float64(1) || p["status"] != "pending" {
+		t.Fatalf("C 出榜后票数应回退到 1: %v", p)
+	}
+	// C 重新入榜 → 票恢复（UpsertArticle 不动 author_id，归属仍在）。
+	if err := n.st.UpsertArticle(store.Article{
+		ItemID: "article/gc", Title: "丙", BodyMD: n.longBody("丙"),
+		ContentHash: protocol.SHA256Hex([]byte(n.longBody("丙"))), SourceRev: "rev-3",
+	}); err != nil {
+		t.Fatalf("UpsertArticle: %v", err)
+	}
+	p = n.proposals(t)[0]
+	if p["vote_count"] != float64(2) {
+		t.Fatalf("C 重新入榜后票应恢复: %v", p)
+	}
+	// edit 档门槛是 2。
+	eid := n.propose(t, govSeedA, "edit", "article/gb", map[string]any{
+		"edit": map[string]any{"title": "新标题", "body_md": n.longBody("乙")},
+	})
+	for _, item := range n.proposals(t) {
+		if item["proposal_id"] != eid {
+			continue
+		}
+		if item["threshold"] != float64(2) {
+			t.Fatalf("edit 门槛应为 2: %v", item)
+		}
+	}
+}
+
+func TestVoteRateLimited(t *testing.T) {
+	n := fourGovernors(t)
+	n.propose(t, govSeedA, "remove", "article/gb", nil)
+	// 限速在鉴权与 404 之后、落库之前，用不存在提案更干净：
+	var code int
+	var out map[string]any
+	for i := 0; i <= voteBurstPerID; i++ {
+		code, out = n.vote(t, govSeedC, "999")
+		if i < voteBurstPerID && code != http.StatusNotFound {
+			t.Fatalf("第 %d 次应 404: code=%d out=%v", i+1, code, out)
+		}
+	}
+	if code != http.StatusTooManyRequests || out["code"] != "govern_rate_limited" {
+		t.Fatalf("超限应 429: code=%d out=%v", code, out)
+	}
+}

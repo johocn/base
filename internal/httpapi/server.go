@@ -118,8 +118,10 @@ func (s *Server) publicMux() *http.ServeMux {
 	mux.Handle("POST /v1/profile", s.requireAuth(s.handleProfilePut))
 	mux.Handle("POST /v1/submit", s.requireAuth(s.handleSubmitPost))
 
-	// 审批治理（册子 §3）：提案走签名写路径。
+	// 审批治理（册子 §3）：提案与投票走签名写路径，列表是匿名公开读。
 	mux.Handle("POST /v1/proposal", s.requireAuth(s.handleProposalPost))
+	mux.Handle("POST /v1/proposal/{proposal_id}/vote", s.requireAuth(s.handleVotePost))
+	mux.HandleFunc("GET /v1/proposal", s.handleProposalList)
 
 	// 评论公开读（匿名，册子 §4.2）。
 	mux.HandleFunc("GET /v1/comment", s.handleCommentList)
