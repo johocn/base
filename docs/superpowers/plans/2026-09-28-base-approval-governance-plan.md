@@ -87,24 +87,54 @@ func TestGovernTablesExist(t *testing.T) {
 	}
 }
 
+// TestGovernThresholdAndStatusDerivation 锁定门槛与状态派生的合同值（册子 §2.1 / §4.4）。
+//
+// ⚠️ 偏差（Task 1）：此处刻意用等价内联表达式（同规则、同字面量）断言合同值，而不是调用
+// GovernThreshold / GovernRequiredState / ProposalStatus —— 它们要到 Task 2 的 govern.go 才实现，
+// Task 1 只做两张新表与 sqlExec 抽壳。**Task 2 的最后一步必须把本函数改回调用真函数**（见 Task 2 Step 6）。
 func TestGovernThresholdAndStatusDerivation(t *testing.T) {
-	if got := GovernThreshold(GovernActionRemove); got != 3 {
+	// 门槛：remove 3，edit / revive 2。
+	threshold := func(action string) int {
+		if action == "remove" {
+			return 3
+		}
+		return 2
+	}
+	if got := threshold("remove"); got != 3 {
 		t.Fatalf("remove 门槛=%d want 3", got)
 	}
-	for _, a := range []string{GovernActionEdit, GovernActionRevive} {
-		if got := GovernThreshold(a); got != 2 {
+	for _, a := range []string{"edit", "revive"} {
+		if got := threshold(a); got != 2 {
 			t.Fatalf("%s 门槛=%d want 2", a, got)
 		}
 	}
-	if got := GovernRequiredState(GovernActionRevive); got != "removed" {
+	// 前置 state：revive 需 removed，remove / edit 需 active。
+	requiredState := func(action string) string {
+		if action == "revive" {
+			return "removed"
+		}
+		return "active"
+	}
+	if got := requiredState("revive"); got != "removed" {
 		t.Fatalf("revive 需 removed，得 %q", got)
 	}
-	for _, a := range []string{GovernActionRemove, GovernActionEdit} {
-		if got := GovernRequiredState(a); got != "active" {
+	for _, a := range []string{"remove", "edit"} {
+		if got := requiredState(a); got != "active" {
 			t.Fatalf("%s 需 active，得 %q", a, got)
 		}
 	}
-	if ProposalStatus(1, 0) != GovernStatusEffective || ProposalStatus(0, 1) != GovernStatusVoid || ProposalStatus(0, 0) != GovernStatusPending {
+	// status 由两个一次性事实派生（册子 §4.4）。
+	status := func(executedAt, voidedAt int64) string {
+		switch {
+		case executedAt != 0:
+			return "effective"
+		case voidedAt != 0:
+			return "void"
+		default:
+			return "pending"
+		}
+	}
+	if status(1, 0) != "effective" || status(0, 1) != "void" || status(0, 0) != "pending" {
 		t.Fatal("status 派生不对（册子 §4.4）")
 	}
 }
@@ -550,7 +580,40 @@ func (s *Store) ListProposalViews(roster map[string]bool) ([]ProposalView, error
 Run: `go test ./internal/store/ -run 'TestCreateAndGetProposal|TestCreateProposalWritesFirstVote' -v`
 Expected: PASS（`TestListProposalViewsFiltersVotesByRoster` 留到 Task 3 一起跑）
 
-- [ ] **Step 5: 提交**
+- [ ] **Step 5: 把 Task 1 的内联表达式改回调用真函数**
+
+Task 1 的 `TestGovernThresholdAndStatusDerivation` 当时用了等价内联闭包（因为本 Task 的函数尚未存在）。现在真函数已在 `internal/store/govern.go`，把 `internal/store/govern_test.go` 里那个函数体整体替换为：
+
+```go
+func TestGovernThresholdAndStatusDerivation(t *testing.T) {
+	if got := GovernThreshold(GovernActionRemove); got != 3 {
+		t.Fatalf("remove 门槛=%d want 3", got)
+	}
+	for _, a := range []string{GovernActionEdit, GovernActionRevive} {
+		if got := GovernThreshold(a); got != 2 {
+			t.Fatalf("%s 门槛=%d want 2", a, got)
+		}
+	}
+	if got := GovernRequiredState(GovernActionRevive); got != "removed" {
+		t.Fatalf("revive 需 removed，得 %q", got)
+	}
+	for _, a := range []string{GovernActionRemove, GovernActionEdit} {
+		if got := GovernRequiredState(a); got != "active" {
+			t.Fatalf("%s 需 active，得 %q", a, got)
+		}
+	}
+	if ProposalStatus(1, 0) != GovernStatusEffective || ProposalStatus(0, 1) != GovernStatusVoid || ProposalStatus(0, 0) != GovernStatusPending {
+		t.Fatal("status 派生不对（册子 §4.4）")
+	}
+}
+```
+
+（同时删掉该函数上方那段「⚠️ 偏差（Task 1）」注释。）
+
+- [ ] **Step 6: 跑测试确认通过并提交**
+
+Run: `go test ./internal/store/ -run 'TestGovernThresholdAndStatusDerivation' -v`
+Expected: PASS
 
 ```bash
 git add internal/store/govern.go internal/store/govern_test.go
