@@ -65,7 +65,7 @@
 | `apps/mobile/src/pages/myitems/myitems.vue` | 我的条目 | 三段：待发（`pending`，可改可删）、已提交（可重投更新、可跳条目页）、失败（显示原因，可删）；进入页面触发一次补发 |
 | `apps/mobile/src/pages/governance/governance.vue` | 提案与投票 | 列表（每次 onShow 实时拉、不缓存票数）+ 投票按钮 + 发起表单（由列表或 `item_id` 参数进入） |
 | `apps/mobile/src/pages/contribution/contribution.vue` | 我的贡献 | 昵称设置 + `GET /v1/contributors` 名单（在榜则标出自己；不在榜显示「未入前 10」与我的 id 前 8 位） |
-| `web/templates/governance.html`（配 `web/web.go` 的 `/governance` 路由） | 节点只读看板 | 服务端渲染、直接读库，不调接口 |
+| `web/templates/governance.html`（路由与模板集合的落点见 §7.1） | 节点只读看板 | 服务端渲染、直接读库，不调接口 |
 
 ### 2.2 入口
 
@@ -167,15 +167,21 @@
 
 ### 5.2 `question_json` 的生成口径
 
-结构化表单是**唯一出口**，不提供 JSON 手写框。生成规则：
+结构化表单是**唯一出口**，不提供 JSON 手写框。键名与形状已与实现核对（Go 侧 `Question{q,options,answer,explain}` + `QuestionDoc{schema_version,questions}`，**无 `omitempty`**，空 `explain` 也照样输出）。
 
-- 顶层固定 `{"schema_version":1,"questions":[…]}`，键序固定为 `schema_version` → `questions`。
-- 每题键序固定为 `q` → `options` → `answer` → `explain`；`explain` 必出（无解析时为空串），避免同一份内容出现两种字节形态。
-- `answer` 为**正确项下标**（整数），与现有解析口径一致。
-- 提交前必须本地校验：`schema_version == 1`、`questions` 非空、每题 `q` 非空、`options` ≥ 2 且每项非空、`answer` 落在 `options` 下标范围内。
-- 校验通过后再序列化为**字符串**随请求发送。
+生成规则：
 
-**为什么必须校验**：服务端在投稿时只校验「能通过 `validQuestionJSON`」（合法 JSON + `schema_version==1` + `questions` 非空），**不做深度结构校验**；而贡献度量侧会对 `question_json` 做 `json.Unmarshal` 重建，结构不合法的题组虽然能入库，却会**静默不计入贡献**。所以结构合法性必须由客户端在提交前兜住。
+- 顶层固定 `{"schema_version":1,"questions":[…]}`，键序 `schema_version` → `questions`。
+- 每题键序 `q` → `options` → `answer` → `explain`；`explain` 必出（无解析时为空串）。
+- `answer` 为**正确项下标**（整数），与解析口径一致；题组标题**不进 `question_json`**（走请求体的 `title`）。
+- 编辑期额外约束：选项文本去首尾空白后非空（解析器容忍空串选项，但编辑器不该产出）。
+- 提交前本地校验，然后才序列化为**字符串**随请求发送。
+
+**为什么必须校验**：服务端 `validQuestionJSON` 只查三层——合法 JSON、`schema_version == 1`、`questions` 非空，比手机端答题页松得多；而贡献度量侧还会对 `question_json` 做 `json.Unmarshal` 重建。不合规的题组能入库，但答题页会判「题目格式不支持」，贡献也**静默不计**。
+
+**校验口径**：直接复用 `parseQuestionDoc`（`core/quiz.ts`）做往返自检——`parseQuestionDoc(生成串) !== null` 才算通过，不再另写一套规则。它与服务端的差别正是要害：要求每题 `q` 为非空字符串、`options` ≥ 2 且全为字符串、`answer` 为整数且 `0 ≤ answer < len(options)`，`explain` 可缺省（缺省即 `''`）。
+
+**一处口径说明**：键序固定**不是契约约束**——节点把整串原样存库、从不重新序列化，字节序由客户端自定。固定键序只为让「重投同一份内容」不产生无意义的字节抖动（否则每次重开编辑器再提交都会得到不同的 `content_hash`）。因此测试只验自家 build → parse 往返，**不要**写「与 Go 输出逐字节一致」的断言。
 
 ### 5.3 投稿（断网入队与补发）
 
@@ -227,21 +233,45 @@ UI 不出现课程选择器；`item_id` 由客户端生成 `article/<slug>` 或 
 
 ## 7. 节点公开页只读看板
 
-`/governance` 路由，服务端渲染、**直接读库**（`ListProposalViews(roster)` + `GetItem(item_id)` 取标题与 `state` + `ContributorRoster` / `ProfileNames`），不需要新接口。
+### 7.1 落点（与既有公开页同形）
 
-版面 = **单列流水、新提案在前**（接口按 `proposal_id` 升序返回，渲染时纯反转），一条提案一行卡片：
+- 路由注册在 `internal/httpapi/server.go`，与 `GET /{$}`（目录）、`GET /a/{item_id...}`（文章页）并列：新增 `mux.HandleFunc("GET /governance", s.handleGovernancePage)`。
+- 模板新增 `web/templates/governance.html`；`internal/httpapi/web.go` 里按既有写法声明 `governanceTmpl = template.Must(template.New("governance").ParseFS(web.FS, "templates/base.html", "templates/governance.html"))`。**每页一个独立模板集合**（`base.html` 提供骨架、页面文件只定义 content 块）——既有注释已说明合并会让 content 块互相覆盖，不能图省事塞进同一个集合。
+- 渲染走既有 `s.renderPage(w, governanceTmpl, data)`：给 `pageData` **追加字段**（例：`Proposals []pageProposal`、`Roster []pageContributor`）与同风格的小 struct，**不改 `renderPage` 签名**。
+- `web/web.go` 只有 `//go:embed templates/*.html`，本册不动它。
+
+### 7.2 读库（不新增接口）
+
+| 数据 | 来源 |
+|---|---|
+| 提案 + 票数 / 门槛 / 状态 | 复用 `s.governRoster()` 得到名册集合，再 `s.st.ListProposalViews(set)`（**门槛与票数一律用它返回的 `threshold` / `vote_count`，看板不自己算**） |
+| 条目标题与状态 | `s.st.GetItem(item_id)` → 取 `Title` / `State` / `DistClass` |
+| 名册 | `s.st.ContributorRoster()`（内部已按 `RosterTopN` 截前 10）+ `s.st.ProfileNames(nil)`（空 ids = 全部） |
+
+复用 `governRoster()` 而不是自己建集合，是为了继承它的降级口径：派生失败按空名册继续渲染（票数自然为 0），页面提示「名册暂不可用」，与接口侧一致。
+
+### 7.3 两条可见性护栏
+
+1. **标题只在 `DistClass == "public"` 时显示**，否则回退显示 `item_id`。公开页（`handleIndex` / `handleArticlePage`）只暴露 `public` 条目，看板不能成为旁路，把非公开条目的标题泄出去。
+2. **`/a/{item_id}` 链接只对 `State == "active"` 且 `public` 的条目挂**：`handleArticlePage` 明确要求 active + public，对 `removed` 条目会返回 404。所以下架条目在流水里渲染为**纯文本标题 + `removed` 徽章**，不给死链。
+
+### 7.4 版面
+
+**单列流水、新提案在前**（`ListProposalViews` 按 `proposal_id` 升序返回，渲染时纯反转），一条提案一行卡片：
 
 - 动作徽章（下架 / 改写 / 复活）
-- 条目标题（链到条目页；`GetItem` 能取到已下架条目，标题不会缺失）
+- 条目标题（按 §7.3 决定是否挂链接）
 - 条目当前状态徽章（`active` / `removed`）
 - 理由
 - 票数 / 门槛进度条（含门槛值）
-- 投票人昵称
-- 提案状态与时间（`pending` / `effective` / `void`）
+- 投票人昵称；缺昵称回退 `id[:8]`，与 `GET /v1/contributors` 同一口径
+- 提案状态与时间（`pending` / `effective` / `void`；`created_at` 为毫秒时间戳，格式化为本地时间字符串）
 
 顶部一行名册与门槛说明：**下架 3 票、改写与复活各 2 票**，票数由名册实时复判。
 
-`edit` 提案额外以折叠块显示拟改标题与正文（匿名读接口本就返回这些字段）。空态文案给出「本节点暂无提案」。**全量不分页**（与 #27 风险 6 同一量级假设）。
+`edit` 提案额外以折叠块显示拟改标题与正文（匿名读接口本就返回这两个字段；`remove` / `revive` 提案的 `title` / `body_md` 恒为空，不渲染该块）。
+
+空态文案：「本节点暂无提案」；名册为空时另提示「暂无贡献者」。**全量不分页**（与 #27 风险 6 同一量级假设）。
 
 看板只显示标题与治理元数据，不显示条目正文（正文在库内为密文）。
 
