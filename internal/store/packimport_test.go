@@ -163,3 +163,57 @@ func TestImportPackSkipsNonPublic(t *testing.T) {
 		t.Fatal("非 public 条目不得入库")
 	}
 }
+
+// 同一包内「归属通过」与「归属为空」的条目各自独立处理：空归属只是不计贡献，不影响入库。
+func TestImportPackStoresAuthorColumns(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	const (
+		authorID = "f78672b2f87ff80b248323a4be7c3da6"
+		sigHex   = "4d60b2e2e4f998bea25bd0124dffcdf0fb44ccf2db886ae2cac9764d9e03d06668dfa029440cc3554e93737644bb5b1c1601505c14d22c672bed235b41c85203"
+	)
+	body := "正文"
+	hash := protocol.SHA256Hex([]byte(body))
+	entries := []PackEntry{
+		{ItemID: "article:with-author", Source: "article", Type: "article", Title: "有归属",
+			ContentHash: hash, SQLiteTable: "articles", DistClass: "public", BodyMD: body,
+			AuthorID: authorID, AuthorSig: sigHex},
+		{ItemID: "article:no-author", Source: "article", Type: "article", Title: "无归属",
+			ContentHash: hash, SQLiteTable: "articles", DistClass: "public", BodyMD: body},
+	}
+	if _, err := st.ImportPack(3, entries, []protocol.Tombstone{}); err != nil {
+		t.Fatalf("ImportPack: %v", err)
+	}
+	it, ok, err := st.GetItem("article:with-author")
+	if err != nil || !ok {
+		t.Fatalf("GetItem: ok=%v err=%v", ok, err)
+	}
+	if it.AuthorID != authorID || it.AuthorSig != sigHex {
+		t.Fatalf("归属缓存未落库: %+v", it)
+	}
+	it2, _, err := st.GetItem("article:no-author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it2.AuthorID != "" || it2.AuthorSig != "" {
+		t.Fatalf("无归属条目两列应为空: %+v", it2)
+	}
+
+	// 再次导入同一 item 且不带归属 → 覆盖为空（避免陈旧归属残留）
+	if _, err := st.ImportPack(4, []PackEntry{{
+		ItemID: "article:with-author", Source: "article", Type: "article", Title: "有归属",
+		ContentHash: hash, SQLiteTable: "articles", DistClass: "public", BodyMD: body,
+	}}, []protocol.Tombstone{}); err != nil {
+		t.Fatalf("二次 ImportPack: %v", err)
+	}
+	it3, _, err := st.GetItem("article:with-author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it3.AuthorID != "" || it3.AuthorSig != "" {
+		t.Fatalf("重导后归属应被覆盖为空: %+v", it3)
+	}
+}

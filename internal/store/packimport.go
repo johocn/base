@@ -24,6 +24,10 @@ type PackEntry struct {
 	DistClass   string
 	UpdatedAt   string
 
+	// 归属（治理册 §3.1）：由调用方（peersync）验签后填入；验不过则为空串。
+	AuthorID  string
+	AuthorSig string
+
 	// SQLiteTable == "articles"
 	Digest      string
 	PublishedAt string
@@ -109,13 +113,14 @@ func (s *Store) ImportPack(version int64, entries []PackEntry, tombstones []prot
 		if updated == "" {
 			updated = nowUTC()
 		}
-		if _, err := tx.Exec(`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at)
-			VALUES(?,?,?,?,?,?,?,'public','active',?)
+		if _, err := tx.Exec(`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at,author_id,author_sig)
+			VALUES(?,?,?,?,?,?,?,'public','active',?,?,?)
 			ON CONFLICT(item_id) DO UPDATE SET
 				source=excluded.source, type=excluded.type, title=excluded.title, source_rev=excluded.source_rev,
 				content_hash=excluded.content_hash, sqlite_table=excluded.sqlite_table,
-				dist_class=excluded.dist_class, state=excluded.state, updated_at=excluded.updated_at`,
-			e.ItemID, e.Source, e.Type, e.Title, e.SourceRev, e.ContentHash, e.SQLiteTable, updated); err != nil {
+				dist_class=excluded.dist_class, state=excluded.state, updated_at=excluded.updated_at,
+				author_id=excluded.author_id, author_sig=excluded.author_sig`,
+			e.ItemID, e.Source, e.Type, e.Title, e.SourceRev, e.ContentHash, e.SQLiteTable, updated, e.AuthorID, e.AuthorSig); err != nil {
 			return res, fmt.Errorf("store: 入库 items %s: %w", e.ItemID, err)
 		}
 		switch e.SQLiteTable {

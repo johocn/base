@@ -41,6 +41,9 @@ type Item struct {
 	DistClass   string
 	State       string
 	UpdatedAt   string
+	// 归属缓存（治理册 §3.1）：权威在签名里，这两列是「入库时已验签通过」的本地缓存。
+	AuthorID  string
+	AuthorSig string
 }
 
 // Article 是文章条目。
@@ -377,7 +380,7 @@ func (s *Store) GetBlobBytes(blobID string) ([]byte, error) {
 
 // GetItem 读取目录条目。
 func (s *Store) GetItem(itemID string) (Item, bool, error) {
-	row := s.db.QueryRow(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at
+	row := s.db.QueryRow(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at,author_id,author_sig
 		FROM items WHERE item_id=?`, itemID)
 	it, err := scanItem(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -391,7 +394,7 @@ func (s *Store) GetItem(itemID string) (Item, bool, error) {
 
 // ListItems 按 item_id 升序返回指定状态的条目；state 为空表示全部。
 func (s *Store) ListItems(state string) ([]Item, error) {
-	q := `SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at FROM items`
+	q := `SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at,author_id,author_sig FROM items`
 	args := []any{}
 	if state != "" {
 		q += ` WHERE state=?`
@@ -411,7 +414,7 @@ func (s *Store) ListItemsPage(cursor string, limit int) ([]Item, string, error) 
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := s.db.Query(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at
+	rows, err := s.db.Query(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at,author_id,author_sig
 		FROM items WHERE item_id > ? ORDER BY item_id ASC LIMIT ?`, cursor, limit)
 	if err != nil {
 		return nil, "", err
@@ -431,7 +434,7 @@ func (s *Store) ListItemsPage(cursor string, limit int) ([]Item, string, error) 
 func scanItem(row interface{ Scan(...any) error }) (Item, error) {
 	var it Item
 	err := row.Scan(&it.ItemID, &it.Source, &it.Type, &it.Title, &it.SourceRev, &it.ContentHash,
-		&it.SQLiteTable, &it.DistClass, &it.State, &it.UpdatedAt)
+		&it.SQLiteTable, &it.DistClass, &it.State, &it.UpdatedAt, &it.AuthorID, &it.AuthorSig)
 	return it, err
 }
 
