@@ -11,6 +11,7 @@
         <text class="act" @click="cycleFont">A {{ fontScale }}</text>
         <text class="act" @click="cycleTheme">{{ themeLabel }}</text>
         <text class="act" @click="openComments">评论</text>
+        <text class="act" @click="openGovernance">治理</text>
       </view>
       <text
         v-for="(p, i) in paragraphs"
@@ -140,6 +141,14 @@ async function cycleTheme() {
 function openComments() {
   setPendingTarget(itemId.value);
   uni.switchTab({ url: '/pages/comment/comment' });
+}
+
+/**
+ * 「治理」恒显：本地 `items` 表没有 `author_id`，判不出「这条是不是我写的」，
+ * 资格一律由服务端回 `item_self_owned` / `item_state_mismatch` 后提示（本册 §2.3）。
+ */
+function openGovernance() {
+  uni.navigateTo({ url: `/pages/governance/governance?itemId=${encodeURIComponent(itemId.value)}` });
 }
 
 /** 页面间传参在个别机型上会保留百分号编码（itemId 含 `:` 会变成 %3A），按原样查不到就按解码后再查 */

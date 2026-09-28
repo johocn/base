@@ -51,6 +51,10 @@
     {
       "path": "pages/myitems/myitems",
       "style": { "navigationBarTitleText": "我的条目" }
+    },
+    {
+      "path": "pages/governance/governance",
+      "style": { "navigationBarTitleText": "提案与投票" }
     }
   ],
   "tabBar": {
