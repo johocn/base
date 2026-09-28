@@ -433,3 +433,301 @@ func TestVoteRateLimited(t *testing.T) {
 		t.Fatalf("超限应 429: code=%d out=%v", code, out)
 	}
 }
+
+// unattributed 造一条空归属的 active article（模拟导入器 / tools/migrate 的存量内容）。
+func (n *governNode) unattributed(t *testing.T, itemID, body string) {
+	t.Helper()
+	if err := n.st.UpsertArticle(store.Article{
+		ItemID: itemID, Title: "存量", BodyMD: body,
+		ContentHash: protocol.SHA256Hex([]byte(body)), SourceRev: "rev-legacy",
+	}); err != nil {
+		t.Fatalf("UpsertArticle: %v", err)
+	}
+}
+
+// shrink 把某条 article 换成不足门槛的短正文（把作者挤出名册，用于实时复判用例）。
+// UpsertArticle 不动 author_id，故归属仍在、只是不再达门槛。
+func (n *governNode) shrink(t *testing.T, itemID string) {
+	t.Helper()
+	n.unattributed(t, itemID, "短")
+}
+
+// tombstone 读某条目的墓碑行；ok=false 表示没有墓碑。
+// 走既有公开读法 ListTombstones（不为测试在 store 包加新方法）。
+func (n *governNode) tombstone(t *testing.T, itemID string) (int, bool) {
+	t.Helper()
+	rows, err := n.st.ListTombstones()
+	if err != nil {
+		t.Fatalf("ListTombstones: %v", err)
+	}
+	for _, r := range rows {
+		if r.ItemID == itemID {
+			return r.RevokedRev, true
+		}
+	}
+	return 0, false
+}
+
+// mustID 由种子推出 author_id；失败即 t.Fatal。
+func mustID(t *testing.T, seed string) string {
+	t.Helper()
+	id, _ := identityFromSeed(t, seed)
+	return id
+}
+
+// AC 1–3：remove 分档 —— 1 票 pending / 第 2 票仍 pending / 第 3 票 effective。
+func TestGovernAC1To3RemoveThreshold(t *testing.T) {
+	n := fourGovernors(t)
+	bItem := "article/gb"
+	id := n.propose(t, govSeedA, "remove", bItem, nil)
+	list := n.proposals(t)[0]
+	if list["vote_count"] != float64(1) || list["threshold"] != float64(3) || list["status"] != "pending" {
+		t.Fatalf("AC1: %v", list)
+	}
+	// AC 2：第 2 票仍 pending，目标仍是 active、无墓碑。
+	code, out := n.vote(t, govSeedC, id)
+	if code != http.StatusOK || out["status"] != "pending" {
+		t.Fatalf("AC2: code=%d out=%v", code, out)
+	}
+	if it, _, _ := n.st.GetItem(bItem); it.State != "active" {
+		t.Fatalf("AC2 目标应仍 active: %s", it.State)
+	}
+	if _, ok := n.tombstone(t, bItem); ok {
+		t.Fatal("AC2 不应有墓碑行")
+	}
+	// AC 3：第 3 票 effective，目标 removed 且有墓碑。
+	code, out = n.vote(t, govSeedD, id)
+	if code != http.StatusOK || out["status"] != "effective" {
+		t.Fatalf("AC3: code=%d out=%v", code, out)
+	}
+	if it, _, _ := n.st.GetItem(bItem); it.State != "removed" {
+		t.Fatalf("AC3 目标应 removed: %s", it.State)
+	}
+	if _, ok := n.tombstone(t, bItem); !ok {
+		t.Fatal("AC3 下架后应存在墓碑行")
+	}
+}
+
+// AC 4：revive 走 2 票档，不被 remove 的 3 票档带偏。
+func TestGovernAC4ReviveTwoVotes(t *testing.T) {
+	n := fourGovernors(t)
+	bItem := "article/gb"
+	rid := n.propose(t, govSeedA, "remove", bItem, nil)
+	if _, out := n.vote(t, govSeedC, rid); out["status"] != "pending" {
+		t.Fatalf("remove 第 2 票应 pending: %v", out)
+	}
+	if _, out := n.vote(t, govSeedD, rid); out["status"] != "effective" {
+		t.Fatalf("remove 第 3 票应 effective: %v", out)
+	}
+	if got := n.rosterCount(t, mustID(t, govSeedB)); got != 0 {
+		t.Fatalf("下架后 B 应掉出名册，得 %d", got)
+	}
+	vid := n.propose(t, govSeedA, "revive", bItem, nil)
+	code, out := n.vote(t, govSeedC, vid)
+	if code != http.StatusOK || out["threshold"] != float64(2) || out["status"] != "effective" {
+		t.Fatalf("AC4: code=%d out=%v", code, out)
+	}
+	if it, _, _ := n.st.GetItem(bItem); it.State != "active" {
+		t.Fatalf("AC4 复活后应 active: %s", it.State)
+	}
+	if _, ok := n.tombstone(t, bItem); ok {
+		t.Fatal("AC4 复活后墓碑行应已删除")
+	}
+	if got := n.rosterCount(t, mustID(t, govSeedB)); got != 1 {
+		t.Fatalf("AC4 复活后 B 应回名册，得 %d", got)
+	}
+}
+
+// AC 5：只改标题 → content_hash 不变、归属保留、B 的计数不减。
+func TestGovernAC5EditTitleOnly(t *testing.T) {
+	n := fourGovernors(t)
+	body := n.longBody("乙")
+	id := n.propose(t, govSeedA, "edit", "article/gb", map[string]any{
+		"edit": map[string]any{"title": "新标题", "body_md": body},
+	})
+	code, out := n.vote(t, govSeedC, id)
+	if code != http.StatusOK || out["threshold"] != float64(2) || out["status"] != "effective" {
+		t.Fatalf("AC5: code=%d out=%v", code, out)
+	}
+	it, _, _ := n.st.GetItem("article/gb")
+	if it.Title != "新标题" {
+		t.Fatalf("AC5 标题应已改: %q", it.Title)
+	}
+	if it.ContentHash != protocol.SHA256Hex([]byte(body)) {
+		t.Fatalf("AC5 content_hash 应不变")
+	}
+	if it.AuthorID != mustID(t, govSeedB) || it.AuthorSig == "" {
+		t.Fatalf("AC5 归属应保留: %+v", it)
+	}
+	if got := n.rosterCount(t, mustID(t, govSeedB)); got != 1 {
+		t.Fatalf("AC5 B 的计数不应减少，得 %d", got)
+	}
+}
+
+// AC 6：改正文 → content_hash 变、归属清空、B 的计数 −1。
+func TestGovernAC6EditBodyClears(t *testing.T) {
+	n := fourGovernors(t)
+	newBody := n.longBody("乙改")
+	id := n.propose(t, govSeedA, "edit", "article/gb", map[string]any{
+		"edit": map[string]any{"title": "新标题", "body_md": newBody},
+	})
+	if _, out := n.vote(t, govSeedC, id); out["status"] != "effective" {
+		t.Fatalf("AC6 应生效: %v", out)
+	}
+	it, _, _ := n.st.GetItem("article/gb")
+	if it.ContentHash != protocol.SHA256Hex([]byte(newBody)) || it.AuthorID != "" || it.AuthorSig != "" {
+		t.Fatalf("AC6 应清空归属并重算 hash: %+v", it)
+	}
+	if got := n.rosterCount(t, mustID(t, govSeedB)); got != 0 {
+		t.Fatalf("AC6 B 的计数应 −1（掉出），得 %d", got)
+	}
+}
+
+// AC 7：非治理者提案 → 403。
+func TestGovernAC7NonGovernor(t *testing.T) {
+	n := fourGovernors(t)
+	if code, out := n.post(t, govSeedX, "/v1/proposal", proposalBody(t, "remove", "article/gb", nil)); code != http.StatusForbidden || out["code"] != "proposer_not_governor" {
+		t.Fatalf("AC7: code=%d out=%v", code, out)
+	}
+}
+
+// AC 8（分档冷启动）：名册 1 人 → 任何动作恒 pending；名册 2 人 → edit 可生效、remove 恒 pending。
+func TestGovernAC8ColdStartByTier(t *testing.T) {
+	// 名册 1 人：只有 A 有内容；两个目标都是空归属存量条目（不属于任何人）。
+	n := newGovernNode(t)
+	n.publishArticle(t, govSeedA, "article/a1", "甲")
+	n.unattributed(t, "article/leg1", n.longBody("存1"))
+	n.unattributed(t, "article/leg2", n.longBody("存2"))
+
+	n.propose(t, govSeedA, "remove", "article/leg1", nil)
+	if out := n.proposals(t)[0]; out["status"] != "pending" || out["threshold"] != float64(3) {
+		t.Fatalf("AC8 一人名册 remove 应恒 pending: %v", out)
+	}
+	e1 := n.propose(t, govSeedA, "edit", "article/leg2", map[string]any{
+		"edit": map[string]any{"title": "新", "body_md": n.longBody("存2改")},
+	})
+	for _, p := range n.proposals(t) {
+		if p["proposal_id"] == e1 && p["status"] != "pending" {
+			t.Fatalf("AC8 一人名册 edit 应恒 pending: %v", p)
+		}
+	}
+
+	// 名册 2 人：再加 B 的达标文章 → edit 可以 2 票生效，remove 仍差一票。
+	m := newGovernNode(t)
+	m.publishArticle(t, govSeedA, "article/a1", "甲")
+	m.publishArticle(t, govSeedB, "article/gb", "乙")
+	m.unattributed(t, "article/leg3", m.longBody("存3"))
+	m.unattributed(t, "article/leg4", m.longBody("存4"))
+
+	e2 := m.propose(t, govSeedA, "edit", "article/leg3", map[string]any{
+		"edit": map[string]any{"title": "新", "body_md": m.longBody("存3改")},
+	})
+	if _, out := m.vote(t, govSeedB, e2); out["status"] != "effective" {
+		t.Fatalf("AC8 二人名册 edit 应生效: %v", out)
+	}
+	r2 := m.propose(t, govSeedA, "remove", "article/leg4", nil)
+	if _, out := m.vote(t, govSeedB, r2); out["status"] != "pending" {
+		t.Fatalf("AC8 二人名册 remove 应恒 pending: %v", out)
+	}
+	if it, _, _ := m.st.GetItem("article/leg4"); it.State != "active" {
+		t.Fatalf("AC8 remove 未生效不得动目标: %s", it.State)
+	}
+}
+
+// AC 9：受理后、第 3 票前原作者更新该条 → 第 3 票投出后 void，新正文未被覆盖。
+func TestGovernAC9OptimisticLock(t *testing.T) {
+	n := fourGovernors(t)
+	id := n.propose(t, govSeedA, "remove", "article/gb", nil)
+	if _, out := n.vote(t, govSeedC, id); out["status"] != "pending" {
+		t.Fatalf("AC9 第 2 票应 pending: %v", out)
+	}
+	// 原作者 B 用第 2 册的写路径更新该条（正文与签名一起换）。
+	newBody := n.longBody("乙新")
+	n.publishArticle(t, govSeedB, "article/gb", "乙新标题")
+	code, out := n.vote(t, govSeedD, id)
+	if code != http.StatusOK || out["status"] != "void" {
+		t.Fatalf("AC9: code=%d out=%v", code, out)
+	}
+	it, _, _ := n.st.GetItem("article/gb")
+	if it.Title != "乙新标题" || it.State != "active" {
+		t.Fatalf("AC9 原作者的新正文不得被覆盖: %+v", it)
+	}
+	a, _, _ := n.st.GetArticle("article/gb")
+	if a.BodyMD == newBody {
+		t.Fatalf("AC9 正文不该是治理载荷")
+	}
+	if a.BodyMD != "乙新标题"+repeat("文", 200) {
+		t.Fatalf("AC9 正文应是原作者的新版: %q", a.BodyMD)
+	}
+}
+
+// AC 10：重复投票 409（含提案人）。AC 12：治理动作不产生归属。
+func TestGovernAC10AndAC12(t *testing.T) {
+	n := fourGovernors(t)
+	id := n.propose(t, govSeedA, "remove", "article/gb", nil)
+	if code, out := n.vote(t, govSeedC, id); code != http.StatusOK {
+		t.Fatalf("AC10 第 2 票 code=%d out=%v", code, out)
+	}
+	if code, out := n.vote(t, govSeedC, id); code != http.StatusConflict || out["code"] != "already_voted" {
+		t.Fatalf("AC10 重复投票: code=%d out=%v", code, out)
+	}
+	if code, out := n.vote(t, govSeedA, id); code != http.StatusConflict || out["code"] != "already_voted" {
+		t.Fatalf("AC10 提案人重复投票: code=%d out=%v", code, out)
+	}
+	// AC 12：治理动作前后 A / C / D 的计数不变。
+	for _, seed := range []string{govSeedA, govSeedC, govSeedD} {
+		if got := n.rosterCount(t, mustID(t, seed)); got != 1 {
+			t.Fatalf("AC12 治理者计数不应变化，得 %d", got)
+		}
+	}
+}
+
+// AC 11：无签名头 GET 200；votes 随名册实时增减；threshold 与 action 一致。
+func TestGovernAC11AnonymousListRealtime(t *testing.T) {
+	n := fourGovernors(t)
+	id := n.propose(t, govSeedA, "remove", "article/gb", nil)
+	if _, out := n.vote(t, govSeedC, id); out["status"] != "pending" {
+		t.Fatalf("AC11: %v", out)
+	}
+	p := n.proposals(t)[0]
+	if p["threshold"] != float64(3) || p["vote_count"] != float64(2) {
+		t.Fatalf("AC11: %v", p)
+	}
+	// 把 C 挤出名册 → 票回退。
+	n.shrink(t, "article/gc")
+	if p = n.proposals(t)[0]; p["vote_count"] != float64(1) {
+		t.Fatalf("AC11 出榜后应回退到 1: %v", p)
+	}
+	// C 恢复 → 票恢复。
+	if err := n.st.UpsertArticle(store.Article{
+		ItemID: "article/gc", Title: "丙", BodyMD: n.longBody("丙"),
+		ContentHash: protocol.SHA256Hex([]byte(n.longBody("丙"))), SourceRev: "rev-back",
+	}); err != nil {
+		t.Fatalf("UpsertArticle: %v", err)
+	}
+	if p = n.proposals(t)[0]; p["vote_count"] != float64(2) {
+		t.Fatalf("AC11 恢复入榜后票应恢复: %v", p)
+	}
+}
+
+// AC 14：非 article 载体 edit 400、remove 201（册子 §0.3）。
+func TestGovernAC14CarrierBoundary(t *testing.T) {
+	n := fourGovernors(t)
+	qj := `{"schema_version":1,"questions":[{"q":"1","options":["a"],"answer":0,"explain":""}]}`
+	if err := n.st.UpsertQuiz(store.Quiz{
+		ItemID: "quiz/z1", Title: "题组", QuestionJSON: qj,
+		ContentHash: protocol.SHA256Hex([]byte(qj)), SourceRev: "rev-1",
+	}); err != nil {
+		t.Fatalf("UpsertQuiz: %v", err)
+	}
+	edit := proposalBody(t, "edit", "quiz/z1", map[string]any{"edit": map[string]any{"title": "新", "body_md": "正文"}})
+	if code, out := n.post(t, govSeedA, "/v1/proposal", edit); code != http.StatusBadRequest || out["code"] != "proposal_edit_invalid" {
+		t.Fatalf("AC14 edit on quiz: code=%d out=%v", code, out)
+	}
+	if _, ok, _ := n.st.GetProposal(1); ok {
+		t.Fatal("AC14 拒绝时不得落库")
+	}
+	if code, out := n.post(t, govSeedA, "/v1/proposal", proposalBody(t, "remove", "quiz/z1", nil)); code != http.StatusCreated {
+		t.Fatalf("AC14 remove on quiz 应受理: code=%d out=%v", code, out)
+	}
+}
