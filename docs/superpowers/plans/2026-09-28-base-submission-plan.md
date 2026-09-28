@@ -1365,3 +1365,12 @@ git commit -m "docs(plans): 治理主线第 2 册实施计划与执行实况回�
 3. **不新增表、不新增列、不 bump `schema_version`**：本册零迁移。
 4. **不给投稿条目可见性选择**：一律 `dist_class='public'`（册子 §0.1）。
 5. **不设内容下限**：1 个字的文章、1 道题的题库都能入库（只是不计贡献）；只设上限 `maxSubmitBytes`。
+
+---
+
+## 执行实况
+
+- Task 1–4 提交：`5d39a9c` 投稿写入 UpsertSubmission 与占用判定；`730cb8f` 投稿契约校验纯函数与文档级常量；`8b56726` 新增签名写路径 POST /v1/submit；`8261004` 投稿写路径 AC 1-10 端到端验收
+- 门禁：`go build ./...` / `go vet ./...` 无输出；`go test ./...` 全包 ok
+- AC 1–10：自动通过；**AC 11（两节点名册比对）待人工**，流程沿用 #23 AC 9
+- 执行期更正：无册子级更正。计划内一处自相矛盾已就地修正——Task 3 的 `handleSubmitPost` 原把「限速」置于「quiz 题组校验」之前，会与计划自带的 `TestSubmitRejectsInvalidQuestionJSON`（连发 4 条、`submitBurstPerID=3`）冲突；实际把 `validQuestionJSON` 校验提前到限速之前，错误码与状态语义未变，两个用例同时成立。
