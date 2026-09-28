@@ -20,6 +20,7 @@
 - `items.source_rev` 口径是 `content_hash[:16]`（`internal/importer/md.go`）；`articles.body_md` 走 `s.encText()` 加密存储。
 - `store.UpsertQuiz` 写下的条目 `source='lesson'`、`type='quiz'`、`sqlite_table='quizzes'`，是「非 article 载体」的现成样本。
 - 重复投票用 `ON CONFLICT(...) DO NOTHING` + `RowsAffected() == 0` 判定（与 `store.UseNonce` 同口径），不依赖驱动的错误类型。
+- **连接池是单连接**（`store.go` 的 `db.SetMaxOpenConns(1)`）：**游标未关闭时不得嵌套发起新查询**，否则拿不到连接会死锁（Task 2 的 `ListProposalViews` 已按此改写为先读尽、`rows.Close()`、再逐条取票）。同理，生效事务内的所有语句必须走 `tx` 而非 `s.db`。
 
 ---
 
@@ -553,13 +554,24 @@ func (s *Store) ListProposalViews(roster map[string]bool) ([]ProposalView, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []ProposalView{}
+	// 先把提案行读尽并关闭游标，再逐条取票：连接池为单连接（store.go SetMaxOpenConns(1)），
+	// 若在游标未闭合时嵌套查 govern_votes 会因拿不到连接而死锁。
+	proposals := []Proposal{}
 	for rows.Next() {
 		p, err := scanProposal(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
+		proposals = append(proposals, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	out := []ProposalView{}
+	for _, p := range proposals {
 		voters, err := proposalVotersExec(s.db, p.ProposalID)
 		if err != nil {
 			return nil, err
@@ -571,14 +583,14 @@ func (s *Store) ListProposalViews(roster map[string]bool) ([]ProposalView, error
 			Status:    ProposalStatus(p.ExecutedAt, p.VoidedAt),
 		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 ```
 
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `go test ./internal/store/ -run 'TestCreateAndGetProposal|TestCreateProposalWritesFirstVote' -v`
-Expected: PASS（`TestListProposalViewsFiltersVotesByRoster` 留到 Task 3 一起跑）
+Expected: PASS。`TestListProposalViewsFiltersVotesByRoster` 调用 `st.AddVote`（Task 3 才实现），本 Task 阶段无法编译——把它**以块注释 `/* ... */` 保留在 `govern_test.go` 里**（并在注释里写明「留待 Task 3 解除注释」），**不要删掉**；Task 3 落地 `AddVote` 后解除注释即可一起跑通。
 
 - [ ] **Step 5: 把 Task 1 的内联表达式改回调用真函数**
 
@@ -630,7 +642,9 @@ git commit -m "feat(store): 治理提案的写入与读取（含门槛/状态派
 
 - [ ] **Step 1: 写失败测试**
 
-在 `internal/store/govern_test.go` 追加（`signedSubmission` / `subSeedA` 来自 `submission_test.go`，同包可直接用）：
+先把 Task 2 里**以块注释保留**的 `TestListProposalViewsFiltersVotesByRoster` 解除注释（连同它上方那段「留待 Task 3」的说明注释一起删掉，只留测试函数本体）——`st.AddVote` 在本 Task 落地后即可编译。
+
+然后在 `internal/store/govern_test.go` 追加（`signedSubmission` / `subSeedA` 来自 `submission_test.go`，同包可直接用）：
 
 ```go
 // govItem 造一条带归属的 active article（走第 2 册的 UpsertSubmission，它会写 author_id/author_sig）。
