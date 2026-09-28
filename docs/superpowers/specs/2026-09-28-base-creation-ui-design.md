@@ -62,7 +62,7 @@
 | 文件 | 职责 | 关键交互 |
 |---|---|---|
 | `apps/mobile/src/pages/submit/submit.vue` | 投稿编辑器 | 顶部切「文章 / 题库」；文章=标题 + 正文 Markdown 框；题库=结构化题目表单（题干 / 2..N 选项 / 正确项单选 / 解析，题目可增删）；提交按钮；同一页承担「新建」与「重投更新」两种模式（带 `item_id` 进入即为更新模式） |
-| `apps/mobile/src/pages/myitems/myitems.vue` | 我的条目 | 三段：待发（`queued`，可删）、已提交（可重投更新、可跳条目页）、失败（显示原因，可删）；进入页面触发一次补发 |
+| `apps/mobile/src/pages/myitems/myitems.vue` | 我的条目 | 三段：待发（`pending`，可改可删）、已提交（可重投更新、可跳条目页）、失败（显示原因，可删）；进入页面触发一次补发 |
 | `apps/mobile/src/pages/governance/governance.vue` | 提案与投票 | 列表（每次 onShow 实时拉、不缓存票数）+ 投票按钮 + 发起表单（由列表或 `item_id` 参数进入） |
 | `apps/mobile/src/pages/contribution/contribution.vue` | 我的贡献 | 昵称设置 + `GET /v1/contributors` 名单（在榜则标出自己；不在榜显示「未入前 10」与我的 id 前 8 位） |
 | `web/templates/governance.html`（配 `web/web.go` 的 `/governance` 路由） | 节点只读看板 | 服务端渲染、直接读库，不调接口 |
@@ -107,28 +107,36 @@
 
 ### 4.1 本地台账 `my_submissions`
 
-**一张表兼两职**：既是「我的条目」台账，也是投稿的离队队列。
+**一张表兼两职**：既是「我的条目」台账，也是投稿的离线队列。
 
 | 列 | 类型 | 语义 |
 |---|---|---|
 | `item_id` | TEXT PRIMARY KEY | `<type>/<slug>`，与节点侧同一 id |
-| `type` | TEXT | `article` / `quiz` |
-| `title` | TEXT | 投稿标题（可被后续重投改写） |
-| `body_md` | TEXT | 文章正文（quiz 行为空串） |
-| `question_json` | TEXT | 题库 JSON 字符串（article 行为空串） |
-| `state` | TEXT | `queued`（待发）/ `sent`（已提交）/ `failed`（永久失败） |
-| `reason` | TEXT | `failed` 时的原因文案（错误码映射后的中文） |
-| `created` | INTEGER | 服务端 `created` 回填：1 为新建、0 为该 `item_id` 的更新 |
-| `queued_at` | TEXT | 入队时间（补发排序键） |
-| `sent_at` | TEXT | 送达时间（未送达为空串） |
+| `type` | TEXT NOT NULL | `article` / `quiz` |
+| `title` | TEXT NOT NULL | 投稿标题（可被后续重投改写） |
+| `body_md` | TEXT NOT NULL | 文章正文（quiz 行为空串） |
+| `question_json` | TEXT NOT NULL | 题库 JSON 字符串（article 行为空串） |
+| `state` | TEXT NOT NULL | `pending`（待发）/ `sent`（已提交）/ `failed`（永久失败） |
+| `reason` | TEXT | `failed` 时的原因文案（错误码映射后的中文）；可空，与 `comment_out.reason` 同形 |
+| `created` | INTEGER NOT NULL | 服务端 `created` 回填：1 为新建、0 为该 `item_id` 的更新 |
+| `queued_at` | TEXT NOT NULL | 入队时间（补发排序键） |
+| `sent_at` | TEXT | 送达时间（未送达为 `''`） |
 
-另建 `state` 上的索引（`(state, queued_at)`）以支撑「待发区」与补发取序；具体 DDL 与索引写法随计划落，风格与 #20 的本地队列表对齐。
+建表语句追加进 `core/repo.ts` 的 `SCHEMA_SQL` 数组，且只**追加**——该数组靠 `CREATE TABLE IF NOT EXISTS` 幂等执行，**没有版本号机制**（#20 加 `comment_out` 时同样只追加），因此不需要迁移代码。列约定与 `comment_out` 完全同形：`state TEXT NOT NULL`、`reason TEXT` 可空、时间列 `TEXT NOT NULL`。索引另起一条：`idx_my_submissions_queued ON my_submissions(queued_at)`，与既有 `idx_comment_out_queued` 同形（单列，只服务补发取序）。
 
-三条设计取舍：
+**可操作性规则**：
+
+- `pending` → 可打开编辑器修改（复用同一 `item_id`，只改本地行，不发请求）。
+- `sent` → 可「重投更新」（§5.4），**不可删**（它是台账本体）。
+- `failed` → **不可编辑**：`item_id` 就是身份，`item_id_taken` / `item_state_mismatch` 这类失败改字段也救不回；只能删除后以新 `item_id` 重投。
+
+五条设计取舍：
 
 1. **不存 `author_sig`**：发送时现签，天然避开 300s 时间窗，也避免把签名落盘。
-2. **不新增 `draft` 状态**：本册不做草稿（§1），`queued` 已覆盖「写了但还没送出去」。
-3. **与 #20 的 `comment_out` 并列存在，不合并、不抽通用队列**：两者语义不同——评论队列成功即删行，投稿台账成功要留行（「我的条目」的列表本体就是它）；抽象成通用队列只会把两套不同的生命周期塞进一个壳。
+2. **状态词汇表沿用既有本地队列**：`state ∈ {pending, sent, failed}`——`pending` / `failed` 与 `comment_out` 同一词汇（`types.ts` 里已是 `'pending' | 'failed'`），`sent` 是本册新增的终态。
+3. **不新增 `draft` 状态，也不新增 `sending` 中间态**：本册不做草稿（§1），`pending` 已覆盖「写了但还没送出去」；不设 `sending`，是因为**同 `item_id` 重投在服务端就是 upsert**（#25），补发重复触发至多浪费一次请求、不会产生重复条目——并发由「补发串行 + 页面内单飞标志」兜住，不靠状态机。
+4. **存结构化字段，而不是 `comment_out` 那样的 `wire` 整串请求体**：评论入队后不可编辑，存整串最省；投稿台账要支持「改完再发」与重投更新，存 `title` / `body_md` / `question_json` 才能在发送时重建请求体。
+5. **与 #20 的 `comment_out` 并列存在，不合并、不抽通用队列**：两者语义不同——评论队列成功即删行，投稿台账成功要留行（「我的条目」的列表本体就是它）；抽象成通用队列只会把两套不同的生命周期塞进一个壳。
 
 ### 4.2 纯逻辑模块划分
 
@@ -140,7 +148,7 @@
 | `quizdoc.ts` | 结构化题目 ↔ `question_json` 字符串（键序固定）；本地校验（复用 `core/quiz.ts` 的解析口径） |
 | `govern.ts` | `listProposals()` / `createProposal()` / `vote()` —— 薄封装，**无本地状态** |
 | `contribution.ts` | `putName()` / `roster()` |
-| `repo.ts`（既有）| 追加 `my_submissions` 的读写：`saveSubmission` / `listSubmissions(state)` / `markSent` / `markFailed` / `deleteSubmission` |
+| `repo.ts`（既有）| 追加 `my_submissions` 的读写：`saveSubmission` / `listSubmissions(state)` / `markSubmissionSent` / `markSubmissionFailed` / `removeSubmission`（命名与既有 `enqueueComment` / `markCommentOutFailed` / `removeCommentOut` 同风格） |
 
 ## 5. 关键流程
 
@@ -171,10 +179,11 @@
 
 ### 5.3 投稿（断网入队与补发）
 
-- 无网或请求网络层失败 → 走到 §5.1 的本地校验为止，写台账 `queued`，页面提示「已保存，联网后自动发送」。
+- 无网或请求网络层失败 → 走到 §5.1 的本地校验为止，写台账 `pending`，页面提示「已保存，联网后自动发送」。
 - 补发触发点：`myitems` 页 `onShow`；页面内「重试」按钮。
 - 补发顺序：`queued_at ASC` 逐条（串行，不并发），每条重走 §5.1 的登记 → 签名 → POST。
-- 结果：`200` → `sent`；网络 / `429` → **保持 `queued`** 待下次；其余 4xx → `failed`（单向，见 §9.3）。
+- 结果：`200` → `sent`；网络 / `429` → **保持 `pending`** 待下次；其余 4xx → `failed`（单向，见 §9.3）。
+- 并发：页面内一个单飞标志，一次 `onShow` 只跑一轮补发（重复触发至多浪费一次请求，不会产生重复条目，依据见 §4.1 取舍 3）。
 
 ### 5.4 重投更新
 
@@ -323,7 +332,7 @@ UI 不出现课程选择器；`item_id` 由客户端生成 `article/<slug>` 或 
 
 ### 9.1 网络与离线
 
-- 投稿：网络层失败 → 入队 `queued`，不报错弹窗，只提示「已保存，联网后自动发送」。
+- 投稿：网络层失败 → 入队 `pending`，不报错弹窗，只提示「已保存，联网后自动发送」。
 - 提案 / 投票 / 昵称：网络层失败 → 直接提示「需要联网」，不做离线暂存。
 - 本地异常（取不到私钥、本地库写失败）→ 明确报错，不静默吞掉。
 
@@ -359,10 +368,10 @@ UI 不出现课程选择器；`item_id` 由客户端生成 `article/<slug>` 或 
 
 ### 9.3 台账状态流转规则
 
-- `429` 与网络失败 → **保持 `queued`**，下次补发可重试。
+- `429` 与网络失败 → **保持 `pending`**，下次补发可重试。
 - 其余 4xx → 转 `failed`（单向），展示映射后的原因，提供删除；不自动重试。
 - `200` → `sent`（终态）。
-- `queued` 与 `failed` 均可删除；`sent` 不可删（它是台账本体）。
+- `pending` 可改可删；`failed` 只可删、不可编辑；`sent` 可重投更新但不可删（它是台账本体）。
 
 ## 10. 验收
 
@@ -371,8 +380,8 @@ UI 不出现课程选择器；`item_id` 由客户端生成 `article/<slug>` 或 
 - `newItemID` 生成的 slug 恒满足 `[a-z0-9][a-z0-9-]{0,63}`
 - 载荷构造：`article` / `quiz` 两个 type 的请求体字段正确、`author_id` 不出现
 - `quizdoc`：结构化题目 → `question_json` 字符串 → 解析回来的往返一致；非法输入（题数 0 / 选项 < 2 / `answer` 越界）被本地拦下
-- 台账状态机：`queued → sent`、`queued → failed`（单向）、`429` 保持 `queued`
-- 补发编排：多条 `queued` 按 `queued_at ASC` 串行、失败一条不阻塞下一条
+- 台账状态机：`pending → sent`、`pending → failed`（单向）、`429` 保持 `pending`、`failed` 不可编辑
+- 补发编排：多条 `pending` 按 `queued_at ASC` 串行、失败一条不阻塞下一条、单飞标志生效
 - 错误码 → 中文提示映射全覆盖
 - Go 侧看板渲染：单列流水、门槛进度、条目状态徽章、空态
 
