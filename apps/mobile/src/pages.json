@@ -43,6 +43,14 @@
     {
       "path": "pages/quiz/quiz",
       "style": { "navigationBarTitleText": "答题" }
+    },
+    {
+      "path": "pages/submit/submit",
+      "style": { "navigationBarTitleText": "投稿" }
+    },
+    {
+      "path": "pages/myitems/myitems",
+      "style": { "navigationBarTitleText": "我的条目" }
     }
   ],
   "tabBar": {
