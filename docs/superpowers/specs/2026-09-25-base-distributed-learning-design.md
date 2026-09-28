@@ -74,6 +74,24 @@
 
 **保留并沿用：** 私钥永不落明文与 `identity.privkey_cipher` 的 `nonce:ct` 形态、`saveLocalIdentity` / `loadLocalIdentity` 契约与「只替换 `deviceKek()` 一个实现」的重构点、§12 第 10 条「必须提供私钥导出/备份」与 §8.2 的「重装降级路径」（这两条**继续有效**，归 #11 运维文档落地）、① 类公开内容不做本地加密。
 
+### 0.5 2026-09-29 改版（保留·学习小组 ② 加密定案）
+
+本版落实 #9 册子（`specs/2026-09-29-base-groups-design.md`）。新增内容全部与既有契约兼容，**无作废项**。
+
+**新增内容：**
+
+- **小组标识与锚定**：`group_id` 由客户端生成 16 hex 随机（与 `event_id` 同形，**不由组密钥派生**——否则轮换即换组）；`target_id` 形态 `group/<group_id>`，沿用 §6.0 路径式命名空间。
+- **组密钥与 epoch**：32 字节随机，一 epoch 一把密钥；**加入不换钥，移出才轮换**（新 epoch 组密钥 + 创建者签名的 `roster` 事件，经带外续期码送达剩余成员）。
+- **新事件类型 `group.v1`**：`action=msg`（密文发言——节点按 `BlobID(密文)` 落块 + 落事件行、**不解密**）与 `action=roster`（创建者签名完整名单快照，节点验 owner 锁与 epoch 单调递增）。**不新开 blob 上传面**：② 类密文只能作为事件的一部分进入节点。
+- **新公开读接口 `GET /v1/group/{group_id}?cursor=&limit=`**：匿名分页读索引与当前名单，体例与 `GET /v1/comment` 一致（游标 `<created_at>_<event_id>`、满页才给 `next_cursor`）。**代价写明**：索引匿名可读 ⇒「谁、何时、在哪个组发言」这一层元数据公开；内容仍不可读。
+- **节点侧唯一新状态** `groups(group_id, creator_id, epoch, member_ids_json, event_id, updated_at)`：只含 id 列表与 epoch，**不含密钥、不解密内容**——§3.1「节点只存成员名单（id 列表）」的落地形态，同时承载创建者 owner 锁。
+- **本地表新增 `group_keys(group_id, epoch, key_cipher)`**：历次 epoch 组密钥，按 §0.4（#4）定案走**应用层列级加密**，复用 `deviceKek()`（`kek_source='device'`），不新增 KEK 种类；`groups` 行改为 `groups(group_id, name, creator_id, epoch, member_ids_json, joined_at)`。
+- **反熵与事件传播零改动**：`POST /v1/event-sync` 不按 type 过滤、反熵只比对 `blob_id`，故小组事件与 ② 类密文块**自动跨节点传播**（§7.4 原文已覆盖）。审核通道对 ② 类取到的仍是密文，**不提供解密**。
+
+**保留并沿用：** ② 类「节点不可读、不可审」（§12 第 9 条）、`POST /v1/event` 的验签管线与「先验签、后落块」次序、`comment_out` 离线队列（小组发言复用，**零新表**）、内容包规范 v1（小组消息不进包、**不 bump `schema_version`**）、① 类公开读全部口径。
+
+**已知边界（本版确认接受，不视为缺陷）：** 无前向安全（旧 epoch 密钥留存本地，被移出者仍可解移出前消息）；轮换送达依赖带外可达（长期离线成员静默读不出新消息，客户端**必须**显式提示「小组密钥已更新」）；创建者丢钥即名单冻结（无转让机制）；邀请码含密钥且无有效期。
+
 ## 1. 目标
 
 让学习者用手机 App 访问「公开可分发内容」（课程、文章、题库等），把内容下载到本地随时离线学习；在内容之上进行讨论、打卡与小组协作，并可互发私信。内容在多个节点间分布存储，节点消失后可由邻居按内容哈希补齐。
@@ -121,7 +139,7 @@
 |---|---|
 | 这条内容属于 ①②③ 哪一类 | 源节点在导入/发布时判定，写进签名 `manifest` |
 | ② 类的加密与解密 | 完全在客户端；节点无参与 |
-| ② 类的成员资格与密钥轮换 | 客户端之间协商；节点只存成员名单（id 列表） |
+| ② 类的成员资格与密钥轮换 | 客户端之间协商；节点只存成员名单（id 列表）。**2026-09-29 落地形态**（§0.5）：名单由创建者签名的 `roster` 事件承载，节点以 owner 锁 + epoch 单调校验后存 id 列表投影，**不存密钥** |
 | ③ 类的识别与拦截 | 源节点导入前置校验：命中即拒绝入库，不落块目录 |
 
 ### 3.2 寻址域 / 存储域解耦（新增护栏）
@@ -324,6 +342,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 | `GET /v1/blob/:blob_id` | 取块（① 明文 / ② 密文，节点不区分语义） |
 | `HEAD /v1/blob/:blob_id` | 存在性（近场互传秒传判定） |
 | `GET /v1/comment?target_id=&cursor=&limit=` | 公开评论索引（`target_id` 可缺省 = 全站最新）；正文另走 `GET /v1/blob/:blob_id`（2026-09-27 补） |
+| `GET /v1/group/{group_id}?cursor=&limit=` | 小组索引与当前名单（匿名分页，体例同 `GET /v1/comment`；游标 `<created_at>_<event_id>`）；`events` 只列 `action=msg`，正文另走 `GET /v1/blob/:blob_id`（② 类**密文**）（2026-09-29 补） |
 | `GET /` | 节点自带只读浏览页 |
 
 写（客户端自签身份，非 JWT）：认证统一走**签名头** `X-Base-Id` / `X-Base-Alg` / `X-Base-Ts` / `X-Base-Nonce` / `X-Base-Sig`，签名覆盖 `canonical({method, path, query, body_sha256, ts, nonce})`。无 JWT、无 session；详见 S1 册子（#3）。
@@ -332,7 +351,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 |---|---|
 | `POST /v1/identity/register` | 登记公钥（首次出现即登记，节点回执 id） |
 | `GET /v1/identity/:id` | 取公钥（用于验签他人事件与私信） |
-| `POST /v1/event` | 提交评论/进度/小组/私信事件；签名头管**准入**，事件体另带**内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`）管**归属**；节点验签后落库（2026-09-27 补） |
+| `POST /v1/event` | 提交评论/进度/小组/私信事件；签名头管**准入**，事件体另带**内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`）管**归属**；节点验签后落库（2026-09-27 补）。已登记类型（`eventTypeRegistry`）：`comment.v1`、`group.v1`（2026-09-29 补——`action=msg` 密文发言落密文块、`action=roster` 创建者签名名单落投影；② 类**不新开 blob 上传面**） |
 | `GET /v1/identity/escrow/:username` | 取密码托管的加密私钥密文（换设备取回） |
 | `PUT /v1/identity/escrow/:username` | 写入/更新托管密文 |
 | `GET /v1/me` | 按请求签名中的 id 返回该身份已登记的事件与学习进度 |
@@ -397,7 +416,8 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 | `progress(item_id, position, updated_at, dirty)` | 学习进度 |
 | `tombstone(item_id, revoked_rev)` | 撤回清单 |
 | `identity(id, pubkey, privkey_cipher, escrow_username)` | 本机身份（私钥以密文形式存储） |
-| `groups(group_id, member_ids_json, group_key_cipher)` | 参与的小组与组密钥 |
+| `groups(group_id, name, creator_id, epoch, member_ids_json, joined_at)` | 参与的小组与当前名单（2026-09-29 #9 定案：**替换**原 `(group_id, member_ids_json, group_key_cipher)` 的单密钥形态） |
+| `group_keys(group_id, epoch, key_cipher, created_at)` | 历次 epoch 的组密钥，**密文列**（`nonce:ct`，由 `deviceKek()` 封装）（2026-09-29 #9 新增） |
 | `messages(msg_id, peer_id, blob_id, direction, sent_at)` | 私信索引（正文为 ② 类密文块） |
 | `nodes(node_id, url, tls_fingerprint, last_seen_at)` | 已知节点与固定指纹 |
 
@@ -446,7 +466,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 |---|---|---|---|
 | 内容锚定讨论 | `item_id`（course/lesson/article/video/quiz） | ① 公开可分发 | 事件 + 正文 blob（明文） |
 | 学习进度与打卡 | `item_id` + 学习者 id | 私有（仅本人可读，可选公开） | 进度事件（LWW 合并） |
-| 学习小组 / 圈子 | 小组 id | ② 加密可分发 | 小组密文 blob + 成员名单 |
+| 学习小组 / 圈子 | `group/<group_id>` | ② 加密可分发 | `group.v1` 事件（`msg` 密文 blob / `roster` 创建者签名名单）+ 组密钥（epoch，本地密文列）（2026-09-29 补） |
 | 私信 | 收件人 id | ② 加密可分发 | 密文 blob + 收发双方 id |
 
 - 事件通用结构（2026-09-27 按落地订正）：线上形态为 `{event_id, type, created_at, body}`；`body` 承载目标与载荷，`body.reply_to` 即原 `causal_parent`；`actor` = 签名头的 `id`（客户端公钥派生）；**`event_id` 由客户端自带（16 hex），节点只登记、不签发**。正文作为 blob 存节点。归属证明用**与请求无关的内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`），因为签名头绑定了 ts/nonce，事件搬到别的节点后无法重验。
@@ -465,7 +485,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 | P0（已实现，保留） | 协议 Go+TS 双实现 + 向量 · 迁移工具导入文章 · 源节点签发导出 pack/manifest · 单节点公开读接口 + 极简浏览页 · 手机端匿名下载 + 断网读文章 | 无 token 可拉 `catalog`/`pack`/`blob`；手机断网可读已下载文章；Go 与 TS 双方跑同一向量全绿 |
 | **S1（第一条纵切）身份 + TLS + 节点静态加密** | 客户端自持 Ed25519 身份（生成 / id 派生 / 签名）· 节点公钥登记与事件验签 · 密码托管加密私钥 · **TLS 只用于节点↔节点**（双向 mTLS + 指纹固定）；**客户端↔节点明文 HTTP**（F1，§12.2）· **节点静态加密 L4a′**（store 层透明 AEAD，§12.1.1）· 手机端私钥密文存储 + 本地库加密 spike | 同一客户端密钥在 A 节点生成、到 B 节点仍能验签通过；篡改 1 bit 签名被拒；未固定指纹的**对端**连接被拒；**`data/` 原始字节无 ① 类明文、且公开读接口仍返回明文**；本地库加密 spike 出结论（支持 / 退路定案） |
 | A 内容与分发主线 | 视频分块 · 多节点反熵 + 邻居补齐 + scrub · 墓碑同步 · 课程体系内容模型落地 · 发行包与一键安装脚本 | 3 节点杀 1 个 → 剩余节点补齐缺失块、哈希校验通过、副本登记恢复为 2；篡改 1 bit → 客户端拒绝加载 |
-| B 交流互动主线 | 内容锚定讨论 + 审核通道 · 学习进度与打卡 · 学习小组（② 加密）· 私信（② 加密） | 离线写讨论 → 联网补 `event_id`；`rejected` → 设备删除；② 类密文节点侧断言无明文 |
+| B 交流互动主线 | 内容锚定讨论 + 审核通道 · 学习进度与打卡 · 学习小组（② 加密）· 私信（② 加密） | 离线写讨论 → 联网补 `event_id`；`rejected` → 设备删除；② 类密文节点侧断言无明文（小组侧口径见 #9 册子 §6：发言后直接读 `data/base.db` 与 `data/blobs/*` 原始字节，断言不出现消息明文） |
 | C 客户端可靠性 | 近场互传 · 可视化内容后台（登记侧） | 热点内命中即秒传；后台可导入 / 编辑 / 导出 |
 
 范围约束：**当前实施计划只覆盖 S1**。P0 已实现不再重写；A / B / C 各自另出 spec 与计划。
