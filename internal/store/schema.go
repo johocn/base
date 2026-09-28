@@ -153,6 +153,14 @@ var schemaStatements = []string{
 		updated_at INTEGER NOT NULL,
 		PRIMARY KEY(peer, kind)
 	)`,
+
+	// profiles：身份**主动设置**的公开昵称（治理册 §3.2）。
+	// 展示层：不跨节点同步、不进 events、不参与反熵；与 escrow.username 无关，不复用、不因本册公开。
+	`CREATE TABLE IF NOT EXISTS profiles(
+		id         TEXT PRIMARY KEY,
+		name       TEXT NOT NULL,
+		updated_at INTEGER NOT NULL
+	)`,
 }
 
 // eventColumnMigrations 是 events 表的**后加列**（B 阶段引入）。
@@ -162,6 +170,13 @@ var eventColumnMigrations = []struct{ column, ddl string }{
 	{"target_id", `ALTER TABLE events ADD COLUMN target_id TEXT`},
 	{"payload_cid", `ALTER TABLE events ADD COLUMN payload_cid TEXT`},
 	{"reply_to", `ALTER TABLE events ADD COLUMN reply_to TEXT`},
+}
+
+// itemColumnMigrations 是 items 表的**后加列**（治理册 §3.1 的归属缓存）。
+// 与 events 同因：schemaStatements 全是 CREATE TABLE IF NOT EXISTS，对既有表不补列。
+var itemColumnMigrations = []struct{ column, ddl string }{
+	{"author_id", `ALTER TABLE items ADD COLUMN author_id TEXT NOT NULL DEFAULT ''`},
+	{"author_sig", `ALTER TABLE items ADD COLUMN author_sig TEXT NOT NULL DEFAULT ''`},
 }
 
 // migrate 执行 schemaStatements 之后的幂等迁移。
@@ -183,6 +198,22 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("store: migrate events index: %w", err)
 		}
+	}
+	itemCols, err := tableColumns(db, "items")
+	if err != nil {
+		return err
+	}
+	for _, m := range itemColumnMigrations {
+		if itemCols[m.column] {
+			continue
+		}
+		if _, err := db.Exec(m.ddl); err != nil {
+			return fmt.Errorf("store: migrate items.%s: %w", m.column, err)
+		}
+	}
+	// 索引必须在补列之后建：idx_items_author 引用新列。
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_items_author ON items(author_id, state)`); err != nil {
+		return fmt.Errorf("store: migrate items index: %w", err)
 	}
 	return nil
 }
