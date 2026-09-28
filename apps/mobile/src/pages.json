@@ -67,10 +67,10 @@
     "backgroundColor": "#ffffff",
     "borderStyle": "black",
     "list": [
-      { "pagePath": "pages/course/course", "text": "课程" },
-      { "pagePath": "pages/circle/circle", "text": "圈子" },
-      { "pagePath": "pages/comment/comment", "text": "评论" },
-      { "pagePath": "pages/mine/mine", "text": "我的" }
+      { "pagePath": "pages/course/course", "text": "课程", "iconPath": "static/tabbar/course.png", "selectedIconPath": "static/tabbar/course-on.png" },
+      { "pagePath": "pages/circle/circle", "text": "圈子", "iconPath": "static/tabbar/circle.png", "selectedIconPath": "static/tabbar/circle-on.png" },
+      { "pagePath": "pages/comment/comment", "text": "评论", "iconPath": "static/tabbar/comment.png", "selectedIconPath": "static/tabbar/comment-on.png" },
+      { "pagePath": "pages/mine/mine", "text": "我的", "iconPath": "static/tabbar/mine.png", "selectedIconPath": "static/tabbar/mine-on.png" }
     ]
   },
   "globalStyle": {
