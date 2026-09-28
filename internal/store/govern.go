@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
+
+	"github.com/johocn/base/internal/protocol"
 )
 
 // 三个受审动作（册子 §2.1）。门槛是**文档级常量**，校准走「改册子 + 改常量」。
@@ -192,4 +195,181 @@ func (s *Store) ListProposalViews(roster map[string]bool) ([]ProposalView, error
 		})
 	}
 	return out, nil
+}
+
+// ErrAlreadyVoted 表示该身份已对本提案投过票（册子 §3.2 的 409）。
+var ErrAlreadyVoted = errors.New("store: already voted")
+
+// VoteResult 是一次投票落库后的判定结果，字段与 §3.2 的响应一一对应。
+type VoteResult struct {
+	ProposalID int64
+	VoteCount  int
+	Threshold  int
+	Status     string
+}
+
+// AddVote 写入一张票，并在**同一事务内**做生效判定（册子 §4.4）：
+// 有效票达门槛则执行动作并记 executed_at；前置条件不满足则记 voided_at。
+//
+// roster 由调用方在**事务外**派生（ContributorRoster）。空 map ⇒ 有效票 = 0，
+// 即册子 §6.2「名册派生失败按空名册降级」的口径，提案停在 pending。
+func (s *Store) AddVote(proposalID int64, voterID string, roster map[string]bool) (VoteResult, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return VoteResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := addVoteTx(tx, s, proposalID, voterID, roster)
+	if err != nil {
+		return VoteResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return VoteResult{}, err
+	}
+	return res, nil
+}
+
+// addVoteTx 是 AddVote 的事务体。
+//
+// **写语句刻意置于最前**：它让 SQLite 先取写锁、把并发投票串行化，
+// 之后的读必然看到此前已提交的 executed_at / voided_at——这是册子 §4.4 步 1 成立的前提。
+func addVoteTx(tx *sql.Tx, st *Store, proposalID int64, voterID string, roster map[string]bool) (VoteResult, error) {
+	now := time.Now().UnixMilli()
+	ins, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,created_at) VALUES(?,?,?)
+		ON CONFLICT(proposal_id,voter_id) DO NOTHING`, proposalID, voterID, now)
+	if err != nil {
+		return VoteResult{}, fmt.Errorf("store: 写票: %w", err)
+	}
+	n, err := ins.RowsAffected()
+	if err != nil {
+		return VoteResult{}, err
+	}
+	if n == 0 {
+		return VoteResult{}, ErrAlreadyVoted
+	}
+
+	p, err := scanProposal(tx.QueryRow(`SELECT `+proposalColumns+` FROM govern_proposals WHERE proposal_id=?`, proposalID))
+	if err != nil {
+		return VoteResult{}, fmt.Errorf("store: 读提案 %d: %w", proposalID, err)
+	}
+	voters, err := proposalVotersExec(tx, proposalID)
+	if err != nil {
+		return VoteResult{}, err
+	}
+	out := VoteResult{
+		ProposalID: proposalID,
+		VoteCount:  len(filterRoster(voters, roster)),
+		Threshold:  GovernThreshold(p.Action),
+	}
+
+	// 步 1：已定案（两个一次性事实任一非 0）→ 票已落库，不再判。
+	if p.ExecutedAt != 0 || p.VoidedAt != 0 {
+		out.Status = ProposalStatus(p.ExecutedAt, p.VoidedAt)
+		return out, nil
+	}
+	// 步 3：未达门槛。
+	if out.VoteCount < out.Threshold {
+		out.Status = GovernStatusPending
+		return out, nil
+	}
+	// 步 4 / 步 5：门槛已到，判前置条件（册子 §4.4）。
+	met, err := governPreconditionTx(tx, p)
+	if err != nil {
+		return VoteResult{}, err
+	}
+	if !met {
+		if _, err := tx.Exec(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, now, proposalID); err != nil {
+			return VoteResult{}, fmt.Errorf("store: 记 voided_at: %w", err)
+		}
+		out.Status = GovernStatusVoid
+		return out, nil
+	}
+	result, err := governApplyTx(tx, st, p)
+	if err != nil {
+		return VoteResult{}, err
+	}
+	if _, err := tx.Exec(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`,
+		now, result, proposalID); err != nil {
+		return VoteResult{}, fmt.Errorf("store: 记 executed_at: %w", err)
+	}
+	out.Status = GovernStatusEffective
+	return out, nil
+}
+
+// governPreconditionTx 判前置条件（册子 §4.4）：目标仍在、state 与动作匹配、content_hash 未变。
+// 第 3 条是本册的乐观锁：授权针对的是**某一版内容**，那一版没了授权就永久作废。
+func governPreconditionTx(tx *sql.Tx, p Proposal) (bool, error) {
+	var state, hash string
+	err := tx.QueryRow(`SELECT state,content_hash FROM items WHERE item_id=?`, p.ItemID).Scan(&state, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if state != GovernRequiredState(p.Action) {
+		return false, nil
+	}
+	return hash == p.BaseContentHash, nil
+}
+
+// governApplyTx 在事务内执行受审动作，返回 executed_result（诊断信息，不构成契约，册子 §5.1）。
+func governApplyTx(tx *sql.Tx, st *Store, p Proposal) (string, error) {
+	switch p.Action {
+	case GovernActionRemove:
+		rev, err := nextContentVersionExec(tx)
+		if err != nil {
+			return "", err
+		}
+		if err := retireItemExec(tx, p.ItemID, rev); err != nil {
+			return "", err
+		}
+		return "removed", nil
+	case GovernActionRevive:
+		// 内容行与块一直在（remove 只置状态），复活 = 删墓碑 + 回 active（册子 §4.3）。
+		if _, err := tx.Exec(`DELETE FROM tombstones WHERE item_id=?`, p.ItemID); err != nil {
+			return "", fmt.Errorf("store: 复活删墓碑 %s: %w", p.ItemID, err)
+		}
+		if _, err := tx.Exec(`UPDATE items SET state='active' WHERE item_id=?`, p.ItemID); err != nil {
+			return "", fmt.Errorf("store: 复活置状态 %s: %w", p.ItemID, err)
+		}
+		return "revived", nil
+	case GovernActionEdit:
+		return editItemTx(tx, st, p)
+	default:
+		return "", fmt.Errorf("store: 不支持的治理动作 %q", p.Action)
+	}
+}
+
+// editItemTx 执行改写（册子 §4.2）：全量覆盖 title / body_md，按 content_hash 是否变化决定归属后果。
+// 只对 article 载体成立，受理阶段已挡住其余载体（册子 §0.3）。
+func editItemTx(tx *sql.Tx, st *Store, p Proposal) (string, error) {
+	hash := protocol.SHA256Hex([]byte(p.BodyMD))
+	var oldHash string
+	if err := tx.QueryRow(`SELECT content_hash FROM items WHERE item_id=?`, p.ItemID).Scan(&oldHash); err != nil {
+		return "", fmt.Errorf("store: 读目标 content_hash %s: %w", p.ItemID, err)
+	}
+	bodyEnc, err := st.encText(p.BodyMD)
+	if err != nil {
+		return "", fmt.Errorf("store: 加密改写正文 %s: %w", p.ItemID, err)
+	}
+	if _, err := tx.Exec(`UPDATE articles SET title=?,body_md=?,content_hash=?,source_rev=? WHERE item_id=?`,
+		p.Title, bodyEnc, hash, hash[:16], p.ItemID); err != nil {
+		return "", fmt.Errorf("store: 改写 articles %s: %w", p.ItemID, err)
+	}
+	if oldHash == hash {
+		// 正文逐字节未变（只改了标题）→ title 不在签名域内，旧签名仍成立 → 归属列原样保留。
+		if _, err := tx.Exec(`UPDATE items SET title=?,content_hash=?,source_rev=?,updated_at=? WHERE item_id=?`,
+			p.Title, hash, hash[:16], nowUTC(), p.ItemID); err != nil {
+			return "", fmt.Errorf("store: 改写 items %s: %w", p.ItemID, err)
+		}
+		return "edited", nil
+	}
+	// 正文被改动 → author_sig 绑定的是旧 content_hash，旧签名必然失效（#23 §2.1 的数学推论）
+	// → 两列清空、该作者贡献 −1（册子 §4.2）。治理改写不提供认领路径。
+	if _, err := tx.Exec(`UPDATE items SET title=?,content_hash=?,source_rev=?,updated_at=?,author_id='',author_sig='' WHERE item_id=?`,
+		p.Title, hash, hash[:16], nowUTC(), p.ItemID); err != nil {
+		return "", fmt.Errorf("store: 改写 items %s: %w", p.ItemID, err)
+	}
+	return "edited_author_cleared", nil
 }
