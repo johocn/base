@@ -2068,3 +2068,27 @@ git commit -m "docs(plans): 治理主线首册实施计划与执行期更正回�
 4. **名册是派生值**：不得为它建表、不得把它写进 events、不得加配置项、不得引入任何跨节点互动数据（点赞/浏览/评论热度）。门槛数值只在 `internal/store/contributor.go` 的常量里。
 5. **`id` 只能来自鉴权中间件**：`POST /v1/profile` 不得从请求体接受 `id`，也不得接受路径参数。
 6. **中继节点再导出的固有缺口**：`contributors` 按**本地** `identities` 重建，而中继节点未登记作者身份 → 该节点再导出时归属会降级为无归属。本册按册子 §2.1 实现，不做补救（真源节点因「投稿必先登记身份」不受影响）。若后续要求跨跳保持归属，需先改册子。
+
+---
+
+## 执行实况
+
+- 2026-09-28 计划落定（#24），由册子 #23 派生。
+- Task 1 `55244fa`：`internal/protocol/author.go` 签名字节定义 + `VerifyAuthorSig` 原语与单测。无偏差。
+- Task 2 `25384fb`：`vectors/v1/authorsig.json` 契约向量 + Go 侧消费测试。无偏差。
+- Task 3 `e1f7f90`：`packages/protocol-ts/src/author.ts` 双端实现 + 向量消费（vitest 通过、tsc 干净）。无偏差。
+- Task 4 `82cf6f5`：`manifest.go` 新增 `Entry.AuthorID`/`AuthorSig`/`Manifest.Contributors`（全 `omitempty`）；既有 manifest 向量的 `sign_bytes`/`manifest_sha256` 不变，**未 bump `schema_version`**。无偏差。
+- Task 5 `ebdf1ef`：`schema.go` 新增 `profiles` 表 + `itemColumnMigrations` + `idx_items_author`。无偏差。
+- Task 6 `d17816b`：`Item`/`PackEntry` 加两列，三处 SELECT、`scanItem`、upsert 同步。无偏差。
+- Task 7 `96d847e`：`peersync/packimport.go` 的 `resolveAuthor` 五分支降级；验签失败只降级单条、不拒整包。无偏差。
+- Task 8 `6c57386`：`store.LookupIdentities` + `packexport/export.go` 回填归属并重建 `contributors`。无偏差。
+- Task 9 `25c9225`：`internal/store/contributor.go` 门槛常量（200/60/3）、`RosterTopN=10`、`deriveRoster`、`ContributorRoster`、`ListMediaDurations`、`PutProfile`、`ProfileNames`。无偏差。
+- Task 10 `653fba8`：`internal/httpapi/contributor.go` 的 `handleContributors` + `server.go` 注册 `GET /v1/contributors`（匿名）。无偏差。
+- Task 11 `0849242`：`handleProfilePut` + `validProfileName` + `profilePutReq`；`authmw.go` 补 `profile_name_invalid`/`profile_id_forbidden`；注册 `POST /v1/profile`（走 `requireAuth`）。执行期发现：册子 §5.2 未给「请求体带 id」定义错误码 → 已按本节 Step 3 定为 `profile_id_forbidden`，并回写册子 §0.2 第 1 条；册子 §7.3 的「缺签名头 → 401」与既有鉴权契约第 1 步冲突 → 按 **400 `auth_missing_header`** 实现，见 §0.2 第 4 条。
+- Task 12：门禁与文档回填（本提交）。
+
+**门禁结论（Task 12）：**
+- `go build ./...` 无输出；`go vet ./...` 无输出；`go test ./...` 全包 ok（`cmd/based`、`internal/httpapi`、`internal/importer`、`internal/packexport`、`internal/peersync`、`internal/protocol`、`internal/store`、`tools/migrate` 全绿）。
+- `packages/protocol-ts`：`npx tsc --noEmit` 退出码 0、无输出；`npx vitest run` 3 个文件 54/54 通过（含 `authorsig` 向量用例）。
+
+**AC 核对（册子 §7.4）：** AC 1–8、10 自动通过；**AC 9（两节点名册 `id`/`count`/顺序完全一致、`name` 允许不同）需人工**——两台节点导入同一包后比对 `curl /v1/contributors`。

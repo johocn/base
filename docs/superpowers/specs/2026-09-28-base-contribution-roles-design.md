@@ -26,6 +26,15 @@
 - 写路径鉴权一律走既有 `internal/httpapi/authmw.go`（签名头 + 300s 时间窗 + nonce 防重放），**不新增鉴权形态**
 - 节点间事件反熵口径（册子 #19）；本册的 `profiles` 与 `items.author_id` **不进 events、不跨节点同步**
 
+### 0.2 2026-09-28 执行期更正（计划 #24 落实施时）
+
+1. §5.2 只写了「请求体携带 `id` → 400」，未定错误码。实施定为 `profile_id_forbidden`
+   （`profile_name_invalid` 仍只用于 `name` 校验失败），两者都按契约 §3.3 的 `{error, code}` 形状返回。
+2. §4.3 的「去除全部空白」明确为：按 `unicode.IsSpace` 判定空白（含全角空格 U+3000），再按 rune 计数。
+3. §4.3 的三种载体按 `items.type` 分流（`article` / `video` / `quiz`）；`cover` / `course` / `lesson` 不计贡献。
+4. §7.3 写的「缺签名头 → 401」与既有鉴权契约（总纲 / 契约 §3.2 第 1 步：缺任一头 → `400 auth_missing_header`）冲突。
+   本册遵守「写路径一律走既有 `authmw.go`、不新增鉴权形态」，故实施按 **400 `auth_missing_header`**，§7.3 该处数字作废。
+
 ## 1. 范围与不做什么
 
 **做五件事：**
