@@ -144,3 +144,35 @@ func TestManifestJSONOmitsEmptyChunks(t *testing.T) {
 		t.Fatalf("tombstone 序列化异常: %s", raw)
 	}
 }
+
+// 归属字段是可选的：空值不进签名字节，非空值进——这是「不 bump schema_version」的依据。
+func TestManifestAuthorFieldsInSignBytes(t *testing.T) {
+	base := Manifest{
+		PackID: "p", SchemaVersion: 1, Issuer: "base-node-1", IssuedAt: "2026-01-02T03:04:05Z",
+		ContentVersion: 7, Tombstone: []Tombstone{}, MerkleRoot: "m",
+		Entries: []Entry{{ItemID: "article:demo-1", Source: "article", Type: "article",
+			Title: "演示一", SourceRev: "rev-1", ContentHash: "h", SQLiteTable: "articles", DistClass: "public"}},
+	}
+	empty, err := base.SignBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(empty), "author_id") || strings.Contains(string(empty), "contributors") {
+		t.Fatalf("空归属/空名册不得进入签名字节: %s", empty)
+	}
+
+	withAuthor := base
+	withAuthor.Entries = []Entry{{ItemID: "article:demo-1", Source: "article", Type: "article",
+		Title: "演示一", SourceRev: "rev-1", ContentHash: "h", SQLiteTable: "articles", DistClass: "public",
+		AuthorID: "f78672b2f87ff80b248323a4be7c3da6", AuthorSig: "00"}}
+	withAuthor.Contributors = map[string]string{"f78672b2f87ff80b248323a4be7c3da6": "9471ed98cfff058f9b91cd3d1df44f1a78230d8e3ceb2311981307a04c5be6d0"}
+	got, err := withAuthor.SignBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"author_id":"f78672b2f87ff80b248323a4be7c3da6"`, `"author_sig":"00"`, `"contributors":{`} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("签名字节缺少 %s: %s", want, got)
+		}
+	}
+}

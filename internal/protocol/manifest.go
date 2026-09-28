@@ -23,6 +23,9 @@ type Entry struct {
 	SQLiteTable string  `json:"sqlite_table"`
 	Chunks      []Chunk `json:"chunks,omitempty"`
 	DistClass   string  `json:"dist_class"`
+	// 作者归属（治理册 §2.1）：空 = 无归属、不计贡献；全部可选，故不 bump schema_version。
+	AuthorID  string `json:"author_id,omitempty"`
+	AuthorSig string `json:"author_sig,omitempty"`
 }
 
 // Tombstone 是撤回记录（只能在已签名 manifest 中传播）。
@@ -40,8 +43,10 @@ type Manifest struct {
 	ContentVersion int64       `json:"content_version"`
 	Entries        []Entry     `json:"entries"`
 	Tombstone      []Tombstone `json:"tombstone"`
-	MerkleRoot     string      `json:"merkle_root"`
-	Signature      string      `json:"signature"`
+	// contributors 内嵌作者公钥（author_id → pubkey_hex），使验证者无需信任发行节点（治理册 §2.1）。
+	Contributors map[string]string `json:"contributors,omitempty"`
+	MerkleRoot   string            `json:"merkle_root"`
+	Signature    string            `json:"signature"`
 }
 
 // ManifestBlobIDs 汇总所有条目的块 id（契约第 4 条的定义域）。
