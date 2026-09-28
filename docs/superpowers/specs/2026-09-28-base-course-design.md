@@ -28,6 +28,18 @@
 - 三级层级只表达「归属与顺序」，**不表达权限**（总纲 §6.0）
 - P0 与 #5 已落地的导入 / 导出 / 公开读 / 手机端下载 / 分发链路全部保留，不重写
 
+### 0.2 2026-09-28 补充（治理主线第 2 册立册时）
+
+**新增：**
+
+- `quiz/<qid>` 独立题库形态补入 §2.1 形态表：`source=quiz` / `type=quiz` / `sqlite_table=quizzes`，与既有的独立文章 `article/<aid>` 对称 —— 两者都是**不属于任何课程**的独立形态。投稿写入（README #25）需要它，故本册补此一行定义。
+
+**明确不变：**
+
+- **不新增任何 `source` / `type` 枚举值**：`quiz` 本就在总纲 §6.0 的取值集合内，本次只是把它与「不属于任何课程」的路径形态对应起来。
+- 课程内题库 `course/<cid>/lesson/<lid>/quiz/<qid>` 不变，仍记 `source=lesson` / `type=quiz`；两种形态**互不混用**，各自的 `item_id` 前缀即判据。
+- §2.1 其余形态、§3 承载与排序、§4 落地改动面均不变。
+
 ## 1. 范围与不做什么
 
 **做五件事：**
@@ -77,6 +89,9 @@ article/<aid>                                    # 不属于任何课程的独�
 | `.../quiz/<qid>` | `lesson` | `quiz` | `quizzes` |
 | `.../article/<aid>/cover` | `article` | `cover` | `media_meta` |
 | `article/<aid>` | `article` | `article` | `articles` |
+| `quiz/<qid>` | `quiz` | `quiz` | `quizzes` |
+
+`article/<aid>` 与 `quiz/<qid>` 是两种**不属于任何课程**的独立形态；课程内的题库（`course/<cid>/lesson/<lid>/quiz/<qid>`）仍记 `source=lesson`，两者不混用。
 
 4. **旧 id 不改写、不复用**：切换到新命名空间后，旧 `<source>:<slug>` 条目不是被就地改名，而是走「新条目 + 新 `content_version` + 旧条目墓碑」——与总纲 §3.1 第 5 条「改标签 = 发一个新 `content_version`，不得原地改」同一口径。
 

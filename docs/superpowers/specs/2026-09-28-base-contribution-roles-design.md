@@ -316,7 +316,7 @@ CREATE TABLE IF NOT EXISTS profiles(
 
 ```
 本册（#23：贡献度量 + 动态角色）
- ├─ 第 2 册 投稿写入：消费 §2.1 契约（投稿时签 author_sig、落 items.author_id）
+ ├─ 第 2 册 投稿写入：消费 §2.1 契约（投稿时签 author_sig、落 items.author_id）——**已出**：`specs/2026-09-28-base-submission-design.md`（README #25，待评审后出计划）
  ├─ 第 3 册 审批治理：消费 §4.4 名册语义与 §5.3 判定方式
  └─ 第 4 册 创作 UI：消费 §5.2 写路径与 §5.1 读接口
 ```
