@@ -107,12 +107,31 @@ func Export(st *store.Store, opt Options) (Result, error) {
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ItemID < items[j].ItemID })
 
+	// 归属公钥按本地 identities 反查（册子 §2.1）：查不到即该条降级为无归属，不影响其余条目。
+	needed := []string{}
+	seen := map[string]bool{}
+	for _, it := range items {
+		if it.AuthorID != "" && it.AuthorSig != "" && !seen[it.AuthorID] {
+			seen[it.AuthorID] = true
+			needed = append(needed, it.AuthorID)
+		}
+	}
+	pubs, err := st.LookupIdentities(needed)
+	if err != nil {
+		return Result{}, err
+	}
+
 	entries := make([]protocol.Entry, 0, len(items))
+	contributors := map[string]string{}
 	blobIDs := []string{}
 	for _, it := range items {
 		e := protocol.Entry{
 			ItemID: it.ItemID, Source: it.Source, Type: it.Type, Title: it.Title,
 			SourceRev: it.SourceRev, ContentHash: it.ContentHash, SQLiteTable: it.SQLiteTable, DistClass: it.DistClass,
+		}
+		if pub, ok := pubs[it.AuthorID]; it.AuthorID != "" && it.AuthorSig != "" && ok {
+			e.AuthorID, e.AuthorSig = it.AuthorID, it.AuthorSig
+			contributors[it.AuthorID] = pub
 		}
 		if it.SQLiteTable == "media_meta" {
 			// 块序列以 media_meta 的声明为准（下标即 seq）：块级去重后 blobs 行会变少，
@@ -174,6 +193,7 @@ func Export(st *store.Store, opt Options) (Result, error) {
 	m := protocol.Manifest{
 		PackID: packID, SchemaVersion: 1, Issuer: opt.Issuer, IssuedAt: issuedAtStr,
 		ContentVersion: version, Entries: entries, Tombstone: tombstones, MerkleRoot: merkle,
+		Contributors: contributors,
 	}
 	if err := m.SignWith(opt.SignKeyHex); err != nil {
 		return Result{}, err

@@ -3,6 +3,8 @@ package store
 import (
 	"errors"
 	"testing"
+
+	"github.com/johocn/base/internal/protocol"
 )
 
 func TestRegisterIdentityIdempotent(t *testing.T) {
@@ -104,5 +106,42 @@ func TestUseNonceIsScopedByIdAndPrunable(t *testing.T) {
 	used4, err := st.UseNonce("id-1", nonce, 2000)
 	if err != nil || used4 {
 		t.Fatalf("清理后重用 used=%v err=%v, want false/nil", used4, err)
+	}
+}
+
+func TestLookupIdentities(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	kp, err := protocol.KeyPairFromSeed("6f1e0d9c8b7a6958473625142332415061728394a5b6c7d8e9f0a1b2c3d4e5f6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := protocol.IdentityID(kp.PubHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RegisterIdentity(id, protocol.AlgEd25519, kp.PubHex, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.LookupIdentities([]string{id, "00000000000000000000000000000000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[id] != kp.PubHex {
+		t.Fatalf("公钥反查失败: %v", got)
+	}
+	if _, ok := got["00000000000000000000000000000000"]; ok {
+		t.Fatal("未登记的身份不应出现在结果里")
+	}
+	// ids 为空 = 全部
+	all, err := st.LookupIdentities(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all[id] != kp.PubHex {
+		t.Fatalf("空 ids 应返回全部: %v", all)
 	}
 }

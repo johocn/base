@@ -287,3 +287,84 @@ func TestExportKeepsDeclaredChunkCountUnderDedup(t *testing.T) {
 		}
 	}
 }
+
+// 归属字段与 contributors 必须同口径出现在 manifest 里；本地 identities 查不到公钥的条目降级为无归属。
+func TestExportCarriesAuthorAndContributors(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	const body = "正文"
+	add := func(itemID string) {
+		if err := st.UpsertArticle(store.Article{
+			ItemID: itemID, Title: itemID, BodyMD: body,
+			ContentHash: protocol.SHA256Hex([]byte(body)), SourceRev: "rev-1", UpdatedAt: "2026-01-02T00:00:00Z",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("article/with-author")
+	add("article/unknown-author")
+
+	kp, err := protocol.KeyPairFromSeed("6f1e0d9c8b7a6958473625142332415061728394a5b6c7d8e9f0a1b2c3d4e5f6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorID, err := protocol.IdentityID(kp.PubHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 投稿必然先登记身份（册子 §2.1「零新表」的依据）
+	if _, err := st.RegisterIdentity(authorID, protocol.AlgEd25519, kp.PubHex, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	sb, err := protocol.AuthorSignBytes("article/with-author", protocol.SHA256Hex([]byte(body)), authorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := protocol.Sign("6f1e0d9c8b7a6958473625142332415061728394a5b6c7d8e9f0a1b2c3d4e5f6", sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(st.DataDir(), "base.db"))+"?mode=rw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`UPDATE items SET author_id=?, author_sig=? WHERE item_id=?`, authorID, sig, "article/with-author"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE items SET author_id=? WHERE item_id=?`, "00000000000000000000000000000000", "article/unknown-author"); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	res, err := Export(st, Options{Issuer: "base-node-1", SignKeyHex: "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]protocol.Entry{}
+	for _, e := range res.Manifest.Entries {
+		byID[e.ItemID] = e
+	}
+	if got := byID["article/with-author"]; got.AuthorID != authorID || got.AuthorSig != sig {
+		t.Fatalf("归属未随包导出: %+v", got)
+	}
+	if got := byID["article/unknown-author"]; got.AuthorID != "" || got.AuthorSig != "" {
+		t.Fatalf("查不到公钥的条目应降级为无归属: %+v", got)
+	}
+	if res.Manifest.Contributors[authorID] != kp.PubHex {
+		t.Fatalf("contributors 未内嵌公钥: %v", res.Manifest.Contributors)
+	}
+	if len(res.Manifest.Contributors) != 1 {
+		t.Fatalf("contributors 只应含已解析出的作者: %v", res.Manifest.Contributors)
+	}
+	// 导出结果仍必须通过既有验签（含新增字段）
+	ok, err := res.Manifest.Verify("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+	if err != nil || !ok {
+		t.Fatalf("含归属字段的 manifest 验签失败: ok=%v err=%v", ok, err)
+	}
+}

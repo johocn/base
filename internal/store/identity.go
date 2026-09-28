@@ -83,6 +83,33 @@ func (s *Store) TouchIdentity(id string, now int64) error {
 	return err
 }
 
+// LookupIdentities 批量反查公钥（治理册 §2.1「再导出时按本地 identities 重建 contributors」）。
+// ids 为空表示全部；未登记的身份不出现在结果里。
+func (s *Store) LookupIdentities(ids []string) (map[string]string, error) {
+	q := `SELECT id,pubkey FROM identities`
+	args := []any{}
+	if len(ids) > 0 {
+		q += ` WHERE id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, pub string
+		if err := rows.Scan(&id, &pub); err != nil {
+			return nil, err
+		}
+		out[id] = pub
+	}
+	return out, rows.Err()
+}
+
 // UseNonce 原子登记 (id, nonce)；used=true 表示该 nonce 已被用过（重放）。
 //
 // 去重键必须含 id：否则任一身份可以抢先占用他人的 nonce，
