@@ -2,7 +2,7 @@
 import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReader, SqliteConnection, StorageAdapter } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, QuizRow, SegmentRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
 import type { LocalRepo, PackApply } from './repo';
 
 export class MemoryFs implements FsAdapter {
@@ -199,6 +199,33 @@ export class MemoryRepo implements LocalRepo {
   }
   async removeCommentOut(eventId: string): Promise<void> {
     this.commentOut.delete(eventId);
+  }
+
+  submissions = new Map<string, MySubmissionRow>(); // itemId -> row
+
+  async saveSubmission(row: MySubmissionRow): Promise<void> {
+    this.submissions.set(row.itemId, { ...row });
+  }
+  async listSubmissions(state?: 'pending' | 'sent' | 'failed'): Promise<MySubmissionRow[]> {
+    // Array.prototype.sort 稳定：queued_at 相同时保持写入先后（与 SqlRepo 的 ORDER BY 同义）
+    const all = [...this.submissions.values()].sort((a, b) =>
+      a.queuedAt < b.queuedAt ? -1 : a.queuedAt > b.queuedAt ? 1 : 0,
+    );
+    return state ? all.filter((r) => r.state === state) : all;
+  }
+  async getSubmission(itemId: string): Promise<MySubmissionRow | null> {
+    return this.submissions.get(itemId) ?? null;
+  }
+  async markSubmissionSent(itemId: string, created: number, sentAt: string): Promise<void> {
+    const r = this.submissions.get(itemId);
+    if (r) this.submissions.set(itemId, { ...r, state: 'sent', reason: null, created, sentAt });
+  }
+  async markSubmissionFailed(itemId: string, reason: string): Promise<void> {
+    const r = this.submissions.get(itemId);
+    if (r) this.submissions.set(itemId, { ...r, state: 'failed', reason });
+  }
+  async removeSubmission(itemId: string): Promise<void> {
+    this.submissions.delete(itemId);
   }
 }
 

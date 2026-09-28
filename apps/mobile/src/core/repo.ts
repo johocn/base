@@ -1,7 +1,7 @@
 import type { LocalDb } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { SEARCH_SQL, searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, QuizRow, SegmentRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
 
 export interface PackApply {
   version: number;
@@ -56,6 +56,21 @@ export interface LocalRepo {
   markCommentOutFailed(eventId: string, reason: string): Promise<void>;
   /** 删一条：用户对失败项点「删除」，或补发成功后清行。 */
   removeCommentOut(eventId: string): Promise<void>;
+  /**
+   * 写一行投稿台账（同 `item_id` 即更新）。台账是「我的条目」的列表本体，
+   * 状态由本册 §9.3 的流转规则驱动，不由本方法决定。
+   */
+  saveSubmission(row: MySubmissionRow): Promise<void>;
+  /** 台账全部行，按 `queued_at ASC`（补发取序）；传 `state` 即只取该状态。 */
+  listSubmissions(state?: 'pending' | 'sent' | 'failed'): Promise<MySubmissionRow[]>;
+  /** 读一行；不存在返回 null（更新模式回填编辑器用）。 */
+  getSubmission(itemId: string): Promise<MySubmissionRow | null>;
+  /** 送达：置 `sent`（终态）并回填服务端的 `created` 与送达时刻。 */
+  markSubmissionSent(itemId: string, created: number, sentAt: string): Promise<void>;
+  /** 永久失败：置 `failed` 并记原因。单向——失败项不会回到 `pending`（本册 §9.3）。 */
+  markSubmissionFailed(itemId: string, reason: string): Promise<void>;
+  /** 删一行：用户对 `pending` / `failed` 项点「删除」。`sent` 不可删（它是台账本体）。 */
+  removeSubmission(itemId: string): Promise<void>;
 }
 
 /** 本地库建表语句（P0 只建用得到的 5 张表）。 */
@@ -85,6 +100,11 @@ export const SCHEMA_SQL: string[] = [
      item_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL,
      content_hash TEXT NOT NULL, PRIMARY KEY(item_id, seq))`,
   `CREATE INDEX IF NOT EXISTS idx_segments_item ON segments(item_id)`,
+  `CREATE TABLE IF NOT EXISTS my_submissions(
+     item_id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, body_md TEXT NOT NULL,
+     question_json TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, created INTEGER NOT NULL,
+     queued_at TEXT NOT NULL, sent_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS idx_my_submissions_queued ON my_submissions(queued_at)`,
 ];
 
 /** SqlRepo 把 LocalRepo 语义落到 SQLite 上（Task 19 注入 plus.sqlite 连接）。 */
@@ -339,6 +359,49 @@ export class SqlRepo implements LocalRepo {
   async removeCommentOut(eventId: string): Promise<void> {
     await this.db.execute(`DELETE FROM comment_out WHERE event_id=?`, [eventId]);
   }
+
+  async saveSubmission(row: MySubmissionRow): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO my_submissions(item_id,type,title,body_md,question_json,state,reason,created,queued_at,sent_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(item_id) DO UPDATE SET type=excluded.type,title=excluded.title,body_md=excluded.body_md,
+         question_json=excluded.question_json,state=excluded.state,reason=excluded.reason,
+         created=excluded.created,queued_at=excluded.queued_at,sent_at=excluded.sent_at`,
+      [row.itemId, row.type, row.title, row.bodyMd, row.questionJson, row.state, row.reason, row.created, row.queuedAt, row.sentAt],
+    );
+  }
+
+  async listSubmissions(state?: 'pending' | 'sent' | 'failed'): Promise<MySubmissionRow[]> {
+    const cols = `item_id,type,title,body_md,question_json,state,reason,created,queued_at,sent_at`;
+    const rows = state
+      ? await this.db.select(`SELECT ${cols} FROM my_submissions WHERE state=? ORDER BY queued_at ASC`, [state])
+      : await this.db.select(`SELECT ${cols} FROM my_submissions ORDER BY queued_at ASC`);
+    return rows.map(toMySubmissionRow);
+  }
+
+  async getSubmission(itemId: string): Promise<MySubmissionRow | null> {
+    const rows = await this.db.select(
+      `SELECT item_id,type,title,body_md,question_json,state,reason,created,queued_at,sent_at FROM my_submissions WHERE item_id=?`,
+      [itemId],
+    );
+    return rows.length > 0 ? toMySubmissionRow(rows[0]) : null;
+  }
+
+  async markSubmissionSent(itemId: string, created: number, sentAt: string): Promise<void> {
+    await this.db.execute(`UPDATE my_submissions SET state='sent', reason=NULL, created=?, sent_at=? WHERE item_id=?`, [
+      created,
+      sentAt,
+      itemId,
+    ]);
+  }
+
+  async markSubmissionFailed(itemId: string, reason: string): Promise<void> {
+    await this.db.execute(`UPDATE my_submissions SET state='failed', reason=? WHERE item_id=?`, [reason, itemId]);
+  }
+
+  async removeSubmission(itemId: string): Promise<void> {
+    await this.db.execute(`DELETE FROM my_submissions WHERE item_id=?`, [itemId]);
+  }
 }
 
 function toNullableString(v: unknown): string | null {
@@ -391,5 +454,21 @@ function toCommentOutRow(r: Record<string, unknown>): CommentOutRow {
     state: String(r.state) === 'failed' ? 'failed' : 'pending',
     reason: toNullableString(r.reason),
     queuedAt: String(r.queued_at),
+  };
+}
+
+function toMySubmissionRow(r: Record<string, unknown>): MySubmissionRow {
+  const state = String(r.state);
+  return {
+    itemId: String(r.item_id),
+    type: String(r.type) === 'quiz' ? 'quiz' : 'article',
+    title: String(r.title ?? ''),
+    bodyMd: String(r.body_md ?? ''),
+    questionJson: String(r.question_json ?? ''),
+    state: state === 'sent' ? 'sent' : state === 'failed' ? 'failed' : 'pending',
+    reason: toNullableString(r.reason),
+    created: Number(r.created ?? 0),
+    queuedAt: String(r.queued_at ?? ''),
+    sentAt: String(r.sent_at ?? ''),
   };
 }

@@ -88,3 +88,27 @@ export interface CommentOutRow {
   /** 入队时刻 ISO8601，排序用 */
   queuedAt: string;
 }
+
+/**
+ * 我的投稿台账（本地 `my_submissions` 表，本册 §4.1）。
+ * **一张表兼两职**：既是「我的条目」的列表本体，也是投稿的离线队列。
+ */
+export interface MySubmissionRow {
+  /** `<type>/<slug>`，与节点侧同一 id */
+  itemId: string;
+  type: 'article' | 'quiz';
+  title: string;
+  /** 文章正文（quiz 行为空串） */
+  bodyMd: string;
+  /** 题库 JSON 字符串（article 行为空串） */
+  questionJson: string;
+  state: 'pending' | 'sent' | 'failed';
+  /** `state='failed'` 时的用户可读原因（错误码映射后的中文）；可空 */
+  reason: string | null;
+  /** 服务端 `created` 回填：1 新建、0 更新 */
+  created: number;
+  /** 入队时刻 ISO8601（补发排序键） */
+  queuedAt: string;
+  /** 送达时刻 ISO8601；未送达为空串 */
+  sentAt: string;
+}
