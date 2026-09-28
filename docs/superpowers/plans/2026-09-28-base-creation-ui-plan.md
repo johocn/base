@@ -2980,6 +2980,46 @@ git push
 - **附带**：`submit.test.ts` 从 `@base/protocol-ts` 的导入里删掉了未使用的 `verify`（计划脚注已授权，`tsc` 会报未使用）。
 - **实测计数**：`npx vitest run` = **14 文件 / 130 项全绿**（基线 112 + Task 2 的 7 + Task 3 的 11 = 130；计划里若写 131 属预估误差）。
 
+### 更正 2（Task 9 Step 3）：产物复核的第六项落在配置包，不在 `app-service.js`
+
+- **计划怎么写的**：Step 3 让在 `dist\build\app\app-service.js` 里核对六个特征串，其中包含 `tabbar/course.png`，并期望六项全 `True`。
+- **实际怎么做的**：前五项（`投稿` / `我的条目` / `提案与投票` / `我的贡献` / `已保存，联网后自动发送`）均为 `True`；第六项 `tabbar/course.png` 在 `app-service.js` 为 **`False`**——已核实是**包归属问题，不是构建缺陷**：`app-service.js` 全文不含 `tabbar` 字样，tabBar 配置被 uni-app 编译进 **`app-config-service.js`** 与 **`manifest.json`**，这两者用同一 `ReadAllText(..., UTF8)` 读法均为 `True`；而且图标实体 `dist\build\app\static\tabbar\course.png` 确实存在。
+- **为什么**：`pages.json` 的 `tabBar` 属**应用级配置**，本就编到配置包而非页面逻辑包。Step 3 的第六项期望写偏了，功能完整。
+- **后续核对口径**：要连图标一起校验时，改查 `app-config-service.js` / `manifest.json`，或直接 `Test-Path dist\build\app\static\tabbar\course.png`。
+- **附带（全量自测实际计数）**：`npx vitest run` = **16 文件 / 142 项全绿**；`npx tsc --noEmit` 无输出；`npm run build:app` 成功；`go build ./...` / `go vet ./...` / `go test ./...` 全包 ok。（计划 Step 2 写的「15 文件 / 约 130 项」是旧预估，以实际为准。）
+
 ## 执行实况（实施后回填）
 
-（执行时在此追加：每个 Task 的测试计数、`go test` 结果、构建结果、0.8.0 的 APK 字节数与 sha256、证书 SHA1、线上验证结论、以及未完成的人工验收项。）
+**执行方式**：子代理驱动——每个 Task 派发一个全新子代理执行，Task 之间做两阶段复核（① 对册子核「做了什么 / 有没有少」；② 对代码核「写的与计划是否一致」）；每个 Task 只 `git add` 自身文件后提交 + 推送。全程未触碰工作区里 `.gitignore` 的既有未提交改动。
+
+| Task | 内容 | commit | 实测结论 |
+|---|---|---|---|
+| 1 | 本地台账 `my_submissions`（表 + 索引 + 6 读写方法） | `e508001` | `tsc --noEmit` 干净；vitest 12 文件 / 112 项全绿（未加测试，不回归） |
+| 2 | `quizdoc.ts` + `quizdoc.test.ts` | `bfcf8c4` | 7 用例全绿；`tsc` 干净 |
+| 3 | `errors.ts` + `submit.ts` + `submit.test.ts` + `identity.ts` 的 `peekLocalIdentity` | `35673df` | 11 用例全绿；全量 14 文件 / 130 项；`tsc` 干净（另见「更正 1」） |
+| 4 | `submit.vue` + `myitems.vue` + `pages.json` 两条路由 | `0cba1cf` | 全量 14 文件 / 130 项；`tsc` 干净；`build:h5` 通过 |
+| 5 | `govern.ts` + `govern.test.ts` + `governance.vue` + `article.vue` 治理入口 | `b32cfb8` | 7 用例全绿；全量 15 文件 / 137 项；`build:h5` 通过 |
+| 6 | `contribution.ts` + `contribution.test.ts` + `contribution.vue` + `mine.vue` 两组四行 | `69d0709` | 5 用例全绿；全量 16 文件 / 142 项；`build:h5` 通过 |
+| 7 | Go 看板 `web.go` / `server.go` / `base.html` / `governance.html` / `web_test.go` | `bcb2d99` | `go build` / `go vet` / `go test ./...` 全包 ok；`TestGovernanceBoard*` 三条实跑 PASS |
+| 8 | tabBar 八图标（8 SVG 源 + 8 个 81×81 RGBA 透明 PNG）+ `pages.json` 挂载 | `a9bb841` | 8 个 PNG 逐个核 IHDR = 81×81 / colorType=6；`build:h5` + `build:app` 通过、图标随包拷贝 |
+| 9 | 版本 `0.8.0` / `9` + 全量自测 + 产物复核 | `8115e6a` | vitest 16 文件 / 142 项全绿；`tsc` 干净；`build:app` 通过；`go build`/`vet`/`test ./...` 全包 ok；产物复核见「更正 2」 |
+
+**文档提交**：`7588d26`（计划 #30 落盘 + README 登记第 30 行）、`ce8dad9`（更正 1）、本次提交（更正 2 + README 状态回填）。
+
+### 未完成的步骤（受环境阻塞，非代码问题）
+
+**Task 9 Step 5–9（云打包 → 指纹 → 上传 → 签发升级文档 → 线上验证）未执行**：
+
+- **现象**：`D:\HBuilderX\cli.exe` 任何子命令（含 `--version`）都返回「与主程序的连接已中断，可能已关闭。请运行 cli open 重新启动后再试。」。首次 pack 提示「未检测到已打开的HBuilderX」，执行 `cli open` 后即进入上述状态。
+- **已尝试**（均未改任何 pack 参数）：直接 pack；`cli open` 后等待再 pack；结束全部 HBuilderX 进程后干净 `cli open` + 分别等待 15s / 25s / 45s；从 `D:\HBuilderX` 目录运行；`cli --version` / `--help`。现象完全一致。
+- **取证**：HBuilderX 日志 `%APPDATA%\HBuilder X\.log` 显示启动即 `last session is crashed!`，CLI 插件激活成功但反复出现 `QWindowsPipeWriter: asynchronous write failed.` 与 `plugin-manager/out.js exit with code 10001`。旁证：当日 `base-0.7.0.apk` 于 07:24 成功产出，说明环境此前可用、现为状态异常。
+- **现场状态**：未下载到 APK（`dist\release\apk\base-0.8.0.apk` 不存在）；未上传、未签发、未改落地页；已停掉临时启动的 HBuilderX 进程。
+- **待人工处置**：在**交互式登录桌面会话**中彻底退出并重开 HBuilderX（确认不再出现 `last session is crashed`），同一会话先跑 `D:\HBuilderX\cli.exe --version` 验证桥接可用，再重跑 Step 5 的 pack 命令；随后按 Step 6–9 继续（**证书 SHA1 必须实测为 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19` 才可上传**，`apk_sha256` 必须与签发文档打印的一致）。
+
+### 待人工验收（真机）
+
+- 四页跳转：`我的` → 新建投稿 / 我的条目 / 提案与投票 / 我的贡献
+- 断网投稿入队后联网自动补发（仅一条、不重复）
+- tabBar 八图标两态显示正确（未选中线性灰、选中填充蓝）
+- `/governance` 看板在手机浏览器可读
+- 投稿编辑器「新建 / 重投更新」双模式（更新模式载体与 id 不可改）
