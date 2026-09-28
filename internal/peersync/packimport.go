@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -326,7 +327,33 @@ func readAndVerifyPack(packPath string, man protocol.Manifest) ([]store.PackEntr
 		default:
 			return nil, fmt.Errorf("manifest 条目 %s 的 sqlite_table=%q 不支持入库", e.ItemID, e.SQLiteTable)
 		}
+		base.AuthorID, base.AuthorSig = resolveAuthor(man, e)
 		out = append(out, base)
 	}
 	return out, nil
+}
+
+// resolveAuthor 用该包内嵌的 contributors 公钥验证条目归属（治理册 §2.1、§6）。
+// 任一步不成立即**降级为无归属**，绝不影响该包的其余条目、也不拒绝整包。
+// 归属只在入库前验这一次；运行期名册计算只读缓存列，不重验（册子 §3.1）。
+func resolveAuthor(man protocol.Manifest, e protocol.Entry) (string, string) {
+	if e.AuthorID == "" || e.AuthorSig == "" {
+		return "", ""
+	}
+	pub := man.Contributors[e.AuthorID]
+	if pub == "" {
+		log.Printf("peersync: 条目 %s 的归属公钥未随包提供（author_id=%s），降级为无归属", e.ItemID, e.AuthorID)
+		return "", ""
+	}
+	derived, err := protocol.IdentityID(pub)
+	if err != nil || derived != e.AuthorID {
+		log.Printf("peersync: 条目 %s 的归属公钥与 author_id 失配，降级为无归属", e.ItemID)
+		return "", ""
+	}
+	ok, err := protocol.VerifyAuthorSig(pub, e.ItemID, e.ContentHash, e.AuthorID, e.AuthorSig)
+	if err != nil || !ok {
+		log.Printf("peersync: 条目 %s 的归属验签失败，降级为无归属", e.ItemID)
+		return "", ""
+	}
+	return e.AuthorID, e.AuthorSig
 }
