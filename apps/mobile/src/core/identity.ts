@@ -24,7 +24,7 @@ import {
 
 import type { StorageAdapter } from '../platform/adapter';
 
-/** KEK 来源（册子 §8 的 `kek_source`）。spike(#4) 结论回填后此枚举才可能收缩。 */
+/** KEK 来源（册子 §8 的 `kek_source`）。#4 spike 已定案（2026-09-29）：三值全保留作将来升级位，本册只用 `device`。 */
 export type KekSource = 'device' | 'password' | 'device+password';
 
 export const LOCAL_IDENTITY_KEY = 'identity.meta';
@@ -62,9 +62,9 @@ export function createIdentity(): Identity {
 /**
  * 设备侧 KEK。
  *
- * **S1 期实现（修正 8）**：随机 32 字节，存应用私有存储。KEK 与密文同库，
- * 不抗有 root/越狱能力的本地读取——这是 spike(#4) 结论回填前的最低可用形态。
- * spike 落地后只替换本函数（改走设备安全存储 / 用户口令派生），调用方契约不变。
+ * **#4 spike 定案形态（2026-09-29）**：随机 32 字节存应用私有存储。
+ * 库级加密不可达（`plus.sqlite` 无加密参数、SQLCipher 需原生插件，超出预算），
+ * 故本形态即定案：KEK 与密文同库，不抗有 root/越狱能力的本地读取。
  */
 export async function deviceKek(storage: StorageAdapter): Promise<Uint8Array> {
   const existing = await storage.get(LOCAL_DEVICE_KEK_KEY);
