@@ -37,6 +37,16 @@ var authErrText = map[string]string{
 	"event_rate_limited":       "发言过于频繁",
 	"profile_name_invalid":     "昵称必须是去首尾空白后 1..32 个字符，且不含控制字符",
 	"profile_id_forbidden":     "请求体不得携带 id",
+	"item_id_invalid":          "item_id 必须形如 article/<slug> 或 quiz/<slug>，slug 为 [a-z0-9][a-z0-9-]{0,63}",
+	"item_type_unsupported":    "type 只能是 article 或 quiz",
+	"item_type_mismatch":       "type 与 item_id 前缀不一致",
+	"item_title_invalid":       "标题必须是去首尾空白后 1..200 个字符，且不含控制字符",
+	"item_body_too_large":      "正文超过 32768 字节",
+	"item_question_invalid":    "question_json 不是合法 JSON、schema_version 非 1，或 questions 缺失/为空",
+	"author_id_forbidden":      "请求体不得携带 author_id",
+	"author_sig_invalid":       "作者归属签名验证失败",
+	"item_id_taken":            "该 item_id 已被占用",
+	"item_rate_limited":        "投稿过于频繁",
 }
 
 // writeAuthErr 按契约 3.3 输出 {"error": "<人读消息>", "code": "<机器码>"}。

@@ -30,13 +30,15 @@ const defaultFetchMaxBlobs = 64
 
 // Server 是节点 HTTP 服务。
 type Server struct {
-	st               *store.Store
-	opt              Options
-	pub              string
-	escrowLimiter    *ipLimiter
-	eventLimiterByID *ipLimiter
-	eventLimiterByIP *ipLimiter
-	knownEventTypes  map[string]struct{}
+	st                *store.Store
+	opt               Options
+	pub               string
+	escrowLimiter     *ipLimiter
+	eventLimiterByID  *ipLimiter
+	eventLimiterByIP  *ipLimiter
+	submitLimiterByID *ipLimiter
+	submitLimiterByIP *ipLimiter
+	knownEventTypes   map[string]struct{}
 }
 
 // New 构造服务；配置了私钥时同时推导出公钥（用于 /v1/pubkey 与验签）。
@@ -46,10 +48,12 @@ func New(st *store.Store, opt Options) (*Server, error) {
 	}
 	s := &Server{
 		st: st, opt: opt,
-		escrowLimiter:    newIPLimiter(10, 10),
-		eventLimiterByID: newIPLimiter(eventPerMinutePerID, eventBurstPerID),
-		eventLimiterByIP: newIPLimiter(eventPerMinutePerIP, eventBurstPerIP),
-		knownEventTypes:  copyEventTypes(),
+		escrowLimiter:     newIPLimiter(10, 10),
+		eventLimiterByID:  newIPLimiter(eventPerMinutePerID, eventBurstPerID),
+		eventLimiterByIP:  newIPLimiter(eventPerMinutePerIP, eventBurstPerIP),
+		submitLimiterByID: newIPLimiter(submitPerMinutePerID, submitBurstPerID),
+		submitLimiterByIP: newIPLimiter(submitPerMinutePerIP, submitBurstPerIP),
+		knownEventTypes:   copyEventTypes(),
 	}
 	if opt.SignKeyHex != "" {
 		kp, err := protocol.KeyPairFromSeed(opt.SignKeyHex)
@@ -106,6 +110,7 @@ func (s *Server) publicMux() *http.ServeMux {
 	mux.Handle("GET /v1/me", s.requireAuth(s.handleMe))
 	mux.Handle("POST /v1/event", s.requireAuth(s.handleEventPost))
 	mux.Handle("POST /v1/profile", s.requireAuth(s.handleProfilePut))
+	mux.Handle("POST /v1/submit", s.requireAuth(s.handleSubmitPost))
 
 	// 评论公开读（匿名，册子 §4.2）。
 	mux.HandleFunc("GET /v1/comment", s.handleCommentList)
