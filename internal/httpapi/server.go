@@ -105,6 +105,7 @@ func (s *Server) publicMux() *http.ServeMux {
 	mux.Handle("PUT /v1/identity/escrow/{username}", s.requireAuth(s.handleEscrowPut))
 	mux.Handle("GET /v1/me", s.requireAuth(s.handleMe))
 	mux.Handle("POST /v1/event", s.requireAuth(s.handleEventPost))
+	mux.Handle("POST /v1/profile", s.requireAuth(s.handleProfilePut))
 
 	// 评论公开读（匿名，册子 §4.2）。
 	mux.HandleFunc("GET /v1/comment", s.handleCommentList)

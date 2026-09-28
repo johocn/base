@@ -35,6 +35,8 @@ var authErrText = map[string]string{
 	"event_sig_invalid":        "事件内容签名验证失败",
 	"event_revoked":            "该评论已被审核删除",
 	"event_rate_limited":       "发言过于频繁",
+	"profile_name_invalid":     "昵称必须是去首尾空白后 1..32 个字符，且不含控制字符",
+	"profile_id_forbidden":     "请求体不得携带 id",
 }
 
 // writeAuthErr 按契约 3.3 输出 {"error": "<人读消息>", "code": "<机器码>"}。

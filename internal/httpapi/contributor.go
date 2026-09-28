@@ -1,7 +1,11 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
+	"time"
+	"unicode/utf8"
 )
 
 type contributorDTO struct {
@@ -40,4 +44,47 @@ func (s *Server) handleContributors(w http.ResponseWriter, r *http.Request) {
 		resp.Contributors = append(resp.Contributors, contributorDTO{ID: c.ID, Count: c.Count, Name: name})
 	}
 	s.writeJSON(w, http.StatusOK, resp)
+}
+
+type profilePutReq struct {
+	Name string          `json:"name"`
+	ID   json.RawMessage `json:"id"`
+}
+
+// validProfileName 按治理册 §5.2：去首尾空白后 rune 长度 1..32，且不含控制字符。
+func validProfileName(s string) bool {
+	n := utf8.RuneCountInString(s)
+	if n < 1 || n > 32 {
+		return false
+	}
+	for _, r := range s {
+		if r <= 0x1F || r == 0x7F {
+			return false
+		}
+	}
+	return true
+}
+
+// handleProfilePut 写入调用者自己的公开昵称（治理册 §5.2），与评论写路径同一条鉴权路。
+// 硬约束：id 只能取自鉴权中间件解析出的身份，请求体不得携带 id——否则等于伪造他人昵称。
+func (s *Server) handleProfilePut(w http.ResponseWriter, r *http.Request) {
+	var req profilePutReq
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+	if len(req.ID) > 0 {
+		s.writeAuthErr(w, http.StatusBadRequest, "profile_id_forbidden")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if !validProfileName(name) {
+		s.writeAuthErr(w, http.StatusBadRequest, "profile_name_invalid")
+		return
+	}
+	id := identityFrom(r)
+	if err := s.st.PutProfile(id, name, time.Now().UnixMilli()); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": name})
 }
