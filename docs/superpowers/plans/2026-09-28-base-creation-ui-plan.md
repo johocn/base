@@ -2972,6 +2972,14 @@ git push
 
 （执行时在此追加：与计划的偏差、实测发现、口径更正。每条写清「计划怎么写的 / 实际怎么做的 / 为什么」。）
 
+### 更正 1（Task 3）：`flushSubmissions` 的 `remaining` 口径
+
+- **计划怎么写的**：Step 3 的 `runFlushSubmissions` 逐字抄了 `core/comment.ts` 的 `runFlush`——暂时失败分支写 `remaining += 1; error = msg; break;`；但同 Task 的测试又断言该场景下 `remaining: 3`。**代码与测试自相矛盾**（照抄实现即得 1，测试要 3）。
+- **实际怎么做的**：改实现不改断言——暂时失败分支改为 `remaining = rows.length - sent - failed;`（`break` / `error = msg` 不动）。测试保持计划原文（`remaining: 3`）。
+- **为什么**：`remaining` 不被任何页面消费（全仓 `*.vue` 无引用），其唯一显式契约就是那条测试；字段名与测试名（「暂时失败即中止本轮」）表达的语义都是「还剩几条待发」，故以测试为准。`comment.ts` 的 `remaining += 1` 是同名口径的既有瑕疵，**属别册范围，本册不碰**——差异在此登记，不静默分裂。
+- **附带**：`submit.test.ts` 从 `@base/protocol-ts` 的导入里删掉了未使用的 `verify`（计划脚注已授权，`tsc` 会报未使用）。
+- **实测计数**：`npx vitest run` = **14 文件 / 130 项全绿**（基线 112 + Task 2 的 7 + Task 3 的 11 = 130；计划里若写 131 属预估误差）。
+
 ## 执行实况（实施后回填）
 
 （执行时在此追加：每个 Task 的测试计数、`go test` 结果、构建结果、0.8.0 的 APK 字节数与 sha256、证书 SHA1、线上验证结论、以及未完成的人工验收项。）
