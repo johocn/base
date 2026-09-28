@@ -1,0 +1,17 @@
+{
+  "cases": [
+    {
+      "author_id": "f78672b2f87ff80b248323a4be7c3da6",
+      "content_hash": "af7d2109429d7850f7ae542da6b0d83403846119fc160ed8060cc3814f676a48",
+      "item_id": "article:demo-1",
+      "name": "article-demo-1",
+      "sign_bytes": "{\"alg\":\"ed25519\",\"author_id\":\"f78672b2f87ff80b248323a4be7c3da6\",\"content_hash\":\"af7d2109429d7850f7ae542da6b0d83403846119fc160ed8060cc3814f676a48\",\"domain\":\"base/author-v1\",\"item_id\":\"article:demo-1\"}",
+      "signature_hex": "4d60b2e2e4f998bea25bd0124dffcdf0fb44ccf2db886ae2cac9764d9e03d06668dfa029440cc3554e93737644bb5b1c1601505c14d22c672bed235b41c85203"
+    }
+  ],
+  "key": {
+    "pub_hex": "9471ed98cfff058f9b91cd3d1df44f1a78230d8e3ceb2311981307a04c5be6d0",
+    "seed_hex": "6f1e0d9c8b7a6958473625142332415061728394a5b6c7d8e9f0a1b2c3d4e5f6"
+  },
+  "version": 1
+}
