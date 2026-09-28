@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/johocn/base/internal/store"
@@ -77,4 +80,105 @@ func (s *Server) governRoster() (set map[string]bool, ok bool) {
 		set[c.ID] = true
 	}
 	return set, true
+}
+
+type proposalEditReq struct {
+	Title string `json:"title"`
+	// BodyMD 用指针以区分「键缺失」（400）与「空串」（合法：本册不设内容下限）。
+	BodyMD *string `json:"body_md"`
+}
+
+type proposalReq struct {
+	Action     string           `json:"action"`
+	ItemID     string           `json:"item_id"`
+	Reason     string           `json:"reason"`
+	Edit       *proposalEditReq `json:"edit"`
+	ProposerID json.RawMessage  `json:"proposer_id"`
+	AuthorID   json.RawMessage  `json:"author_id"`
+}
+
+// handleProposalPost 是签名写路径 POST /v1/proposal（册子 §3.1）：名册内的治理者
+// 对**他人**条目发起 remove / edit / revive 提案，签名即自动构成第 1 票。任何失败都不写入。
+func (s *Server) handleProposalPost(w http.ResponseWriter, r *http.Request) {
+	actor := identityFrom(r)
+	var req proposalReq
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+	// 提案人只能取自鉴权身份：请求体携带即等于替他人提案（册子 §3.1 硬约束）。
+	if len(req.ProposerID) > 0 || len(req.AuthorID) > 0 {
+		s.writeAuthErr(w, http.StatusBadRequest, "author_id_forbidden")
+		return
+	}
+	if !validProposalAction(req.Action) {
+		s.writeAuthErr(w, http.StatusBadRequest, "proposal_action_unsupported")
+		return
+	}
+	// reason 可选（缺省空串）；但「已给定」却不合规要拒。
+	reason, reasonOK := validProposalReason(req.Reason)
+	if req.Reason != "" && !reasonOK {
+		s.writeAuthErr(w, http.StatusBadRequest, "proposal_reason_invalid")
+		return
+	}
+	title, bodyMD := "", ""
+	if req.Action == store.GovernActionEdit {
+		if req.Edit == nil || req.Edit.BodyMD == nil || !validItemTitle(req.Edit.Title) {
+			s.writeAuthErr(w, http.StatusBadRequest, "proposal_edit_invalid")
+			return
+		}
+		title, bodyMD = strings.TrimSpace(req.Edit.Title), *req.Edit.BodyMD
+		if len(title)+len(bodyMD) > maxSubmitBytes {
+			s.writeAuthErr(w, http.StatusRequestEntityTooLarge, "proposal_too_large")
+			return
+		}
+	}
+	if !s.proposalLimiterByID.allow(actor) || !s.governLimiterByIP.allow(clientIP(r)) {
+		s.writeAuthErr(w, http.StatusTooManyRequests, "govern_rate_limited")
+		return
+	}
+	it, ok, err := s.st.GetItem(req.ItemID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		s.writeAuthErr(w, http.StatusNotFound, "item_not_found")
+		return
+	}
+	// 自己改自己走第 2 册的签名写路径，不需要审批（册子 §2.2）。空归属条目可治。
+	if it.AuthorID != "" && it.AuthorID == actor {
+		s.writeAuthErr(w, http.StatusForbidden, "item_self_owned")
+		return
+	}
+	if it.State != store.GovernRequiredState(req.Action) {
+		s.writeAuthErr(w, http.StatusBadRequest, "item_state_mismatch")
+		return
+	}
+	// edit 只对 article 载体成立（册子 §0.3）：body_md 与 sha256(body_md) 只存在于 articles。
+	if req.Action == store.GovernActionEdit && it.SQLiteTable != "articles" {
+		s.writeAuthErr(w, http.StatusBadRequest, "proposal_edit_invalid")
+		return
+	}
+	roster, rosterOK := s.governRoster()
+	if rosterOK && !roster[actor] {
+		s.writeAuthErr(w, http.StatusForbidden, "proposer_not_governor")
+		return
+	}
+	id, err := s.st.CreateProposal(store.Proposal{
+		Action: req.Action, ItemID: req.ItemID, ProposerID: actor,
+		Reason: reason, Title: title, BodyMD: bodyMD,
+		BaseContentHash: it.ContentHash, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, map[string]any{
+		"proposal_id": strconv.FormatInt(id, 10),
+		"action":      req.Action,
+		"item_id":     req.ItemID,
+		"vote_count":  1,
+		"threshold":   store.GovernThreshold(req.Action),
+		"status":      store.GovernStatusPending,
+	})
 }

@@ -43,10 +43,23 @@ var authErrText = map[string]string{
 	"item_title_invalid":       "标题必须是去首尾空白后 1..200 个字符，且不含控制字符",
 	"item_body_too_large":      "正文超过 32768 字节",
 	"item_question_invalid":    "question_json 不是合法 JSON、schema_version 非 1，或 questions 缺失/为空",
-	"author_id_forbidden":      "请求体不得携带 author_id",
+	"author_id_forbidden":      "请求体不得携带身份字段（author_id / proposer_id / id 等）",
 	"author_sig_invalid":       "作者归属签名验证失败",
 	"item_id_taken":            "该 item_id 已被占用",
 	"item_rate_limited":        "投稿过于频繁",
+
+	"proposal_action_unsupported": "action 只能是 remove / edit / revive",
+	"proposal_reason_invalid":     "reason 必须是去首尾空白后 1..200 个字符，且不含控制字符",
+	"proposal_edit_invalid":       "edit 载荷不合法：title 须为去首尾空白后 1..200 个字符且不含控制字符，body_md 必填，且目标必须是 article 载体",
+	"proposal_too_large":          "title 与 body_md 的字节之和超过 32768",
+	"item_not_found":              "目标 item_id 不存在",
+	"item_self_owned":             "不能治理自己的条目，请改用 POST /v1/submit",
+	"item_state_mismatch":         "动作与目标当前 state 不匹配",
+	"proposer_not_governor":       "提案人不在本节点名册内",
+	"proposal_not_found":          "提案不存在",
+	"voter_not_governor":          "投票人不在本节点名册内",
+	"already_voted":               "已对本提案投过票",
+	"govern_rate_limited":         "治理操作过于频繁",
 }
 
 // writeAuthErr 按契约 3.3 输出 {"error": "<人读消息>", "code": "<机器码>"}。
