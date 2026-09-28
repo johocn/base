@@ -2871,7 +2871,7 @@ git commit -m "chore(mobile): 版本 0.8.0（创作与治理 UI）"
 git push
 ```
 
-- [ ] **Step 5: 云打包**
+- [x] **Step 5: 云打包**（CLI 桥接失效，改走 GUI，见「Task 9 Step 5–9 执行实况」）
 
 Run（任意 cwd）:
 
@@ -2888,7 +2888,7 @@ Invoke-WebRequest -Uri '<临时地址>' -OutFile 'e:\code\base\apps\mobile\dist\
 
 （本地 `curl.exe` 会报 `getaddrinfo() thread failed`，用 `Invoke-WebRequest`）
 
-- [ ] **Step 6: 记录指纹并核对证书**
+- [x] **Step 6: 记录指纹并核对证书**
 
 Run（cwd `e:\code\base\apps\mobile`）:
 
@@ -2899,7 +2899,7 @@ D:\HBuilderX\plugins\amazon-corretto\bin\keytool.exe -printcert -jarfile dist\re
 
 Expected: sha256 记下备用；证书 `SHA1: 19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.7.0 一致，才可覆盖安装）。**只用 `keytool` 指纹判断证书**，不看 `CERT.RSA` 文件字节。
 
-- [ ] **Step 7: 上传 APK 并更新落地页**
+- [x] **Step 7: 上传 APK 并更新落地页**（实测改为整页重写后 `scp`：`sed` 单行替换不会更新版本号与更新说明，会留陈旧文案）
 
 ```bash
 scp e:\code\base\apps\mobile\dist\release\apk\base-0.8.0.apk me:/opt/appdl/base-0.8.0.apk
@@ -2908,7 +2908,7 @@ ssh me "sed -i 's/base-0.7.0.apk/base-0.8.0.apk/g' /opt/appdl/index.html && grep
 
 Expected: `grep` 输出 `base-0.8.0.apk`
 
-- [ ] **Step 8: 签发升级文档**
+- [x] **Step 8: 签发升级文档**
 
 `-notes` 必须是**不含空格的一个 token**（空格会被 Go flag 解析吃掉，导致后面的 `-out` 失效、文档落到源节点目录）：
 
@@ -2920,7 +2920,7 @@ Expected: 打印 `version_name=0.8.0`、`apk_size`、`apk_sha256`；`apk_sha256`
 
 若误写了副本，清掉：`ssh me "rm -f /opt/base/data/release.json"`
 
-- [ ] **Step 9: 线上验证**
+- [x] **Step 9: 线上验证**（首跑 `/governance` 404，补做节点二进制部署后通过，见「更正 3」）
 
 ```bash
 ssh me "curl -sS http://127.0.0.1/v1/release"
@@ -2931,7 +2931,7 @@ Expected: `/v1/release` 返回 `version_name":"0.8.0"` 的文档；APK `200` 且
 
 同时用 curl 确认看板已上线：`curl.exe -sS http://118.190.217.242/governance | Select-String '治理看板'` 命中。
 
-- [ ] **Step 10: `docs/README.md` 回填三处**
+- [x] **Step 10: `docs/README.md` 回填三处**
 
 1. §3 文档清单末尾追加一行（编号顺延为 **30**）。**注意**：按仓库「任何新增文档必须先在此登记」惯例，本行已在计划产出时提前登记（状态「已出（待执行）」），故本步是**把该行状态改为「已执行（完整度见计划「执行实况」）」**，不要重复插入第二行；职责描述可按实际落地范围微调。规范内容如下：
 
@@ -2949,7 +2949,7 @@ Expected: `/v1/release` 返回 `version_name":"0.8.0"` 的文档；APK `200` 且
 
 3. §5 的「待人工」「新增」「下一步」三条追加本册实况：待人工增加「#30 的真机验收（四页跳转、断网投稿补发、tabBar 八图标两态、`/governance` 看板手机浏览器可读）」；「下一步」把「并行可做 `#4` 手机本地加密 spike 册子」保留，并注明治理主线四册**已全部出册出计划**。
 
-- [ ] **Step 11: 提交文档回填**
+- [x] **Step 11: 提交文档回填**
 
 ```bash
 git add docs/README.md
@@ -2988,6 +2988,15 @@ git push
 - **后续核对口径**：要连图标一起校验时，改查 `app-config-service.js` / `manifest.json`，或直接 `Test-Path dist\build\app\static\tabbar\course.png`。
 - **附带（全量自测实际计数）**：`npx vitest run` = **16 文件 / 142 项全绿**；`npx tsc --noEmit` 无输出；`npm run build:app` 成功；`go build ./...` / `go vet ./...` / `go test ./...` 全包 ok。（计划 Step 2 写的「15 文件 / 约 130 项」是旧预估，以实际为准。）
 
+### 更正 3（Task 9 Step 9）：计划漏了「部署节点二进制」，`/governance` 首跑 404
+
+- **计划怎么写的**：Step 6–9 只覆盖 APK 指纹核对 / 上传 / 改落地页 / 签发 `release.json` / 线上验证；Step 9 直接断言 `curl http://118.190.217.242/governance` 能命中「治理看板」，**没有列出任何部署节点二进制的步骤**。
+- **实际怎么做的**：Step 9 首跑 `/governance` 返回 **404**。查明：nginx `location /` 的 `proxy_pass` 是 `http://127.0.0.1:8083`（缓存节点 `base-cache.service`），`location /dl/` 才指 8080 的 appdl 静态页；而线上两个节点二进制 `/opt/base/based`（源节点，443/8081）与 `/opt/base-cache/based`（缓存节点，8082/8083）**都是 2026-09-27 20:22 编译的旧版**，不含 Task 7（`bcb2d99`）新增的看板路由。遂本地交叉编译 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o based ./cmd/based`，scp 到 `/opt/base/based.new` 与 `/opt/base-cache/based.new`，各 `cp -p` 备份为 `based.bak-0.8.0-deploy` 后替换，再依次 `systemctl restart base` / `systemctl restart base-cache`。
+- **为什么**：看板是节点**服务端渲染**（Task 7 的服务端路由 + 模板），不部署新二进制就永远 404。Step 9 的验收项隐含了「节点已升级到本册代码」，计划把这步漏了——属计划缺陷，不是代码缺陷（`web_test.go` 的 `TestGovernanceBoard*` 早已 PASS）。
+- **取证**：源节点 `curl -sk https://127.0.0.1:443/governance` = **200**；缓存节点 `curl http://127.0.0.1:8083/governance` = **200**；公网 `http://118.190.217.242/governance` = **200** 且含 `<title>治理看板</title>` 与 `<h1>治理看板</h1>`。两个节点页面均显示「本节点暂无提案 / 暂无贡献者」空态——**确属线上还没有提案与贡献者**（两节点输出一致，非路由串味或部署残缺），`/v1/release` 仍 200、`/governance` 与升级链路互不影响。
+- **回滚**：`mv /opt/base/based.bak-0.8.0-deploy /opt/base/based && systemctl restart base`（缓存节点把路径换成 `/opt/base-cache/` 同理）。注意 `base-cache.service` 的 `ExecStart` 指的是 `/opt/base/based`（不是 `/opt/base-cache/based`），故**两个服务共用同一二进制**，回滚要一起回。
+- **后续口径**：本册之后凡改节点侧代码（路由/模板/契约），发布清单必须含「交叉编译 + 两个节点各备份替换 + 依次 restart + 逐个探活」这一步。
+
 ## 执行实况（实施后回填）
 
 **执行方式**：子代理驱动——每个 Task 派发一个全新子代理执行，Task 之间做两阶段复核（① 对册子核「做了什么 / 有没有少」；② 对代码核「写的与计划是否一致」）；每个 Task 只 `git add` 自身文件后提交 + 推送。全程未触碰工作区里 `.gitignore` 的既有未提交改动。
@@ -3004,17 +3013,22 @@ git push
 | 8 | tabBar 八图标（8 SVG 源 + 8 个 81×81 RGBA 透明 PNG）+ `pages.json` 挂载 | `a9bb841` | 8 个 PNG 逐个核 IHDR = 81×81 / colorType=6；`build:h5` + `build:app` 通过、图标随包拷贝 |
 | 9 | 版本 `0.8.0` / `9` + 全量自测 + 产物复核 | `8115e6a` | vitest 16 文件 / 142 项全绿；`tsc` 干净；`build:app` 通过；`go build`/`vet`/`test ./...` 全包 ok；产物复核见「更正 2」 |
 
-**文档提交**：`7588d26`（计划 #30 落盘 + README 登记第 30 行）、`ce8dad9`（更正 1）、本次提交（更正 2 + README 状态回填）。
+**文档提交**：`7588d26`（计划 #30 落盘 + README 登记第 30 行）、`ce8dad9`（更正 1）、`fcf6fd7`（更正 2 + README 状态回填）、本次提交（更正 3 + 发布实况 + README 0.8.0 上线回填）。
 
-### 未完成的步骤（受环境阻塞，非代码问题）
+### Task 9 Step 5–9 执行实况（0.8.0 发布，已全部完成）
 
-**Task 9 Step 5–9（云打包 → 指纹 → 上传 → 签发升级文档 → 线上验证）未执行**：
+**Step 5（云打包）**：CLI 路径不可用（`D:\HBuilderX\cli.exe` 任何子命令均返回「与主程序的连接已中断」，日志有 `last session is crashed!` / `plugin-manager/out.js exit with code 10001` / `QWindowsPipeWriter: asynchronous write failed`，详见下文「CLI 失效取证」）。改由用户在 **HBuilderX GUI**「发行 → 原生App-云打包」完成（Android / 包名 `uni.app.UNI936A667` / 自有证书），03:18:28 打包成功并给出临时下载地址（5 次有效）。
 
-- **现象**：`D:\HBuilderX\cli.exe` 任何子命令（含 `--version`）都返回「与主程序的连接已中断，可能已关闭。请运行 cli open 重新启动后再试。」。首次 pack 提示「未检测到已打开的HBuilderX」，执行 `cli open` 后即进入上述状态。
-- **已尝试**（均未改任何 pack 参数）：直接 pack；`cli open` 后等待再 pack；结束全部 HBuilderX 进程后干净 `cli open` + 分别等待 15s / 25s / 45s；从 `D:\HBuilderX` 目录运行；`cli --version` / `--help`。现象完全一致。
-- **取证**：HBuilderX 日志 `%APPDATA%\HBuilder X\.log` 显示启动即 `last session is crashed!`，CLI 插件激活成功但反复出现 `QWindowsPipeWriter: asynchronous write failed.` 与 `plugin-manager/out.js exit with code 10001`。旁证：当日 `base-0.7.0.apk` 于 07:24 成功产出，说明环境此前可用、现为状态异常。
-- **现场状态**：未下载到 APK（`dist\release\apk\base-0.8.0.apk` 不存在）；未上传、未签发、未改落地页；已停掉临时启动的 HBuilderX 进程。
-- **待人工处置**：在**交互式登录桌面会话**中彻底退出并重开 HBuilderX（确认不再出现 `last session is crashed`），同一会话先跑 `D:\HBuilderX\cli.exe --version` 验证桥接可用，再重跑 Step 5 的 pack 命令；随后按 Step 6–9 继续（**证书 SHA1 必须实测为 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19` 才可上传**，`apk_sha256` 必须与签发文档打印的一致）。
+**Step 6（指纹与证书）**：临时地址下载另存为 `apps\mobile\dist\release\apk\base-0.8.0.apk`，**27403827 字节**。`certutil -hashfile ... SHA256` = `c01dd19cba9bcefb2e05cb8d6d023b527792ace029069f3caf3898a71a2ae123`；`keytool -printcert -jarfile` 的 **SHA1 = `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`**（与 0.7.0 / 0.6.0 一致 ⇒ 可覆盖安装）。**注意**：本地 `curl.exe` 下载报 `getaddrinfo() thread failed to start`，必须改用 `Invoke-WebRequest`（计划 Step 5 已预置该写法）。
+
+**Step 7（上传 + 落地页）**：`scp` 上传至 `/opt/appdl/base-0.8.0.apk`，远端 `sha256sum` 与本地一致。落地页**未**按计划的 `sed` 单行替换，而是整页重写后 `scp` 覆盖——计划那条 `sed 's/base-0.7.0.apk/base-0.8.0.apk/'` 只换 APK 文件名，会留下「版本 0.4.1（versionCode 5）」的陈旧文案与过期更新说明。重写后第 27 行为 `./base-0.8.0.apk`、版本行改为「版本 0.8.0（versionCode 9）· 2026-09-29 · 创作与治理 UI：投稿编辑器、我的条目、提案投票、治理看板」。实测 `curl http://127.0.0.1/dl/index.html` 输出 `base-0.8.0.apk` / `versionCode 9`。
+
+**Step 8（签发升级文档）**：`-out /opt/base-cache/data/release.json`（**必须是缓存节点数据目录**——nginx `/` 的后端是 8083 缓存节点，计划此处写对了）。输出 `version_name=0.8.0 min_version_name=0.7.0`、`apk_size=27403827`、`apk_sha256=c01dd19c…a2ae123`（与 Step 6 逐字一致）、`public_key=48c33db9cf859e107fe89651d15fc5faaa8b16ffbb7d4b483aa167a0cff824f4`。`-notes` 用不含空格的单 token（`_` 分隔）。
+
+**Step 9（线上验证）**：全部通过——① `GET /v1/release` 返回 `version_name":"0.8.0"` 的文档；② `HEAD http://118.190.217.242/dl/base-0.8.0.apk` = **200** 且 `Content-Length: 27403827` == `apk_size`；③ 客户端 `verifyRelease(doc, '48c33db9…')` = **true**（用 `npx tsx` 直跑 `packages/protocol-ts/src/release.ts`，临时脚本用后即删）；④ `curl http://118.190.217.242/governance` = 200 且含「治理看板」。④ 首跑为 404，原因与处置见「更正 3」（补做节点二进制交叉编译与部署）。
+
+**Step 5–9 的 CLI 失效取证（留档备查）**：`cli.exe --version` 需先 `cli open` 才可用（报 5.24.2026081301）；任何 `pack` 调用必崩——CLI 侧「与主程序的连接已中断」，主程序侧 `QWindowsPipeWriter: asynchronous write failed` + `plugin-manager/out.js exit with code 10001`，且会连带把 HBuilderX 主程序进程换掉（20644 → 15692）。现行可用路径只有 **GUI 云打包**。
+
 
 ### 待人工验收（真机）
 
