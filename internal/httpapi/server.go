@@ -109,6 +109,9 @@ func (s *Server) publicMux() *http.ServeMux {
 	// 评论公开读（匿名，册子 §4.2）。
 	mux.HandleFunc("GET /v1/comment", s.handleCommentList)
 
+	// 名册公开读（匿名，治理册 §5.1）：与 catalog / manifest / pack 同级。
+	mux.HandleFunc("GET /v1/contributors", s.handleContributors)
+
 	// 审核路由：**未配置 BASE_REVIEW_KEY 的节点上这两条根本不存在**（册子 §4.3、风险 9）。
 	if s.opt.ReviewKey != "" {
 		mux.Handle("POST /v1/admin/review/fetch", s.requireReviewKey(s.handleReviewFetch))
