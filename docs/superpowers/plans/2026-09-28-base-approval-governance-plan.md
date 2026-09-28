@@ -2558,7 +2558,19 @@ curl -s http://<node>/v1/proposal                        # status / threshold �
 
 ## 执行实况
 
-- Task 1–7 提交：<逐个列出 commit 短哈希与标题>
-- 门禁：`gofmt -l internal/` / `go build ./...` / `go vet ./...` 无输出；`go test ./...` 全包 ok
-- AC 1–12、14：自动通过；**AC 13（两节点导出传播）待人工**
-- 执行期更正：<「无」；或逐条写「册子原文 → 实际做法 → 原因」，并在册子 §0.2 / §0.3 同步>
+- Task 1–7 提交（master，按序）：
+  - `6d7ddde` feat(store): 治理两张新表与 sqlExec 抽壳（RetireItem/NextContentVersion 可跑在事务上）
+  - `28539e8` feat(store): 治理提案的写入与读取（含门槛/状态派生与名册实时复判）
+  - `5e7c2ef` feat(store): 治理投票与生效事务（三动作 + 乐观锁 + 门槛分档）
+  - `592ec88` feat(httpapi): 治理契约常量与校验纯函数
+  - `c40ef11` feat(httpapi): 新增签名写路径 POST /v1/proposal
+  - `a1ead4b` feat(httpapi): 治理投票写路径与匿名列表 GET /v1/proposal
+  - `cd401e5` test(govern): 审批治理 AC 1-12 与 14 端到端验收
+  - 执行期更正的三次计划回写：`3229ed9`（Task 1 测试对 Task 2 符号的前向依赖）、`ee29b33`（单连接池不得嵌套查询）、`7b0d651`（Task 3 的 RetireItem 返回值）
+- 门禁：`go build ./...` / `go vet ./...` 无输出；`go test ./...` 全包 ok。
+  `gofmt -l internal/` 在本机 `go1.27.1` 下会列出 25 个**工作区为 CRLF 行尾**的既有文件（索引侧均为 LF，与本册无关）；本册涉及的 9 个 Go 文件在 `gofmt -l` 下无输出。
+- AC 1–12、14：自动通过（`go test ./internal/httpapi/ -run TestGovernAC`）；**AC 13（下架导出 → 接收侧删行删块；复活再导出 → 重新发布入库）待人工**
+- 执行期更正：3 条，已在册子 `docs/superpowers/specs/2026-09-28-base-approval-governance-design.md` §0.4 同步
+  1. 计划原文：Task 5 / 6 用例用 `newGovernNode` + 只给 B 投一篇来造节点。实际做法：把 Task 7 的 `fourGovernors` 提前到 Task 5 定义，Task 5 / 6 用例统一以「A/B/C/D 各投一篇」建立 4 人名册（目标条目仍归 B：`article/gb`）。原因：提案人与投票人必须在名册内（册子 §4.3），只给 B 投一篇时 A 的提案与 C 的投票都会被 403，用例前提与名册派生互斥；`newGovernNode` 保持「只登记身份、不种名册」，供 AC 8 冷启动与 AC 14 使用。
+  2. 计划原文：Task 7 的 AC 1–3 在 `internal/store` 新增 `Store.TombstoneRev` 供测试断言墓碑行。实际做法：直接用既有公开读法 `Store.ListTombstones()` 过滤目标 `item_id`，不新增任何生产代码。
+  3. 册子原文：§1、§6 与第 4 册接缝处写「11 条新错误码」。实际做法：§6 表格为 12 行、实现亦为 12 条，四处计数改为 12。原因：计数笔误，不涉及契约与实现。

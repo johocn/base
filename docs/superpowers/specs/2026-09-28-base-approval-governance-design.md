@@ -16,7 +16,7 @@
 - 三个动作的落地语义与「改写必然影响归属」的后果登记（§4）
 - 生效事务与前置条件判定（§4.4）
 - 两张新表 `govern_proposals` / `govern_votes`（§5）
-- 11 条新错误码（§6）
+- 12 条新错误码（§6）
 
 **答掉上游点名的两处开放项（#23 §8.1、§8.2）：**
 
@@ -51,7 +51,17 @@
 
 **理由：** §4.2 的 `edit` 载荷是 `title` + `body_md` 的**全量替换**，`content_hash` 按 `sha256(body_md)` 重算——而 `body_md` 只存在于 `articles` 表。`quiz`（`question_json`）、`video`（`media_meta`）、`course` / `lesson`（`segments` 容器）、`cover` 都没有 `body_md`，强行套用会退化成「载荷部分生效」，与 §3.1「是全量替换，不是补丁」的表述直接冲突。
 
-**不新增错误码：** 复用 `proposal_edit_invalid`——它的既有语义就是「`edit` 载荷对目标不可用」，§6 的错误码表仍是 11 条。
+**不新增错误码：** 复用 `proposal_edit_invalid`——它的既有语义就是「`edit` 载荷对目标不可用」，§6 的错误码表仍是 12 条。
+
+### 0.4 2026-09-28 执行期更正
+
+**更正一（测试前置）：** 实施计划 Task 5 / Task 6 的用例原用 `newGovernNode` 加「只给 B 投一篇」造节点，却期望 A 的提案 201、C 的投票 200——这与 §4.3 的名册派生互斥（提案人与投票人必须在名册内）。**改为**把计划 Task 7 定义的 `fourGovernors` 提前到 Task 5 定义，Task 5 / 6 的用例统一以它建立 4 人名册（目标条目仍归 B：`article/gb`）。`newGovernNode` 保持「只登记身份、不种名册」，供 AC 8 冷启动与 AC 14 使用。
+
+**更正二（墓碑断言读法）：** 计划 Task 7 的 AC 1–3 原拟在 `internal/store` 新增 `Store.TombstoneRev` 只读方法供测试断言墓碑行。**改为**直接用既有公开读法 `Store.ListTombstones()`（`internal/store/store.go`）过滤目标 `item_id`，不新增任何生产代码。
+
+**门禁环境说明（非契约偏差）：** 本机 `go1.27.1` 下 `gofmt -l internal/` 会列出 25 个**工作区为 CRLF 行尾**的既有文件（索引侧均为 LF），与本次改动无关；本册涉及的 9 个 Go 文件在 `gofmt -l` 下均无输出。
+
+**更正三（错误码计数）：** §1、§6 与第 4 册接缝处原写「11 条新错误码」，而 §6 表格实为 **12 行**、实现亦为 12 条（`proposal_action_unsupported`、`proposal_reason_invalid`、`proposal_edit_invalid`、`proposal_too_large`、`item_not_found`、`item_self_owned`、`item_state_mismatch`、`proposer_not_governor`、`proposal_not_found`、`voter_not_governor`、`already_voted`、`govern_rate_limited`）。**以 §6 表格为准，四处计数已改为 12**；这是计数笔误，不涉及契约与实现。
 
 ## 1. 范围与不做什么
 
@@ -472,7 +482,7 @@ CREATE INDEX IF NOT EXISTS idx_govern_proposals_item ON govern_proposals(item_id
      │            §2.2 content_hash 口径、maxSubmitBytes 常量、错误码风格
      ▼
  第 3 册（本册 #27）：审批治理 · 他人条目的改写与下架 —— 已立册
-     │  本册交付：三个契约入口 + 两张表 + 11 条错误码 + 生效事务口径
+     │  本册交付：三个契约入口 + 两张表 + 12 条错误码 + 生效事务口径
      ▼
  第 4 册（未立册）：创作 UI
         消费本册 §3.3 的公开读（治理页）与 §3.1 / §3.2 的写路径（提案与投票表单）
@@ -487,4 +497,4 @@ CREATE INDEX IF NOT EXISTS idx_govern_proposals_item ON govern_proposals(item_id
 - 「本节点自治、提案不跨节点」的域边界（§2.5）
 - 「生效时的 `content_hash` 乐观锁」与「改正文 ⇒ 归属清零」两条判定（§4.2、§4.4）
 - 「`edit` 仅限 article 载体、`remove` / `revive` 不限载体」的受理口径（§0.3）
-- 11 条新错误码（§6）
+- 12 条新错误码（§6）
