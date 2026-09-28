@@ -19,6 +19,8 @@ export interface Entry {
   sqlite_table: string;
   chunks?: Chunk[];
   dist_class: string;
+  author_id?: string;
+  author_sig?: string;
 }
 
 export interface Tombstone {
@@ -34,6 +36,7 @@ export interface Manifest {
   content_version: number;
   entries: Entry[];
   tombstone: Tombstone[];
+  contributors?: Record<string, string>;
   merkle_root: string;
   signature: string;
 }

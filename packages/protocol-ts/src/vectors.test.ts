@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ALG_ED25519,
+  authorSignBytes,
   blobId,
   canonicalize,
   deriveIdentityId,
@@ -24,6 +25,7 @@ import {
   signRelease,
   utf8,
   verify,
+  verifyAuthorSig,
   verifyManifest,
   verifyRelease,
   type Manifest,
@@ -219,4 +221,25 @@ describe("release.json", () => {
       expect(verifyRelease(badSchema, f.key.pub_hex)).toBe(false);
     });
   }
+});
+
+describe("authorsig.json", () => {
+  const f = load("authorsig.json");
+  it("version 与密钥", () => {
+    expect(f.version).toBe(1);
+    expect(keyPairFromSeed(f.key.seed_hex).pubHex).toBe(f.key.pub_hex);
+  });
+  for (const c of f.cases) {
+    it(c.name, () => {
+      expect(deriveIdentityId(f.key.pub_hex)).toBe(c.author_id);
+      expect(authorSignBytes(c.item_id, c.content_hash, c.author_id)).toBe(c.sign_bytes);
+      expect(sign(f.key.seed_hex, utf8(c.sign_bytes))).toBe(c.signature_hex);
+      expect(verifyAuthorSig(f.key.pub_hex, c.item_id, c.content_hash, c.author_id, c.signature_hex)).toBe(true);
+    });
+  }
+  it("篡改签名或内容后拒收", () => {
+    const c = f.cases[0];
+    expect(verifyAuthorSig(f.key.pub_hex, c.item_id, c.content_hash, c.author_id, "0" + c.signature_hex.slice(1))).toBe(false);
+    expect(verifyAuthorSig(f.key.pub_hex, c.item_id, "0" + c.content_hash.slice(1), c.author_id, c.signature_hex)).toBe(false);
+  });
 });
