@@ -126,6 +126,16 @@ export async function loadLocalIdentity(storage: StorageAdapter, kek: Uint8Array
   return ident;
 }
 
+/**
+ * 只读本机身份：不存在返回 null，**不生成**。
+ * 展示判定专用（「这条提案我投过没有」「我是否在名册内」），不用于任何写路径。
+ * 与 `core/comment.ts` 的私有 `localIdentity` 的区别：那个缺身份就现建（写路径需要）。
+ */
+export async function peekLocalIdentity(storage: StorageAdapter): Promise<Identity | null> {
+  const kek = await deviceKek(storage);
+  return loadLocalIdentity(storage, kek);
+}
+
 /** `PUT /v1/identity/escrow/{username}` 的请求体（册子 §5.3）。 */
 export interface EscrowPayload {
   id: string;
