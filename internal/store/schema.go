@@ -161,6 +161,33 @@ var schemaStatements = []string{
 		name       TEXT NOT NULL,
 		updated_at INTEGER NOT NULL
 	)`,
+
+	// govern_proposals / govern_votes：审批治理的提案与票（第 3 册 §5.1）。
+	// 只存本节点，不进 events、不参与反熵、不跨节点同步（§2.5）。
+	// 两张都是新增表，schemaStatements 的 CREATE TABLE IF NOT EXISTS 足够，无需 ALTER 补列。
+	`CREATE TABLE IF NOT EXISTS govern_proposals(
+		proposal_id       INTEGER PRIMARY KEY,
+		action            TEXT    NOT NULL,
+		item_id           TEXT    NOT NULL,
+		proposer_id       TEXT    NOT NULL,
+		reason            TEXT    NOT NULL DEFAULT '',
+		title             TEXT    NOT NULL DEFAULT '',
+		body_md           TEXT    NOT NULL DEFAULT '',
+		base_content_hash TEXT    NOT NULL,
+		created_at        INTEGER NOT NULL,
+		executed_at       INTEGER NOT NULL DEFAULT 0,
+		voided_at         INTEGER NOT NULL DEFAULT 0,
+		executed_result   TEXT    NOT NULL DEFAULT ''
+	)`,
+
+	`CREATE TABLE IF NOT EXISTS govern_votes(
+		proposal_id INTEGER NOT NULL,
+		voter_id    TEXT    NOT NULL,
+		created_at  INTEGER NOT NULL,
+		PRIMARY KEY(proposal_id, voter_id)
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_govern_proposals_item ON govern_proposals(item_id, action)`,
 }
 
 // eventColumnMigrations 是 events 表的**后加列**（B 阶段引入）。

@@ -29,6 +29,15 @@ type Store struct {
 	aead         cipher.AEAD
 }
 
+// sqlExec 是 *sql.DB 与 *sql.Tx 的公共执行面。
+// 治理册 §4.4 的生效事务必须在同一事务里退役条目、读 content_version 与改归属列，
+// 故把这些语句抽成 exec 版本；导出函数仍以 s.db 为参数，行为不变。
+type sqlExec interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 // Item 是目录条目（catalog 的数据来源）。
 type Item struct {
 	ItemID      string

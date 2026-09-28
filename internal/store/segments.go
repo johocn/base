@@ -108,11 +108,16 @@ func (s *Store) ListSegments(itemID string) ([]Segment, error) {
 // 只置状态不删行：内容行与块文件保留在源节点，旧条目自此不进 active 列表、不参与导出；
 // 接收侧按 manifest 里的墓碑走既有删除路径。
 func (s *Store) RetireItem(itemID string, revokedRev int64) error {
-	if _, err := s.db.Exec(`INSERT INTO tombstones(item_id,revoked_rev) VALUES(?,?)
+	return retireItemExec(s.db, itemID, revokedRev)
+}
+
+// retireItemExec 是 RetireItem 的语句本体，供 *sql.Tx 复用（治理册 §4.4 的生效事务）。
+func retireItemExec(e sqlExec, itemID string, revokedRev int64) error {
+	if _, err := e.Exec(`INSERT INTO tombstones(item_id,revoked_rev) VALUES(?,?)
 		ON CONFLICT(item_id) DO UPDATE SET revoked_rev=MAX(revoked_rev,excluded.revoked_rev)`, itemID, revokedRev); err != nil {
 		return fmt.Errorf("store: 退役写墓碑 %s: %w", itemID, err)
 	}
-	if _, err := s.db.Exec(`UPDATE items SET state='removed' WHERE item_id=?`, itemID); err != nil {
+	if _, err := e.Exec(`UPDATE items SET state='removed' WHERE item_id=?`, itemID); err != nil {
 		return fmt.Errorf("store: 退役置状态 %s: %w", itemID, err)
 	}
 	return nil
@@ -121,8 +126,13 @@ func (s *Store) RetireItem(itemID string, revokedRev int64) error {
 // NextContentVersion 返回下一次导出将使用的全局 content_version（只读，不递增）。
 // 用于把「退役生效版本」与紧随其后的那次导出版本对齐（册子 §2.2）。
 func (s *Store) NextContentVersion() (int64, error) {
+	return nextContentVersionExec(s.db)
+}
+
+// nextContentVersionExec 是 NextContentVersion 的语句本体，供 *sql.Tx 复用。
+func nextContentVersionExec(e sqlExec) (int64, error) {
 	var raw string
-	err := s.db.QueryRow(`SELECT value FROM meta WHERE key=?`, metaContentVersion).Scan(&raw)
+	err := e.QueryRow(`SELECT value FROM meta WHERE key=?`, metaContentVersion).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 1, nil
 	}
