@@ -1,8 +1,8 @@
-# base 治理体系重规划与圈子自治实施计划（#33 → 计划 #34）
+# base 治理体系重规划与圈子自治实施计划（#33 → 计划 #35）
 
-> **For agentic workers:** REQUIRED SUB-SKILL: 用 `executing-plans` 逐 Task 执行。每个 Task 完成后做一次两阶段复核（① 对着册子核「做了什么 / 有没有少」；② 对着代码核「写的和计划是否一致」），通过后再进入下一个 Task。步骤用 `- [ ]` 复选框跟踪。**Phase 1 与 Phase 2 各自独立发布一次**，不要跨阶段合并发布。
+> **For agentic workers:** REQUIRED SUB-SKILL: 用 `superpowers:subagent-driven-development` 执行——**每个 Task 派发一个全新子代理**，Task 完成后做一次两阶段复核（① 对着册子核「做了什么 / 有没有少」；② 对着代码核「写的和计划是否一致」），通过后再派下一个 Task 的子代理。步骤用 `- [ ]` 复选框跟踪。**Phase 1 与 Phase 2 各自独立发布一次**，不要跨阶段合并发布。
 
-**Goal**：把 #33 册子落地为两层治理——**Phase 1（L2 圈子自治）**：`groups` 三列与写权放宽、`group.v1` 的 roster v2（`sub` 子类型 + 多签 + 信封链）、治者席位与圈内贡献度只读派生、按形态分支的读权、对端复制、手机端双形态与治者面板；**Phase 2（L1 全局治理一致性）**：`govern.v1` 事件化、提案/投票走反熵收敛、票权按快照水位判定、`govern_*` 两表降级为投影并双写兼容。
+**Goal**：把 #33 册子落地为两层治理——**Phase 1（L2 圈子自治）**：`groups` 三列与写权放宽、`group.v1` 的 roster v2（`sub` 子类型 + 多签 + 信封链）、治者席位与圈内贡献度只读派生、按形态分支的读权、对端复制、手机端双形态与治者面板；**Phase 2（L1 全局治理一致性）**：`govern.v1` 事件化、提案/投票走反熵收敛、票权按快照水位判定、`govern_*` 两表降级为投影（老路径只写投影、不产事件；客户端改走原生事件投递）。
 
 **Architecture**：**零新算法**——继续 Ed25519 签名（`protocol.Verify` / `sign`）+ AES-256-GCM（`sealWithNonce` / `openWithNonce`），**不引入 X25519**，因此「开放加入但仍加密」不可达 ⇒ 圈子形态二元化（开放圈不加密 / 封闭圈加密）且建圈定死。节点**永不持有组密钥**：多签只验签名数与签名者集合归属，不数票、不解密（§3.4）；密钥轮换用**对称信封链**（新钥用旧钥 AEAD 加密后随 roster 事件走节点）。席位与贡献度是**只读派生**，不落新表（唯一新增状态是 `groups` 的三个列）。
 
@@ -47,7 +47,7 @@
 | 写能力门控 | `core/selfcheck.ts` 导出 `canPostComment` / `postBlockedReason`（`comment.vue:80-115` 用法） |
 | 补发入口可跨模块用 | `core/comment.ts:282` 的 `flushPending(o)` 只依赖 `{adapters, repo, nodeBaseUrl}` ⇒ 圈子页可直接 import |
 | Go 测试基座 | `internal/httpapi/httpapi_test.go:64` 的 `newTestServer(t)`（返回 `*store.Store` + `inprocServer`，含确定性密钥 `testSeed` / `testPub`）；`comment_test.go:105` 的 `doJSONMap(t, method, url, body, headers)` |
-| 当前版本 | `apps/mobile/src/manifest.json` = `versionName "0.9.3"` / `versionCode "13"` → **Phase 1 发 0.10.0 / 14**、**Phase 2 发 0.11.0 / 15** |
+| 当前版本 | `apps/mobile/src/manifest.json` = `versionName "0.9.3"` / `versionCode "13"` → **Phase 1 发 0.11.0 / 15**、**Phase 2 发 0.12.0 / 16**（`0.10.0` / `14` 已被先发的私信册 #34 占用，见「补充 19」） |
 | 节点侧必须部署 | 两个阶段都改了节点代码。按 #31「更正 3 / 更正 11」的后续口径：**发布清单必须含交叉编译 + 两个节点各备份替换 + 依次 restart + 逐个探活** |
 | 双节点二进制同一份 | `base.service` 与 `base-cache.service` 的 `ExecStart` **都指 `/opt/base/based`**，回滚要一起回 |
 
@@ -77,16 +77,22 @@
 10. **`leave`（自己退出）按册子 §3.4 字面口径 = 低风险档「任一治者 1 签」**。因此在册普成员**不能独自退出**——必须由任一治者签署。这是定稿口径的**代价**，UI 必须在成员主动退出的入口**原位提示**原文：「退出圈子需要一名治理者确认」。节点侧不额外放宽（否则与册子冲突）。
 11. **`dissolve` 生效后节点只做两件事**：`groups` 行置 `encrypted` 不变、`member_ids_json` 写空数组 `[]`（语义 = 「已解散，名单清空」），并在事件行保留完整 `sub=dissolve` 记录。**不删块、不删事件**（块保持可取是 §3.7 的定案）。读接口遇到空名单一律按**已解散**渲染，不再做形态分支。
 12. **`key_envelopes` 列的职责 = 把最新信封端到读接口**。成员一读就能解开链拿到新钥（不必等 roster 事件反熵到达），这是 §3.5「不粘贴续期码自动获新钥」的落地路径。该列是**密文**，公开返回无害。
-13. **Phase 2 的版本号 = `0.11.0` / `15`**。册子说「版本从 `0.10.0` / `14` 起；两阶段各自完整走发布四步」——两个阶段都有用户可见改动，同名版本发两次会让升级通道判不出新旧，故 Phase 2 起 `0.11.0`。
-14. **Phase 2 双写事件的内容签名不可在第三方节点独立验证**（老路径 `POST /v1/proposal` 只有请求签名，没有「按事件体所签」的内容签名）。桥接事件写入时 `sig` 字段填**该次请求的 reqsig**，接收侧（反熵）照既有行为只落行、**不重验内容签名**。代价记录在案：**恶意节点理论上可伪造 `govern.v1` 桥接票**，闸门是「反熵只在信任域内的 `BASE_PEERS` 之间发生」；老客户端下线后此桥接即可移除（新客户端走原生 `POST /v1/event` 产出真内容签名）。
-18. **`govern.v1` 的 `choice` 枚举册子未定，本计划按「1..16 字节 ASCII 非空短串」放行**（对应 §4.2 只写「choice」）——与既有 `AddVote` 只有「投一票」语义一致：这一册只做「桥接 + 收敛」，不引入 `for/against` 的语义分叉。册子后续收敛枚举值时，只改 `httpapi/govern_event.go` 的 `parseGovernBody` 一处。
+13. **Phase 2 的版本号 = `0.12.0` / `16`**。册子说「版本从本册基线起；两阶段各自完整走发布四步」——两个阶段都有用户可见改动，同名版本发两次会让升级通道判不出新旧，故 Phase 2 起再 +1。
+14. **老路径不产事件（原「桥接」方案已撤销，定案见册子 §0.2 / §4.4）**。最初的写法是让 `handleProposalPost` / `handleVotePost` 把老请求**桥接**成一条 `govern.v1` 事件（`sig` 填该次请求的 reqsig），好让反熵把老客户端的提案 / 投票带到别的节点。**撤销理由**：reqsig 签的是 `method / path / query / body_sha256 / ts / nonce`，是对「这一次 HTTP 请求」的签名，**不是对事件体的签名**；这样产出的「已签名事件」签名者与签名内容不对应，等于**节点代用户伪证**。
+    - **定案**：老路径 `POST /v1/proposal` / `POST /v1/proposal/{id}/vote` **只写本地投影表、不产事件**（行为与今天完全一致）。跨节点传播由**新客户端**走 `POST /v1/event` 产出带**真内容签名**的 `govern.v1` 事件承担（复用既有 `verifyEventSig` 管线，本册 Task 8 的 `handleGovernEvent` 就是它的接收端）。
+    - 代价：老客户端升级前其提案 / 投票**不出本节点**——与今天完全相同，无回归（`govern_proposals` / `govern_votes` 本就不跨节点）。**不再有「不可独立验证的桥接票」这一类数据进入反熵**。
+18. **`govern.v1` 的 `choice` 枚举册子未定，本计划按「1..16 字节 ASCII 非空短串」放行**（对应 §4.2 只写「choice」）——与既有 `AddVote` 只有「投一票」语义一致：这一册只做「投影 + 收敛」，不引入 `for/against` 的语义分叉。册子后续收敛枚举值时，只改 `httpapi/govern_event.go` 的 `parseGovernBody` 一处。
 
 编号说明：**15 / 16 / 17 就地写在对应 Task 的正文里**，因为它们的上下文就在那段代码旁边——15 = 多签收集两段码 + 回执带 `pub`（Task 5 Step 6），16 = 建圈一律走 v1 形态 roster（Task 5 Step 7），17 = v2 名单信封必须复用草稿的 `event_id`/`created_at`（Task 5 Step 7）。
 
-19. **版本号与 #34（私信计划）撞车，需在实施前定序**。本计划的基线是 `0.9.3` / `13`，于是取 `0.10.0` / `14`（册子 §9 也是这么写的）；但 `docs/README.md` 第 34 行的**私信计划 `2026-09-29-base-direct-message-plan.md` 已经占了 `0.10.0` / `14`**（状态「已出（待执行）」）。两者不能同号。
-    - **若私信先发**（README 的依赖顺序如此）：本计划整体 +1 ⇒ **Phase 1 = `0.11.0` / `15`**、**Phase 2 = `0.12.0` / `16`**。机械替换点共 15 处：第 50 行（环境事实表）、补充 13、文件结构表 `manifest.json` 行、Task 7 标题与 Step 1 / Step 3 备份名 / Step 4 三步、Task 9 标题与 Step 4、执行实况表第 7 / 9 行；并需同步改册子 `2026-09-29-base-governance-circle-design.md` §9 的「版本从 `0.10.0` / `14` 起」。
-    - **若本计划先发**：私信计划整体 +1，本计划不动。
-    - 定序前**不要动**任何版本号——这条只是把冲突点登记在案，实施时按实际先后选一支执行。
+19. **版本定序已定：私信册（#32 册子 + #34 计划）先发，本计划整体 +1 让位。** 私信册保持原写的 `0.10.0` / `14`（基线 `0.9.3` / `13`）不动；本计划基线改为 `0.10.0` / `14`：**Phase 1 = `0.11.0` / `15`、Phase 2 = `0.12.0` / `16`**。判据是「**谁已经在跑**」而不是文档依赖顺序：私信册**已执行到 Task 10（发布阶段）**——工作区 `apps/mobile/src/manifest.json` 已被改指 `0.10.0` / `14`，`145d816`→`2de4f1c` 七个 commit 覆盖私信 Task 1–9；此时再改私信册版本号会与已在跑的发布链路冲突。册子 `2026-09-29-base-governance-circle-design.md` §0.2 第 2 条 / §9 已同步改写为「私信册先发、本册让位」。**建议先把私信 Task 10（打包 / 上传 / 签发）收尾，再开工本计划。**
+20. **客户端治理写路径改走原生事件（= 册子 §0.2 第 1 条 B 方案的客户端半边）**。老客户端（`0.9.3`）继续用 `POST /v1/proposal` / `/v1/proposal/{id}/vote`（reqsig，**只写本节点投影、不产事件**）；**新客户端**改用 `POST /v1/event` 产出带**真内容签名**的 `govern.v1` 事件，承担跨节点传播。落地在 Task 9（`core/govern.ts`）：
+
+    - `createProposal` / `vote` 由 `signedPost`（reqsig 五头）改为**内容签名 + 事件投递**：`payload = canonicalize({event_id, type:'govern.v1', created_at, body})`、`sig = sign(ident.seedHex, utf8(payload))`，POST `/v1/event`（与 `core/group.ts` 的 `buildGroupWireAt` 逐字同构）。**不需要签名头**（事件路径只验内容签名）。
+    - **`proposal_id` 由客户端取「当前最大 id + 1」**：事件化后 `govern_proposals.proposal_id` 不再由节点自增（事件是权威来源）。发事件前先 `GET /v1/proposal` 取 `max(proposal_id)`，+1 作为本条；并发撞号由节点 `ProjectGovernProposal` 的 `(created_at, event_id)` 首者胜 + `govern_event_conflict` 兜底，客户端收到该码后重取重发。
+    - `body` 键集与老路径一致：提案 `{proposal_id, action, item_id, reason}`（`edit` 另带 `{title, body_md}`）；投票 `{proposal_id, choice:'yes'}`——`choice` 用 `'yes'`，与「补充 18」的短 ASCII 口径一致。
+    - **幂等**：`event_id` 用 `randomBytes(16)`；同 `event_id` 重发由 `ProjectGovernProposal` / `ProjectGovernVote` 的 `source_event_id` 判重放直接返回 nil（不报冲突）。
+    - **响应重建**：事件投递的 200 只回 `{event_id, received_at}`，不再回 `vote_count` / `threshold` / `status` ⇒ 写路径返回后**必须重拉 `GET /v1/proposal`** 对齐（本册 §5.6 本来就这么要求），`VoteResult` 由重拉结果的对应条目构造。
 
 ---
 
@@ -103,7 +109,7 @@
 | `internal/httpapi/authmw.go` | 修改 | 抽 `authenticate`；新增 `optionalAuth`；`authErrText` 加 6 条新码 |
 | `internal/httpapi/server.go` | 修改 | `GET /v1/group/{group_id}` 改走 `optionalAuth`（Phase 2 再加 `govern.v1` 无关的注册） |
 | `internal/httpapi/event.go` | 修改 | Phase 2：`eventTypeRegistry` 加 `"govern.v1"` + `handleEventPost` 分流分支 |
-| `internal/httpapi/govern.go` | 修改 | Phase 2：老路径双写 `govern.v1` 事件；读接口的票权口径改由投影给出 |
+| `internal/httpapi/govern.go` | 修改 | Phase 2：老路径**只写投影表、不产事件**（行为不变）；读接口的票权口径改由投影给出 |
 | `internal/httpapi/govern_event.go` | 新建 | Phase 2：`handleGovernEvent`（严格键集 → 验签 → 投影还原） |
 | `internal/peersync/eventsync.go` | 修改 | `applySyncedGroupEvent` 带上 `roster_rev` / `encrypted` / `key_envelopes`；Phase 2 加 `govern.v1` 分支落投影 |
 | `internal/store/groupseats_test.go` | 新建 | AC 2 / AC 3 全算例 + 防刷 + 水位 + 不可判定 |
@@ -117,9 +123,9 @@
 | `apps/mobile/src/core/group.test.ts` | 修改 | AC 4 / AC 5 / AC 13（老码可用）+ 信封链 + 门槛拒写提示 |
 | `apps/mobile/src/pages/circle/circle.vue` | 修改 | 建圈选型（开放 / 封闭）与形态标记 |
 | `apps/mobile/src/pages/group/group.vue` | 修改 | 治者面板（成员管理 / 改名 / 轮换 / 解散提案）、席位与贡献度展示、退出入口 |
-| `apps/mobile/src/core/govern.ts` | 修改 | Phase 2：消费事件化结论 + 水位展示 |
+| `apps/mobile/src/core/govern.ts` | 修改 | Phase 2：`createProposal` / `vote` 改走原生 `govern.v1` 事件投递（内容签名，见「补充 20」）+ 消费事件化结论 + 水位展示 |
 | `apps/mobile/src/pages/governance/governance.vue` | 修改 | Phase 2：水位与「被选中的那一条」展示 |
-| `apps/mobile/src/manifest.json` | 修改 | Phase 1 `0.10.0` / `14`；Phase 2 `0.11.0` / `15` |
+| `apps/mobile/src/manifest.json` | 修改 | Phase 1 `0.11.0` / `15`；Phase 2 `0.12.0` / `16` |
 | `docs/README.md` | 修改 | 第 34 行（本计划）状态回填；第 33 行（#33 册子）状态；§4 依赖图与 §5 状态与下一步 |
 
 ---
@@ -2409,7 +2415,7 @@ git commit -F <临时文件>
 
 ---
 
-### Task 7: Phase 1 收口——版本号、节点二进制部署、0.10.0 发布四步、文档回填
+### Task 7: Phase 1 收口——版本号、节点二进制部署、0.11.0 发布四步、文档回填
 
 **Files:**
 - Modify: `apps/mobile/src/manifest.json`
@@ -2417,7 +2423,7 @@ git commit -F <临时文件>
 
 - [ ] **Step 1: 版本号**
 
-`apps/mobile/src/manifest.json`：`versionName` → `"0.10.0"`，`versionCode` → `"14"`。
+`apps/mobile/src/manifest.json`：`versionName` → `"0.11.0"`，`versionCode` → `"15"`。
 
 - [ ] **Step 2: 全量自测**
 
@@ -2441,20 +2447,20 @@ curl -s -o /dev/null -w '%{http_code}\n' http://<node>/v1/group/0000000000000000
 curl -s http://<node>/v1/group/00000000000000000000000000000001
 ```
 
-回滚：`mv /opt/base/based.bak-0.10.0 /opt/base/based && systemctl restart base && systemctl restart base-cache`
+回滚：`mv /opt/base/based.bak-0.11.0 /opt/base/based && systemctl restart base && systemctl restart base-cache`
 （**两个 service 共用同一二进制**，回滚要一起回。）
 
-- [ ] **Step 4: 0.10.0 发布四步**
+- [ ] **Step 4: 0.11.0 发布四步**
 
 1. HBuilderX 云打包 APK（证书与前几版一致，记录字节数与 sha256）；
-2. 上传到 `/opt/appdl/base-0.10.0.apk`；
-3. 落地页 `/opt/appdl/index.html` **整页重写**（改指 0.10.0）后 `scp`；
+2. 上传到 `/opt/appdl/base-0.11.0.apk`；
+3. 落地页 `/opt/appdl/index.html` **整页重写**（改指 0.11.0）后 `scp`；
 4. `based release -out /opt/base-cache/data/release.json` 签发新 release 文档，线上验签 `verifyRelease=true`。
 
 - [ ] **Step 5: `docs/README.md` 回填**
 
-- §3 第 34 行（本计划）状态：`已定稿（待执行）` → `已执行（完整度见本计划「执行实况」；真机验收待人工）`；
-- §3 第 33 行（#33 册子）状态：`已定稿（待出计划）` → `已定稿（计划 #34 已执行 Phase 1）`；
+- §3 第 35 行（本计划）状态：`已出（待执行）` → `已执行（完整度见本计划「执行实况」；真机验收待人工）`；
+- §3 第 33 行（#33 册子）状态：`已定稿（上游同步项见册子 §10；**实施计划 #35 已出**）` → `已定稿（计划 #35 已执行 Phase 1）`；
 - §4 依赖图与 §5「状态与下一步」同步。
 
 - [ ] **Step 6: 提交并推送**
@@ -2469,7 +2475,7 @@ git push origin master
 
 ## Phase 2（L1 全局治理一致性）
 
-### Task 8: 节点 `govern.v1`——事件注册、投影还原、票权水位、双写
+### Task 8: 节点 `govern.v1`——事件注册、投影还原、票权水位、老路径只写投影
 
 **Files:**
 - Modify: `internal/store/schema.go`
@@ -2845,22 +2851,23 @@ func (s *Server) handleGovernEvent(w http.ResponseWriter, actor string, req even
 
 （`anyString` 也可给 `parseGroupBody` 复用；`jsonInt` 已在 `httpapi/group.go`，`errors` / `strconv` / `time` 已在 `httpapi/govern.go` 的 import 里。）
 
-- [ ] **Step 7: `httpapi/govern.go` —— 老路径双写**
+- [ ] **Step 7: `httpapi/govern.go` —— 老路径保持原行为（不产事件）+ 票权口径改快照水位**
 
-`handleProposalPost` 在 `CreateProposal` 成功后追加：
+**`handleProposalPost` / `handleVotePost` 一行都不改。** 它们照旧只调 `CreateProposal` / `AddVote` 写 `govern_proposals` / `govern_votes` 两表（新列 `source_event_id` 缺省 `NULL` = 「本地提案 / 本地票」，正是我们想要的语义），**不产出任何 `govern.v1` 事件**。
+
+> **为什么不做「双写 / 桥接」（补充 14，定案见册子 §0.2 / §4.4）**：老路径只有**请求签名**（reqsig），它签的是 `method / path / query / body_sha256 / ts / nonce`，是对「这一次 HTTP 请求」的签名，**不是对事件体的签名**。若节点把它填进事件的 `sig` 字段充当内容签名，就是**节点代用户产出「已签名事件」**——签名者与签名内容不对应，接收侧无从独立验证，等于让节点伪造用户签名。节点没有用户私钥，做不出事件体签名，故**不产事件**。跨节点传播改由新客户端走 `POST /v1/event`（Task 9）——那条路的 `verifyEventSig` 才是真内容签名。
+
+**加一条回归护栏测试**（放进 `internal/httpapi/govern_event_test.go`，防以后有人「顺手补上双写」）：
 
 ```go
-	// 双写 govern.v1 事件（补充 14）：把这次提案事件化，好让反熵把它带到别的节点。
-	// sig 记的是**本次请求的 reqsig**（老路径没有「按事件体所签」的内容签名，代价记录在册）。
-	if err := s.st.PutEvent(store.Event{
-		EventID: eventID, ID: actor, Type: "govern.v1",
-		BodyJSON: string(bodyJSON), CreatedAt: now, ReceivedAt: now,
-	}); err != nil {
-		log.Printf("httpapi: 提案已建但事件双写失败（proposal_id=%d）: %v", id, err)
-	}
+func TestOldProposalPathProducesNoGovernEvent(t *testing.T) {
+	// 补充 14 的护栏：老路径 POST /v1/proposal 与 /v1/proposal/{id}/vote 之后，
+	// **事件流里不得出现任何 govern.v1 行**（否则就是节点代用户产签名事件）。
+	// 做法：老路径建一条提案并投一票 → 以对端身份从 /v1/event-sync 拉一轮 →
+	//       断言返回的事件列表里没有一个 type == "govern.v1"；
+	//       再断言 handleProposalList 仍能读到这条提案（投影路径没坏）。
+}
 ```
-
-`handleVotePost` 同理（投票双写）。**双写失败只记日志、不影响老路径响应**——老客户端不能被桥接机制拖垮（代价同补充 14）。
 
 `handleProposalList` 的票权口径改为**快照水位**：
 
@@ -2870,6 +2877,8 @@ func (s *Server) handleGovernEvent(w http.ResponseWriter, actor string, req even
 ```
 
 `store.ListProposalViews` 内部的 `filterRoster(voters, roster)` 改为 `filterRosterAtWatermark(voters, p.ContentVersion, p.RevokedRev)`——按提案行上记录的**快照水位**重放名册，与「当前名册」解耦（AC 12）。名册重放读者是 `ContributorRoster` 的**历史版本**，实现上按 `content_version` / `revoked_rev` 两个既有列过滤（同 #23 的派生口径，加两个上界参数）。
+
+同名册之后的**新客户端写路径**：`POST /v1/event`（`type=govern.v1`）→ `handleGovernEvent`（Step 6）→ `ProjectGovern*`（Step 5）。两条路在**投影层**收敛，互不影响：老路径写两表、不产事件；新路径产事件、由投影写两表。
 
 - [ ] **Step 8: `peersync/eventsync.go` —— 加 `govern.v1` 投影还原**
 
@@ -2951,7 +2960,7 @@ git commit -F <临时文件>
 
 ---
 
-### Task 9: Phase 2 收口——客户端消费、版本号、0.11.0 发布四步、文档回填
+### Task 9: Phase 2 收口——客户端写路径事件化、消费、版本号、0.12.0 发布四步、文档回填
 
 **Files:**
 - Modify: `apps/mobile/src/core/govern.ts`
@@ -2959,7 +2968,68 @@ git commit -F <临时文件>
 - Modify: `apps/mobile/src/manifest.json`
 - Modify: `docs/README.md`
 
-- [ ] **Step 1: `govern.ts` —— 水位展示与冲突提示**
+- [ ] **Step 1: `govern.ts` —— 写路径改走原生 `govern.v1` 事件（补充 20）**
+
+`createProposal` / `vote` 不再走 `signedPost`（reqsig 五头），改为**内容签名 + `POST /v1/event`**（老路径停用后跨节点传播的唯一通道；老客户端仍走老路径，节点侧行为不变）。`import` 增加 `canonicalize` / `sign` / `utf8`（`@base/protocol-ts`）与 `bytesToHex` / `randomBytes`。
+
+```ts
+/** 构造并投递一条 govern.v1 事件（与 core/group.ts 的 buildGroupWireAt 同构；事件路径只验内容签名，不需要签名头）。 */
+async function postGovernEvent(o: GovernOptions, ident: Identity, body: Record<string, unknown>): Promise<void> {
+  const eventId = bytesToHex(randomBytes(16));
+  const createdAt = Date.now();
+  const payload = { event_id: eventId, type: 'govern.v1', created_at: createdAt, body };
+  const sig = sign(ident.seedHex, utf8(canonicalize(payload)));
+  const wire = utf8(JSON.stringify({ ...payload, sig }));
+  let res;
+  try {
+    res = await o.adapters.http.post(`${o.nodeBaseUrl}/v1/event`, wire, { 'Content-Type': 'application/json' });
+  } catch {
+    throw new GovernError('network', '需要联网才能完成该操作');
+  }
+  if (res.status >= 200 && res.status < 300) return;
+  const code = errorCodeOf(decodeUtf8(res.body));
+  if (res.status === 429) throw new GovernError('rate_limited', errorText(code, '操作过于频繁，请稍后再试'));
+  if (res.status >= 500) throw new GovernError('server', `治理事件投递失败（HTTP ${res.status}）`);
+  throw new GovernError('rejected', errorText(code, `治理事件投递失败（HTTP ${res.status}）`));
+}
+```
+
+`createProposal`：`proposal_id` 由客户端取「当前最大 + 1」（事件是权威来源，节点不再自增）；撞号由节点 `govern_event_conflict` 兜底（人工重试即重取）。
+
+```ts
+export async function createProposal(o: GovernOptions, input: CreateProposalInput): Promise<{ proposalId: string }> {
+  const ident = await ensureIdentity(o);
+  const existing = await listProposals(o);
+  const proposalId = existing.reduce((m, p) => Math.max(m, Number(p.proposalId) || 0), 0) + 1;
+  const body: Record<string, unknown> = {
+    proposal_id: proposalId,
+    action: input.action,
+    item_id: input.itemId,
+    reason: input.reason,
+  };
+  if (input.action === 'edit') body.edit = { title: input.edit?.title ?? '', body_md: input.edit?.bodyMd ?? '' };
+  await postGovernEvent(o, ident, body);
+  return { proposalId: String(proposalId) };
+}
+```
+
+`vote`：body 为 `{proposal_id, choice:'yes'}`；**事件投递的 200 不回票数 / 门槛 / 状态**，故写后重拉一次列表构造响应（本册 §5.6 本就要求调用方随后重拉对齐）。
+
+```ts
+export async function vote(o: GovernOptions, proposalId: string): Promise<VoteResult> {
+  const ident = await ensureIdentity(o);
+  await postGovernEvent(o, ident, { proposal_id: Number(proposalId), choice: 'yes' });
+  const fresh = (await listProposals(o)).find((p) => p.proposalId === proposalId);
+  return {
+    proposalId,
+    voteCount: fresh?.voteCount ?? 0,
+    threshold: fresh?.threshold ?? 0,
+    status: fresh?.status ?? 'pending',
+  };
+}
+```
+
+- [ ] **Step 2: `govern.ts` —— 水位展示与冲突提示**
 
 `ProposalItem` 加两字段，`toProposalItem` 同步（**只加不改**）：
 
@@ -2973,7 +3043,7 @@ git commit -F <临时文件>
 
 `vote()` 的响应处理加一条：`status === 'void'` 时 `errorText` 走既有的 `proposal_*` 文案，并在页面上把 `conflictNote` 原位显示。
 
-- [ ] **Step 2: `governance.vue` —— 水位与「被选中的那一条」**
+- [ ] **Step 3: `governance.vue` —— 水位与「被选中的那一条」**
 
 提案卡片元信息行加：
 
@@ -2982,26 +3052,26 @@ git commit -F <临时文件>
 <text v-if="p.conflictNote" class="notice">{{ p.conflictNote }}</text>
 ```
 
-- [ ] **Step 3: 版本号与全量自测**
+- [ ] **Step 4: 版本号与全量自测**
 
-`manifest.json`：`versionName` → `"0.11.0"`，`versionCode` → `"15"`。
+`manifest.json`：`versionName` → `"0.12.0"`，`versionCode` → `"16"`。
 
 Run（cwd `apps/mobile`）: `npx vitest run ; npx tsc --noEmit ; npm run build:h5`
 Run（仓库根）: `go build ./... ; go vet ./... ; go test ./...`
 Expected: 全绿
 
-- [ ] **Step 4: 节点二进制重新部署 + 0.11.0 发布四步**
+- [ ] **Step 5: 节点二进制重新部署 + 0.12.0 发布四步**
 
-与 Task 7 Step 3 / Step 4 **逐条同构**（换版本号 0.11.0、换备份名 `based.bak-0.11.0`、APK 改名 `base-0.11.0.apk`）。
+与 Task 7 Step 3 / Step 4 **逐条同构**（换版本号 0.12.0、换备份名 `based.bak-0.12.0`、APK 改名 `base-0.12.0.apk`）。
 
-- [ ] **Step 5: `docs/README.md` 回填**
+- [ ] **Step 6: `docs/README.md` 回填**
 
-- §3 第 33 行（#33 册子）状态 → `已定稿（计划 #34 已执行 Phase 1 + Phase 2）`；
+- §3 第 33 行（#33 册子）状态 → `已定稿（计划 #35 已执行 Phase 1 + Phase 2）`；
 - 若册子 §10 要求的 #9 / #27 加注尚未做，**在本 Task 一并补上**：
   - #9 册子 §4.3 的「不做成员准入读控制」行加注「已于 #33 收口，见治理与圈子自治册」；
   - #27 册子 §0 追加一节，写明「票实时复判」被 #33 §4.3 的**快照水位**取代。
 
-- [ ] **Step 6: 提交并推送**
+- [ ] **Step 7: 提交并推送**
 
 ```powershell
 git add apps/mobile/src/core/govern.ts apps/mobile/src/pages/governance/governance.vue apps/mobile/src/manifest.json docs/README.md docs/superpowers/specs/2026-09-29-base-groups-design.md docs/superpowers/specs/2026-09-28-base-approval-governance-design.md
@@ -3038,9 +3108,9 @@ git push origin master
 | 4 | 反熵接收侧 v2 三列 + 信封 | — | 待填 |
 | 5 | `core/group.ts` v2（双形态 / 多签码 / 信封链） | — | 待填 |
 | 6 | 圈子列表形态与治者面板 | — | 待填 |
-| 7 | 0.10.0 发布四步 + 节点二进制部署 | — | 待填 |
-| 8 | `govern.v1` 注册 + 投影 + 水位 + 双写 | — | 待填 |
-| 9 | 0.11.0 发布四步 + 文档回填 | — | 待填 |
+| 7 | 0.11.0 发布四步 + 节点二进制部署 | — | 待填 |
+| 8 | `govern.v1` 注册 + 投影 + 水位 + 老路径只写投影 | — | 待填 |
+| 9 | 客户端写路径事件化 + 0.12.0 发布四步 + 文档回填 | — | 待填 |
 
 ---
 
