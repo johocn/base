@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/johocn/base/internal/protocol"
@@ -124,7 +125,8 @@ func parseGroupRoster(m map[string]any) (groupRoster, bool) {
 	r.MemberIDs = make([]string, 0, len(items))
 	for _, it := range items {
 		s, isStr := it.(string)
-		if !isStr || !isHexN(s, 32) {
+		// 成员是身份 id：sha256(pubkey)[0:32] = 32 hex（与 protocol.IsIdentityID 同形）。
+		if !isStr || !isHexN(s, 16) {
 			return r, false
 		}
 		r.MemberIDs = append(r.MemberIDs, s)
@@ -262,4 +264,113 @@ func (s *Server) putGroupRoster(w http.ResponseWriter, actor string, req eventRe
 		now = ev.ReceivedAt
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"event_id": req.EventID, "received_at": now})
+}
+
+type groupDTO struct {
+	GroupID   string   `json:"group_id"`
+	CreatorID string   `json:"creator_id"`
+	Epoch     int64    `json:"epoch"`
+	MemberIDs []string `json:"member_ids"`
+	Name      string   `json:"name"`
+}
+
+type groupEventDTO struct {
+	EventID    string  `json:"event_id"`
+	Actor      string  `json:"actor"`
+	CreatedAt  int64   `json:"created_at"`
+	PayloadCID string  `json:"payload_cid"`
+	Epoch      int64   `json:"epoch"`
+	Action     string  `json:"action"`
+	ReplyTo    *string `json:"reply_to"`
+}
+
+type groupResponse struct {
+	Group      groupDTO        `json:"group"`
+	Events     []groupEventDTO `json:"events"`
+	NextCursor *string         `json:"next_cursor"`
+}
+
+// handleGroupGet 匿名分页读小组索引与当前名单（册子 §4.3）。
+// 正文一律另取 GET /v1/blob/{payload_cid}（密文，节点不解释）。
+func (s *Server) handleGroupGet(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("group_id")
+	if !isHexN(groupID, 16) {
+		s.writeError(w, http.StatusBadRequest, "event_param_invalid")
+		return
+	}
+	g, found, err := s.st.GetGroup(groupID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		// 尚无任何 roster 事件（册子 §4.3）；带 code 供客户端分流
+		s.writeAuthErr(w, http.StatusNotFound, "group_not_found")
+		return
+	}
+	q := r.URL.Query()
+	limit := groupDefaultLimit
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= groupMaxLimit {
+			limit = n
+		}
+	}
+	curTS, curID := parseCommentCursor(q.Get("cursor")) // 同一套不透明游标 <created_at>_<event_id>
+	rows, err := s.st.ListGroupEvents(groupID, curTS, curID, limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := groupResponse{
+		Group:  groupDTO{GroupID: g.GroupID, CreatorID: g.CreatorID, Epoch: g.Epoch, MemberIDs: []string{}, Name: groupName(s, g.EventID)},
+		Events: []groupEventDTO{},
+	}
+	if err := json.Unmarshal([]byte(g.MemberIDsJSON), &resp.Group.MemberIDs); err != nil {
+		resp.Group.MemberIDs = []string{} // 投影损坏不该让整页 500：名单退化为空
+	}
+	for _, e := range rows {
+		// 名单事件不进会话流（已由 group 字段表达），只列 action=msg
+		var b struct {
+			Action     string `json:"action"`
+			Epoch      int64  `json:"epoch"`
+			PayloadCID string `json:"payload_cid"`
+			ReplyTo    string `json:"reply_to"`
+		}
+		if err := json.Unmarshal([]byte(e.BodyJSON), &b); err != nil || b.Action != "msg" {
+			continue
+		}
+		dto := groupEventDTO{
+			EventID: e.EventID, Actor: e.ID, CreatedAt: e.CreatedAt,
+			PayloadCID: b.PayloadCID, Epoch: b.Epoch, Action: b.Action,
+		}
+		if b.ReplyTo != "" {
+			reply := b.ReplyTo
+			dto.ReplyTo = &reply
+		}
+		resp.Events = append(resp.Events, dto)
+	}
+	// 满页才给游标：与 GET /v1/comment 同口径
+	if len(rows) == limit {
+		last := rows[len(rows)-1]
+		next := strconv.FormatInt(last.CreatedAt, 10) + "_" + last.EventID
+		resp.NextCursor = &next
+	}
+	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// groupName 从最新一条 roster 事件的 body_json 里取组名；事件缺失或没名字一律空串。
+// 为什么绕这一下：groups 表刻意不存 name（它只是「名单 + epoch」的投影），
+// 组名是客户端内容，留在事件的原始 body 里。
+func groupName(s *Server, eventID string) string {
+	ev, ok, err := s.st.GetEventByID(eventID)
+	if err != nil || !ok {
+		return ""
+	}
+	var b struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(ev.BodyJSON), &b); err != nil {
+		return ""
+	}
+	return b.Name
 }

@@ -2,6 +2,7 @@ package peersync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -119,5 +120,84 @@ func TestSyncEventsTombstoneDeletesBodyAndNeverResurrects(t *testing.T) {
 	}
 	if rows, _ := dst.ListComments("", 0, "", 10); len(rows) != 0 {
 		t.Fatalf("墓碑后列表仍返回该条: %+v", rows)
+	}
+}
+
+// 验收 4：一轮反熵后缓存节点能读到小组名单与发言索引。
+// 对端事件只有 body_json，target_id/payload_cid 必须在本地重建（F5）；roster 事件还要落
+// groups 投影（否则接收节点 GET /v1/group/{id} 直接 404），密文块归属也要认得（F6）。
+func TestGroupEventProjectionRestoredOnPeer(t *testing.T) {
+	src, url, tr, pub := newSourceNode(t)
+
+	const (
+		groupID  = "00000000000000a1"
+		otherID  = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+		msgEvent = "00000000000000000000000000000007"
+		rsEvent  = "00000000000000000000000000000008"
+	)
+	cipher := []byte("小组密文")
+	cid := protocol.BlobID(cipher)
+	if err := src.PutBlob(cid, cipher, "group:"+msgEvent, 0); err != nil {
+		t.Fatalf("PutBlob: %v", err)
+	}
+	msgBody := `{"action":"msg","epoch":1,"group_id":"` + groupID + `","payload_cid":"` + cid + `"}`
+	if err := src.PutEvent(store.Event{
+		EventID: msgEvent, ID: commentActor, Type: "group.v1", BodyJSON: msgBody,
+		CreatedAt: time.Now().UnixMilli(), TargetID: "group/" + groupID, PayloadCID: cid,
+	}); err != nil {
+		t.Fatalf("PutEvent msg: %v", err)
+	}
+	rosterBody := `{"action":"roster","epoch":2,"group_id":"` + groupID +
+		`","member_ids":["` + commentActor + `","` + otherID + `"],"name":"读书会"}`
+	if err := src.PutEvent(store.Event{
+		EventID: rsEvent, ID: commentActor, Type: "group.v1", BodyJSON: rosterBody,
+		CreatedAt: time.Now().UnixMilli() + 1, TargetID: "group/" + groupID,
+	}); err != nil {
+		t.Fatalf("PutEvent roster: %v", err)
+	}
+
+	dst := openTemp(t)
+	cfg := Config{TransportFor: tr, IssuerPubKeys: map[string]string{srcIssuer: pub}}
+	ev, err := cfg.SyncEvents(context.Background(), dst, Peer{URL: url})
+	if err != nil || ev.Events != 2 {
+		t.Fatalf("反熵一轮应搬来 2 条事件 ev=%+v err=%v", ev, err)
+	}
+
+	// ① roster 落进本地 groups 投影（接收节点读接口不再 404）
+	g, ok, err := dst.GetGroup(groupID)
+	if err != nil || !ok {
+		t.Fatalf("缓存节点应有 groups 投影 ok=%v err=%v", ok, err)
+	}
+	if g.Epoch != 2 || g.CreatorID != commentActor || g.EventID != rsEvent {
+		t.Fatalf("groups 投影不符: %+v", g)
+	}
+	var members []string
+	if err := json.Unmarshal([]byte(g.MemberIDsJSON), &members); err != nil ||
+		len(members) != 2 || members[0] != commentActor || members[1] != otherID {
+		t.Fatalf("member_ids_json 不符: %q err=%v", g.MemberIDsJSON, err)
+	}
+
+	// ② 发言事件的 target_id/payload_cid 已从 body_json 还原
+	rows, err := dst.ListGroupEvents(groupID, 0, "", 10)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("应读到 2 条 group.v1 事件 rows=%+v err=%v", rows, err)
+	}
+	var msgRow *store.Event
+	for i := range rows {
+		if rows[i].EventID == msgEvent {
+			msgRow = &rows[i]
+		}
+	}
+	if msgRow == nil || msgRow.TargetID != "group/"+groupID || msgRow.PayloadCID != cid {
+		t.Fatalf("发言投影列未还原: %+v", msgRow)
+	}
+
+	// ③ 块归属索引认得该密文（EventBlobIndex 纳入 group.v1 后才成立）
+	idx, err := dst.EventBlobIndex()
+	if err != nil {
+		t.Fatalf("EventBlobIndex: %v", err)
+	}
+	if ref, ok := idx[cid]; !ok || ref.ItemID != "group:"+msgEvent {
+		t.Fatalf("块归属不符: %+v ok=%v", ref, ok)
 	}
 }
