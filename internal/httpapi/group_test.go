@@ -64,9 +64,9 @@ func postGroupBody(t *testing.T, seed, baseURL, eventID string, body map[string]
 	return sendAuth(t, signedRequest(t, seed, http.MethodPost, baseURL+"/v1/event", raw))
 }
 
-func postGroupRoster(t *testing.T, seed, baseURL, eventID, groupID string, epoch int64, members []string, name string) {
+func postGroupRoster(t *testing.T, seed, baseURL, eventID, groupID string, epoch int64, members []string, name string, encrypted int64) {
 	t.Helper()
-	body := map[string]any{"group_id": groupID, "action": "roster", "epoch": epoch, "member_ids": members}
+	body := map[string]any{"group_id": groupID, "action": "roster", "epoch": epoch, "member_ids": members, "encrypted": encrypted}
 	if name != "" {
 		body["name"] = name
 	}
@@ -139,7 +139,7 @@ func TestGroupRosterOwnerMismatch(t *testing.T) {
 	idB := registerIdentitySeed(t, base, seedB)
 	gid := groupIDOf(2)
 
-	postGroupRoster(t, testSeed, base, eventIDOf(1), gid, 1, []string{idA}, "甲组")
+	postGroupRoster(t, testSeed, base, eventIDOf(1), gid, 1, []string{idA}, "甲组", 1)
 
 	status, out := postGroupBody(t, seedB, base, eventIDOf(2),
 		map[string]any{"group_id": gid, "action": "roster", "epoch": 2, "member_ids": []string{idB}})
@@ -158,7 +158,7 @@ func TestGroupRosterEpochStale(t *testing.T) {
 	idA, _ := identityFromSeed(t, testSeed)
 	gid := groupIDOf(3)
 
-	postGroupRoster(t, testSeed, base, eventIDOf(1), gid, 3, []string{idA}, "甲组")
+	postGroupRoster(t, testSeed, base, eventIDOf(1), gid, 3, []string{idA}, "甲组", 1)
 
 	for _, tc := range []struct {
 		name    string
@@ -220,7 +220,7 @@ func TestGroupGetAnonymousListing(t *testing.T) {
 	idB := registerIdentitySeed(t, base, strings.Repeat("ab", 32))
 	gid := groupIDOf(5)
 
-	postGroupRoster(t, testSeed, base, eventIDOf(1), gid, 1, []string{idA, idB}, "读书组")
+	postGroupRoster(t, testSeed, base, eventIDOf(1), gid, 1, []string{idA, idB}, "读书组", 0)
 	cid1 := postGroupMsg(t, testSeed, base, eventIDOf(2), gid, 1, "aa:01", "")
 	cid2 := postGroupMsg(t, testSeed, base, eventIDOf(3), gid, 1, "bb:02", eventIDOf(2))
 
@@ -291,7 +291,7 @@ func TestGroupGetPagination(t *testing.T) {
 	_, base := newGroupNode(t)
 	idA, _ := identityFromSeed(t, testSeed)
 	gid := groupIDOf(7)
-	postGroupRoster(t, testSeed, base, eventIDOf(1), gid, 1, []string{idA}, "分页组")
+	postGroupRoster(t, testSeed, base, eventIDOf(1), gid, 1, []string{idA}, "分页组", 0)
 	for i := 11; i <= 14; i++ { // 4 条 msg + 1 条 roster = 5 行；limit=3
 		postGroupMsg(t, testSeed, base, eventIDOf(i), gid, 1, fmt.Sprintf("dd:%02d", i), "")
 	}

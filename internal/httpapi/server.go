@@ -126,9 +126,9 @@ func (s *Server) publicMux() *http.ServeMux {
 	// 评论公开读（匿名，册子 §4.2）。
 	mux.HandleFunc("GET /v1/comment", s.handleCommentList)
 
-	// 小组公开读（匿名，册子 §4.3）：与 GET /v1/comment 同构。
-	// 代价是明确的——索引匿名可读 ⇒「谁、何时、在哪个组发言」这层元数据公开；内容仍不可读（无组密钥）。
-	mux.HandleFunc("GET /v1/group/{group_id}", s.handleGroupGet)
+	// 小组读（册子 §3.7）：**开放圈匿名可读**；封闭圈需成员签名读权（optionalAuth 允许匿名进入，
+	// 由 handler 按形态分支决定放行 / 404）。非成员一律 404，不泄露存在性。
+	mux.Handle("GET /v1/group/{group_id}", s.optionalAuth(s.handleGroupGet))
 
 	// 私信公开读（匿名，私信册 §4.2）：「谁、何时、给谁发了多大一条密文」这层元数据公开；
 	// 内容仍不可读（无会话密钥）。**无 404 分支**：私信没有投影表，查无即空数组。

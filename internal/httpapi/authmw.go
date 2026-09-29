@@ -87,96 +87,133 @@ func (s *Server) PruneNonces() (int64, error) {
 // requireAuth 包装需要签名头的处理器：严格按契约 3.2 的 1→7 顺序，先验后读体。
 func (s *Server) requireAuth(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 1. 缺任一头
-		id := r.Header.Get("X-Base-Id")
-		alg := r.Header.Get("X-Base-Alg")
-		tsRaw := r.Header.Get("X-Base-Ts")
-		nonce := r.Header.Get("X-Base-Nonce")
-		sig := r.Header.Get("X-Base-Sig")
-		if id == "" || alg == "" || tsRaw == "" || nonce == "" || sig == "" {
-			s.writeAuthErr(w, http.StatusBadRequest, "auth_missing_header")
-			return
-		}
-		// 2. 算法与格式（全部在查库之前，避免用坏输入打库）
-		if alg != protocol.AlgEd25519 {
-			s.writeAuthErr(w, http.StatusBadRequest, "identity_alg_unsupported")
-			return
-		}
-		if !protocol.IsIdentityID(id) {
-			s.writeAuthErr(w, http.StatusBadRequest, "identity_id_invalid")
-			return
-		}
-		ts, err := strconv.ParseInt(tsRaw, 10, 64)
-		if err != nil {
-			s.writeAuthErr(w, http.StatusBadRequest, "auth_ts_invalid")
-			return
-		}
-		if !isHexN(nonce, 16) {
-			s.writeAuthErr(w, http.StatusBadRequest, "auth_nonce_invalid")
-			return
-		}
-		if !isHexNonEmptyEven(sig) {
-			s.writeAuthErr(w, http.StatusBadRequest, "auth_sig_invalid")
-			return
-		}
-		// 3. 取公钥
-		it, ok, err := s.st.LookupIdentity(id)
-		if err != nil {
-			s.writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		id, ok := s.authenticate(w, r)
 		if !ok {
-			s.writeAuthErr(w, http.StatusForbidden, "identity_unregistered")
 			return
 		}
-		// 4. 时间窗
-		now := time.Now().UnixMilli()
-		if delta := now - ts; delta > authTsWindowMs || delta < -authTsWindowMs {
-			s.writeAuthErr(w, http.StatusUnauthorized, "auth_ts_out_of_window")
-			return
-		}
-		// 5. nonce 去重（键含 id，否则可被抢注导致合法请求被误判重放）
-		// UseNonce 返回 used：true 表示该 nonce 此前已被同一 id 用过（重放）。
-		used, err := s.st.UseNonce(id, nonce, now)
-		if err != nil {
-			s.writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if used {
-			s.writeAuthErr(w, http.StatusUnauthorized, "auth_nonce_replay")
-			return
-		}
-		// 6. 读体 → 算 body_sha256 → 组待签字节 → 验签
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxJSONBody+1))
-		if err != nil {
-			s.writeAuthErr(w, http.StatusBadRequest, "auth_body_read_failed")
-			return
-		}
-		_ = r.Body.Close()
-		if int64(len(body)) > maxJSONBody {
-			s.writeAuthErr(w, http.StatusRequestEntityTooLarge, "auth_body_too_large")
-			return
-		}
-		signBytes, err := protocol.RequestSignBytes(protocol.RequestMeta{
-			Method:     r.Method,
-			Path:       r.URL.Path,
-			Query:      r.URL.RawQuery,
-			BodySHA256: protocol.SHA256Hex(body),
-			TS:         ts,
-			Nonce:      nonce,
-		})
-		if err != nil {
-			s.writeAuthErr(w, http.StatusBadRequest, "auth_sign_meta_invalid")
-			return
-		}
-		valid, err := protocol.Verify(it.PubKey, signBytes, sig)
-		if err != nil || !valid {
-			s.writeAuthErr(w, http.StatusUnauthorized, "auth_bad_signature")
-			return
-		}
-		// 7. 通过：把体还给 handler，写入已验签身份
-		r.Body = io.NopCloser(bytes.NewReader(body))
-		_ = s.st.TouchIdentity(id, now)
 		next(w, withIdentity(r, id))
 	})
+}
+
+// optionalAuth 供按形态分支的读接口用：5 个签名头**全缺**即按匿名放行；
+// 缺一半仍按 auth_missing_header 拒（避免「半带头的请求」被静默降级为匿名）。
+func (s *Server) optionalAuth(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hasAnyAuthHeader(r) {
+			next(w, r)
+			return
+		}
+		id, ok := s.authenticate(w, r)
+		if !ok {
+			return
+		}
+		next(w, withIdentity(r, id))
+	})
+}
+
+// hasAnyAuthHeader 判 5 个头是否至少出现了一个。
+func hasAnyAuthHeader(r *http.Request) bool {
+	for _, k := range []string{"X-Base-Id", "X-Base-Alg", "X-Base-Ts", "X-Base-Nonce", "X-Base-Sig"} {
+		if r.Header.Get(k) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// authenticate 执行契约 3.2 的 1..7 步；返回已验签身份 id 与是否放行（失败时响应已写好）。
+// 结果具名（且**不用 ok**，避免与第 3 步的局部 ok 相撞），使 1..6 步的裸 return 原样保留：
+// 裸 return 交回零值，即「不放行」。
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (actorID string, authed bool) {
+	// 1. 缺任一头
+	id := r.Header.Get("X-Base-Id")
+	alg := r.Header.Get("X-Base-Alg")
+	tsRaw := r.Header.Get("X-Base-Ts")
+	nonce := r.Header.Get("X-Base-Nonce")
+	sig := r.Header.Get("X-Base-Sig")
+	if id == "" || alg == "" || tsRaw == "" || nonce == "" || sig == "" {
+		s.writeAuthErr(w, http.StatusBadRequest, "auth_missing_header")
+		return
+	}
+	// 2. 算法与格式（全部在查库之前，避免用坏输入打库）
+	if alg != protocol.AlgEd25519 {
+		s.writeAuthErr(w, http.StatusBadRequest, "identity_alg_unsupported")
+		return
+	}
+	if !protocol.IsIdentityID(id) {
+		s.writeAuthErr(w, http.StatusBadRequest, "identity_id_invalid")
+		return
+	}
+	ts, err := strconv.ParseInt(tsRaw, 10, 64)
+	if err != nil {
+		s.writeAuthErr(w, http.StatusBadRequest, "auth_ts_invalid")
+		return
+	}
+	if !isHexN(nonce, 16) {
+		s.writeAuthErr(w, http.StatusBadRequest, "auth_nonce_invalid")
+		return
+	}
+	if !isHexNonEmptyEven(sig) {
+		s.writeAuthErr(w, http.StatusBadRequest, "auth_sig_invalid")
+		return
+	}
+	// 3. 取公钥
+	it, ok, err := s.st.LookupIdentity(id)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		s.writeAuthErr(w, http.StatusForbidden, "identity_unregistered")
+		return
+	}
+	// 4. 时间窗
+	now := time.Now().UnixMilli()
+	if delta := now - ts; delta > authTsWindowMs || delta < -authTsWindowMs {
+		s.writeAuthErr(w, http.StatusUnauthorized, "auth_ts_out_of_window")
+		return
+	}
+	// 5. nonce 去重（键含 id，否则可被抢注导致合法请求被误判重放）
+	// UseNonce 返回 used：true 表示该 nonce 此前已被同一 id 用过（重放）。
+	used, err := s.st.UseNonce(id, nonce, now)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if used {
+		s.writeAuthErr(w, http.StatusUnauthorized, "auth_nonce_replay")
+		return
+	}
+	// 6. 读体 → 算 body_sha256 → 组待签字节 → 验签
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxJSONBody+1))
+	if err != nil {
+		s.writeAuthErr(w, http.StatusBadRequest, "auth_body_read_failed")
+		return
+	}
+	_ = r.Body.Close()
+	if int64(len(body)) > maxJSONBody {
+		s.writeAuthErr(w, http.StatusRequestEntityTooLarge, "auth_body_too_large")
+		return
+	}
+	signBytes, err := protocol.RequestSignBytes(protocol.RequestMeta{
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		Query:      r.URL.RawQuery,
+		BodySHA256: protocol.SHA256Hex(body),
+		TS:         ts,
+		Nonce:      nonce,
+	})
+	if err != nil {
+		s.writeAuthErr(w, http.StatusBadRequest, "auth_sign_meta_invalid")
+		return
+	}
+	valid, err := protocol.Verify(it.PubKey, signBytes, sig)
+	if err != nil || !valid {
+		s.writeAuthErr(w, http.StatusUnauthorized, "auth_bad_signature")
+		return
+	}
+	// 7. 通过：把体还给 handler，写入已验签身份
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	_ = s.st.TouchIdentity(id, now)
+	return id, true
 }

@@ -648,8 +648,15 @@ type groupDTO struct {
 	GroupID   string   `json:"group_id"`
 	CreatorID string   `json:"creator_id"`
 	Epoch     int64    `json:"epoch"`
+	RosterRev int64    `json:"roster_rev"`
+	Encrypted int64    `json:"encrypted"`
 	MemberIDs []string `json:"member_ids"`
 	Name      string   `json:"name"`
+	// 以下三项是节点侧只读派生（补充 2）：客户端**不自己排名**，避免名次漂移。
+	SeatCount int      `json:"seat_count"`
+	Governors []string `json:"governors"`
+	// envelopes 是密文（补充 3 / 12），公开返回无害——非成员没有旧钥，解不出任何东西。
+	Envelopes []json.RawMessage `json:"envelopes"`
 }
 
 type groupEventDTO struct {
@@ -668,7 +675,8 @@ type groupResponse struct {
 	NextCursor *string         `json:"next_cursor"`
 }
 
-// handleGroupGet 匿名分页读小组索引与当前名单（册子 §4.3）。
+// handleGroupGet 分页读小组索引与当前名单（册子 §4.3 / §3.7）。
+// 形态分支：开放圈匿名可读；封闭圈需成员签名读权，非成员一律 404（不泄露存在性）。
 // 正文一律另取 GET /v1/blob/{payload_cid}（密文，节点不解释）。
 func (s *Server) handleGroupGet(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("group_id")
@@ -686,6 +694,16 @@ func (s *Server) handleGroupGet(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthErr(w, http.StatusNotFound, "group_not_found")
 		return
 	}
+	actor := identityFrom(r) // 匿名时为空串（optionalAuth 未注入身份）
+	members := []string{}
+	if err := json.Unmarshal([]byte(g.MemberIDsJSON), &members); err != nil {
+		members = []string{} // 投影损坏不该让整页 500：名单退化为空
+	}
+	// 形态分支（册子 §3.7）：开放圈匿名放行；封闭圈需成员签名读权；非成员一律 404（不泄露存在性）。
+	if g.Encrypted == 1 && len(members) > 0 && !memberOf(members, actor) {
+		s.writeAuthErr(w, http.StatusNotFound, "group_read_denied")
+		return
+	}
 	q := r.URL.Query()
 	limit := groupDefaultLimit
 	if v := q.Get("limit"); v != "" {
@@ -699,12 +717,27 @@ func (s *Server) handleGroupGet(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	events, err := s.st.ListGroupMsgEvents(groupID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	seats := store.DeriveSeats(members, g.CreatorID, g.RosterRev, g.Epoch, events)
 	resp := groupResponse{
-		Group:  groupDTO{GroupID: g.GroupID, CreatorID: g.CreatorID, Epoch: g.Epoch, MemberIDs: []string{}, Name: groupName(s, g.EventID)},
+		Group: groupDTO{
+			GroupID: g.GroupID, CreatorID: g.CreatorID, Epoch: g.Epoch, RosterRev: g.RosterRev,
+			Encrypted: g.Encrypted, MemberIDs: members, Name: groupName(s, g.EventID),
+			SeatCount: seats.SeatCount, Governors: seats.Governors, Envelopes: []json.RawMessage{},
+		},
 		Events: []groupEventDTO{},
 	}
-	if err := json.Unmarshal([]byte(g.MemberIDsJSON), &resp.Group.MemberIDs); err != nil {
-		resp.Group.MemberIDs = []string{} // 投影损坏不该让整页 500：名单退化为空
+	if g.KeyEnvelopesJSON != "" && g.KeyEnvelopesJSON != "[]" {
+		var wrap struct {
+			Envelopes []json.RawMessage `json:"envelopes"`
+		}
+		if err := json.Unmarshal([]byte(g.KeyEnvelopesJSON), &wrap); err == nil {
+			resp.Group.Envelopes = wrap.Envelopes
+		}
 	}
 	for _, e := range rows {
 		// 名单事件不进会话流（已由 group 字段表达），只列 action=msg
@@ -751,4 +784,17 @@ func groupName(s *Server, eventID string) string {
 		return ""
 	}
 	return b.Name
+}
+
+// memberOf 判 id 是否在名单里；actor 为空（匿名）恒 false。
+func memberOf(members []string, actor string) bool {
+	if actor == "" {
+		return false
+	}
+	for _, m := range members {
+		if m == actor {
+			return true
+		}
+	}
+	return false
 }
