@@ -11,28 +11,30 @@ import {
   deriveIdentityId,
   hexToBytes,
   isIdentityId,
-  openWithNonce,
   randomBytes,
-  sealWithNonce,
   sign,
   utf8,
   verify,
   type Json,
 } from '@base/protocol-ts';
 
-import type { Adapters } from '../platform/adapter';
-import type { LocalRepo } from './repo';
 import type { GroupRow } from './types';
-import { CommentError, sendComment } from './comment';
-import { deviceKek, ensureLocalIdentity, type Identity } from './identity';
+import { ensureLocalIdentity, type Identity } from './identity';
 import { decodeUtf8 } from './sync';
+import {
+  base64UrlToBytes,
+  buildEventWire,
+  bytesToBase64Url,
+  openKeyCipher,
+  openText,
+  sealKeyCipher,
+  sealText,
+  submitWire,
+  type WireOptions,
+} from './wire';
 
-/** 与 `CommentOptions` **同形**：这样 `flushPending`（补发）可直接喂进来，无需转换。 */
-export interface GroupOptions {
-  adapters: Adapters;
-  repo: LocalRepo;
-  nodeBaseUrl: string;
-}
+/** 与 `WireOptions` 同形（原样保留这个导出名，页面与测试的 import 不必改）。 */
+export type GroupOptions = WireOptions;
 
 export type GroupErrorCode =
   | 'invite_invalid'
@@ -59,71 +61,6 @@ export class GroupError extends Error {
 export const GROUP_KEY_STALE_NOTICE = '小组密钥已更新，请向创建者索取新邀请码。';
 
 const GROUP_KEY_BYTES = 32;
-const GCM_NONCE_BYTES = 12;
-
-const B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let out = '';
-  for (let i = 0; i < bytes.length; i += 3) {
-    const b0 = bytes[i]!;
-    const b1 = i + 1 < bytes.length ? bytes[i + 1]! : 0;
-    const b2 = i + 2 < bytes.length ? bytes[i + 2]! : 0;
-    out += B64URL.charAt(b0 >> 2);
-    out += B64URL.charAt(((b0 & 0x03) << 4) | (b1 >> 4));
-    if (i + 1 < bytes.length) out += B64URL.charAt(((b1 & 0x0f) << 2) | (b2 >> 6));
-    if (i + 2 < bytes.length) out += B64URL.charAt(b2 & 0x3f);
-  }
-  return out;
-}
-
-function base64UrlToBytes(s: string): Uint8Array {
-  const out: number[] = [];
-  let acc = 0;
-  let bits = 0;
-  for (let i = 0; i < s.length; i++) {
-    const v = B64URL.indexOf(s.charAt(i));
-    if (v < 0) throw new Error('base64url: 非法字符');
-    acc = (acc << 6) | v;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      out.push((acc >> bits) & 0xff);
-    }
-  }
-  return new Uint8Array(out);
-}
-
-/** 组密钥落 `group_keys.key_cipher`：`nonceHex:ctHex`——与 `identity.ts:96` 的私钥密文**同一形态**。 */
-async function sealGroupKey(storage: Adapters['storage'], keyBytes: Uint8Array): Promise<string> {
-  const kek = await deviceKek(storage);
-  const nonce = randomBytes(GCM_NONCE_BYTES);
-  return `${bytesToHex(nonce)}:${bytesToHex(sealWithNonce(kek, nonce, keyBytes))}`;
-}
-
-async function openGroupKey(storage: Adapters['storage'], keyCipher: string): Promise<Uint8Array> {
-  const kek = await deviceKek(storage);
-  const [nonceHex, ctHex] = keyCipher.split(':');
-  if (!nonceHex || !ctHex) throw new Error('group: 组密钥密文格式损坏');
-  return openWithNonce(kek, hexToBytes(nonceHex), hexToBytes(ctHex));
-}
-
-/** 正文加密：`base64url(nonce12 || sealWithNonce(...))`（补充 3）。 */
-function sealText(key: Uint8Array, plain: string): string {
-  const nonce = randomBytes(GCM_NONCE_BYTES);
-  const ct = sealWithNonce(key, nonce, utf8(plain));
-  const buf = new Uint8Array(nonce.length + ct.length);
-  buf.set(nonce, 0);
-  buf.set(ct, nonce.length);
-  return bytesToBase64Url(buf);
-}
-
-/** 正文解密；密钥不对 / 密文损坏一律抛错，由调用方降级为「提示 + 占位」（册子 §5.3）。 */
-function openText(key: Uint8Array, textCipher: string): string {
-  const buf = base64UrlToBytes(textCipher);
-  if (buf.length < GCM_NONCE_BYTES + 16) throw new Error('group: 密文过短');
-  return decodeUtf8(openWithNonce(key, buf.subarray(0, GCM_NONCE_BYTES), buf.subarray(GCM_NONCE_BYTES)));
-}
 
 export interface GroupInvite {
   v: number;
@@ -221,7 +158,7 @@ async function saveInvite(o: GroupOptions, inv: GroupInvite): Promise<GroupRow> 
   await o.repo.putGroupKey({
     groupId: inv.groupId,
     epoch: inv.epoch,
-    keyCipher: await sealGroupKey(o.adapters.storage, hexToBytes(inv.groupKeyHex)),
+    keyCipher: await sealKeyCipher(o.adapters.storage, hexToBytes(inv.groupKeyHex)),
     createdAt: new Date().toISOString(),
   });
   const merged: GroupRow = { ...row, name: inv.name || row.name, creatorId: inv.creatorId, epoch: inv.epoch };
@@ -246,44 +183,6 @@ export async function acceptInvite(o: GroupOptions, code: string): Promise<{ gro
 /** 我参与的全部小组（零网络）。 */
 export function listMyGroups(o: GroupOptions): Promise<GroupRow[]> {
   return o.repo.listGroups();
-}
-
-/** 构造一条 `group.v1` 请求体并签名（与 `buildCommentWire` 同构，只有 type/body 不同）。 */
-function buildGroupWire(ident: Identity, body: Json): { eventId: string; wire: string } {
-  const eventId = bytesToHex(randomBytes(16));
-  const payload: Json = { event_id: eventId, type: 'group.v1', created_at: Date.now(), body };
-  const sig = sign(ident.seedHex, utf8(canonicalize(payload)));
-  return { eventId, wire: JSON.stringify({ ...(payload as Record<string, Json>), sig }) };
-}
-
-/**
- * 发一条已签名组事件；**只有网络不可达**才入 `comment_out`（册子 §5.4、AC 10）。
- * 节点给了任何 HTTP 响应（4xx/5xx）都原样抛出、不入队——与 `postComment` 同一口径。
- * 复用 `sendComment`（comment.ts 的补发入口）⇒ 签名头、错误码映射、`wire` 重放全部零新代码。
- */
-async function submitWire(
-  o: GroupOptions,
-  input: { eventId: string; wire: string; targetId: string; queueText: string },
-): Promise<{ queued: boolean }> {
-  try {
-    await sendComment(o, { targetId: input.targetId, text: input.queueText, wire: input.wire, eventId: input.eventId });
-    return { queued: false };
-  } catch (e) {
-    if (e instanceof CommentError && e.code === 'network') {
-      await o.repo.enqueueComment({
-        eventId: input.eventId,
-        targetId: input.targetId,
-        text: input.queueText,
-        replyTo: null,
-        wire: input.wire,
-        state: 'pending',
-        reason: null,
-        queuedAt: new Date().toISOString(),
-      });
-      return { queued: true };
-    }
-    throw e;
-  }
 }
 
 /** roster 的 body：**完整名单快照**；`name` 缺省不带该键（与 `reply_to` 同处置）。 */
@@ -316,12 +215,12 @@ export async function createGroup(
   await o.repo.putGroupKey({
     groupId,
     epoch: 1,
-    keyCipher: await sealGroupKey(o.adapters.storage, hexToBytes(groupKeyHex)),
+    keyCipher: await sealKeyCipher(o.adapters.storage, hexToBytes(groupKeyHex)),
     createdAt: now,
   });
   await o.repo.saveGroup(group);
 
-  const { eventId, wire } = buildGroupWire(ident, rosterBody(groupId, 1, [ident.id], opts.name));
+  const { eventId, wire } = buildEventWire(ident, 'group.v1', rosterBody(groupId, 1, [ident.id], opts.name));
   const { queued } = await submitWire(o, { eventId, wire, targetId: `group/${groupId}`, queueText: opts.name });
 
   const inviteCode = encodeInvite(
@@ -361,12 +260,12 @@ export async function rotateGroup(
   await o.repo.putGroupKey({
     groupId,
     epoch,
-    keyCipher: await sealGroupKey(o.adapters.storage, hexToBytes(groupKeyHex)),
+    keyCipher: await sealKeyCipher(o.adapters.storage, hexToBytes(groupKeyHex)),
     createdAt: now,
   });
   await o.repo.saveGroup(group);
 
-  const { eventId, wire } = buildGroupWire(ident, rosterBody(groupId, epoch, memberIds, cur.name));
+  const { eventId, wire } = buildEventWire(ident, 'group.v1', rosterBody(groupId, epoch, memberIds, cur.name));
   const { queued } = await submitWire(o, { eventId, wire, targetId: `group/${groupId}`, queueText: cur.name });
 
   const inviteCode = encodeInvite(
@@ -397,7 +296,7 @@ export async function postGroupMessage(
   if (!group) throw new GroupError('group_not_found', '还没有加入这个小组');
   const row = (await o.repo.listGroupKeys(input.groupId)).find((r) => r.epoch === group.epoch);
   if (!row) throw new GroupError('client', `本地缺少 epoch ${group.epoch} 的组密钥`);
-  const key = await openGroupKey(o.adapters.storage, row.keyCipher);
+  const key = await openKeyCipher(o.adapters.storage, row.keyCipher);
   const textCipher = sealText(key, input.text);
 
   const body: Record<string, Json> = {
@@ -409,7 +308,7 @@ export async function postGroupMessage(
   if (input.replyTo) body.reply_to = input.replyTo;
 
   const ident = await ensureLocalIdentity(o.adapters.storage);
-  const { eventId, wire } = buildGroupWire(ident, body);
+  const { eventId, wire } = buildEventWire(ident, 'group.v1', body);
   const { queued } = await submitWire(o, {
     eventId,
     wire,
@@ -514,7 +413,7 @@ export async function fetchGroupMessages(o: GroupOptions, groupId: string): Prom
   const keyMap = new Map<number, Uint8Array>();
   for (const row of await o.repo.listGroupKeys(groupId)) {
     try {
-      keyMap.set(row.epoch, await openGroupKey(o.adapters.storage, row.keyCipher));
+      keyMap.set(row.epoch, await openKeyCipher(o.adapters.storage, row.keyCipher));
     } catch {
       // 单把密钥解不开不影响其余 epoch
     }
