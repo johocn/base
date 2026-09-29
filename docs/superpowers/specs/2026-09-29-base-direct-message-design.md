@@ -52,6 +52,30 @@
 
 总纲改动以 `## 0. 改版说明` 新增一节（§0.6）登记，不改任何既有条款的语义。
 
+### 0.3 2026-09-29 评审后补充（写计划时发现的缺陷级缺口与口径填空）
+
+写实施计划（计划 #34）时逐行核对了节点与手机端现有代码，发现本册 §4.3 有**两处判断错误**，以及若干处只有函数名、没有签名与口径的留白。**上游（总纲）无冲突，故只改本册**。
+
+**一、纠错（§4.3「零改动」两条不成立）**
+
+`#31` 计划复盘里的 F5 / F6 两处缺口在私信上**同族复现**——本册初版把它们误判为「私信无投影表 ⇒ 反熵接收侧零改动」。事实是：投影**表**确实没有，但反熵**接收侧**的两处既有机制各有硬编码的类型分支，必须各加一个 `dm.v1` 分支，否则私信事件「搬得过去、读不出来、块也拉不下来」，AC 4 不成立：
+
+| # | 位置 | 现状 | 后果 |
+|---|---|---|---|
+| F5′ | `internal/peersync/eventsync.go` 的 `parseEventProjection(typ, bodyJSON)` | 只有 `comment.v1` / `group.v1` 两个分支，其余类型返回零值 | 私信事件搬到对端后 `target_id` / `payload_cid` 为空 ⇒ 对端 `GET /v1/dm/{peer_id}` 查不到该条 |
+| F6′ | `internal/store/comment.go` 的 `EventBlobIndex()` | SQL 硬编码 `type IN ('comment.v1','group.v1')`，归属前缀只有 `comment:` / `group:` | 私信密文块在接受侧**无归属** ⇒ 反熵拉不下来、scrub 还会把块当孤儿删掉（AC 4 取不到密文） |
+
+两条都**不改任何线上接口形状与事件传播协议**（减化 body 里 `{to, payload_cid}` 本就有 `payload_cid`，只是接收侧没去读；`EventBlobIndex` 是节点内部索引）。故本册 §4 的改动面由「两件」更正为「**三处**：事件类型注册 + 一个匿名读接口 + 反熵接收侧两行接线」，且**仍然零新表、零新列**。
+
+**二、口径填空（零契约影响，仅补签名与边界）**
+
+* §5.2 的抽取面不止两个函数：`dm.ts` 还需要 `group.ts` 里同一套原语，故 `core/wire.ts` 一并收编 base64url 编解码、`sealText`/`openText`、密钥密文封装（`sealGroupKey`/`openGroupKey` 随语义改名 `sealKeyCipher`/`openKeyCipher`），`group.ts` 改 import——仍是**纯抽取 + 纯改名、行为零变化**。
+* `comment.ts` 的 `buildCommentWire` **不收编**：`submitWire` 必须引 `sendComment`，收编会形成 `comment ↔ wire` 模块环。
+* `decodeFriendCode(code, myId)` 比组码多一个参数——「定向」一步要拿本机 id 比较 `peer_id`（§3.2）。
+* `listFriends` 返回 `{peerId, hasKey}[]`；**拉收件箱失败时回落为「仅本地好友」**（索引层的可用性回落，与内容层「禁止静默跳过解密」是两件事）。
+* `postDM` 的三条前置校验（`peerId` 形态 / 明文非空且 ≤ 4096 / 本地有该 peer 密钥）**全部在入队前**。
+* 会话页不做翻页；`nextCursor` 非空时**原位提示**，不伪装成「没有更多了」。
+
 ## 1. 目标与判定
 
 | # | 目标 | 判定 |
@@ -78,8 +102,10 @@
 | 4 | `buildGroupWire` / `submitWire` 是 `group.ts` 的**模块私有**函数（`group.ts:252`、`group.ts:264`） | 私信要复用须抽公共件（§5.2），否则出现第二份复制粘贴 |
 | 5 | `comment_out(event_id,target_id,text,reply_to,wire,state,reason,queued_at)` 完全通用（`repo.ts:105`），小组即拿它存密文 | 私信离线发言**零新表**（§5.4） |
 | 6 | 节点 `events` 表与 `ListGroupEvents` 只差一个 `type` 过滤（`store/group.go:96`） | 新增 `ListDMEvents` 是同构的十二行（§4.2） |
-| 7 | `handleEventSync` 不按 type 过滤；反熵只比对 `blob_id` | 私信事件与密文块**自动跨节点传播**，接收侧**无投影还原**（§4.3） |
+| 7 | `handleEventSync` 不按 type 过滤；反熵只比对 `blob_id` | 私信事件与密文块**自动跨节点传播**；**但接收侧要各加一个 `dm.v1` 分支**（见第 9、10 行） |
 | 8 | `isHexN(s,n)` 的第二参是**字节数**（实现为 `len(s) == n*2`） | 校验 `peer_id` 与 `group_id` 同形：`isHexN(id, 16)` 即 32 hex（#9 曾在此踩坑，见 #9 册子 §0.2） |
+| 9 | 反熵接收侧 `parseEventProjection` 只有 `comment.v1` / `group.v1` 分支，其余类型返回零值（`peersync/eventsync.go`） | **须加一个 `dm.v1` 分支**（§0.3 的 F5′、§4.4）：否则搬到对端的事件没有 `target_id` / `payload_cid` |
+| 10 | 块归属索引 `EventBlobIndex()` 的 SQL 硬编码 `type IN ('comment.v1','group.v1')`（`store/comment.go`） | **须纳入 `dm.v1`**（§0.3 的 F6′、§4.4）：否则私信密文块在接受侧无归属，反熵拉不下、scrub 当孤儿删 |
 
 ## 3. 契约
 
@@ -165,7 +191,7 @@
 
 **不做的事**：不查墓碑（② 类不可审，总纲 §12 第 9 条）、不建任何明文派生索引、不写任何投影表、**不校验 `to` 是否已登记身份**（与小组发言一致：节点不把「对方是否注册」当准入门槛）。
 
-## 4. 节点侧改动（两件，其余零改动）
+## 4. 节点侧改动（三处，其余零改动）
 
 ### 4.1 事件类型注册
 
@@ -192,12 +218,54 @@ GET /v1/dm/{peer_id}?cursor=&limit=
 | 项 | 结论 |
 |---|---|
 | `POST /v1/event` 验签管线、限速、错误码映射 | 零改动（只多一个分支） |
-| `POST /v1/event-sync` 事件传播与反熵 | 零改动——`handleEventSync` 不按 type 过滤，反熵只比对 `blob_id` |
-| 接收侧投影还原 | **零改动**——私信无投影表，比 #9 少一处（#9 需还原 `groups` 名单） |
+| `POST /v1/event-sync` 事件传播 | 零改动——`handleEventSync` 不按 type 过滤，事件照搬 |
+| 反熵接收侧投影还原（`parseEventProjection`） | **须加一个 `dm.v1` 分支**（§4.4 / §0.3 F5′）——减化 body 里本就有 `payload_cid`，接收侧只是没读 |
+| 块归属索引（`EventBlobIndex`） | **须纳入 `dm.v1`**（§4.4 / §0.3 F6′）——否则密文块在接受侧无归属，被 scrub 当孤儿 |
+| 投影**表** | 零改动——私信没有任何投影表，比 #9 少一处（#9 需把 `roster` 落进 `groups` 名单） |
 | `GET /v1/blob/{blob_id}` 匿名取块 | 零改动（密文与明文一视同仁） |
 | 内容包规范 v1 | 零改动——私信不进包、**不 bump `schema_version`** |
 | 配置项 | 不新增任何配置项 |
 | 数据库表 | 节点侧**不新增任何表、不新增任何列** |
+
+### 4.4 反熵接收侧两行接线（§0.3 F5′ / F6′ 的落点）
+
+这两处不是新增机制，而是既有机制里各补一个 `dm.v1` 分支；不补则 AC 4（跨节点仍能读到密文）不成立。
+
+**F5′：`internal/peersync/eventsync.go` 的 `parseEventProjection`（现 `:196`）**
+
+该函数从对端事件的 `body_json` 重建本地索引列。私信事件的减化 body 本就有 `to` 与 `payload_cid`（§3.3），只是没读。加一个分支：
+
+```go
+case "dm.v1":
+	var m struct {
+		To         string `json:"to"`
+		PayloadCID string `json:"payload_cid"`
+	}
+	if err := json.Unmarshal([]byte(bodyJSON), &m); err != nil || !isHexN16(m.To) {
+		return commentProjection{}
+	}
+	return commentProjection{TargetID: "dm/" + m.To, PayloadCID: m.PayloadCID}
+```
+
+`dm.v1` 的 body 只有 `{to, text_cipher}`（无 `reply_to`），故 `ReplyTo` 恒空——这是与 comment/group 分支的唯一差异。`isHexN16` 为 `peersync` 包内 3 行小助手（`len(s)==32` + `hex.DecodeString`），不在本包引入 `httpapi` 依赖。
+
+**F6′：`internal/store/comment.go` 的 `EventBlobIndex`（现 `:66`）**
+
+该函数的 SQL 白名单与前缀映射都要纳入 `dm.v1`：
+
+```sql
+WHERE type IN ('comment.v1','group.v1','dm.v1') AND payload_cid IS NOT NULL AND payload_cid<>''
+```
+
+```
+prefix := "comment:"
+if typ == "group.v1" { prefix = "group:" }
+if typ == "dm.v1"    { prefix = "dm:" }
+```
+
+两条既有调用点（`peersync/sync.go:40` 的 `ownershipIndex`、scrub 的孤儿判定）**不改代码即自动生效**——它们只消费这个 map。
+
+**不做的**：私信没有投影表，故**不需要** `applySyncedGroupEvent` 那样的第三条接线（那是 #9 为 `roster` 落 `groups` 名单而设的，私信无对应状态）；`handleEventSync` 也不按 type 过滤，事件照搬，零改动。
 
 ## 5. 手机端设计
 
@@ -225,14 +293,16 @@ CREATE TABLE IF NOT EXISTS dm_keys(
 
 | 函数 | 职责 |
 |---|---|
-| `encodeFriendCode` / `decodeFriendCode` | 好友码编解码 + 离线自验（§3.2，形制与 `group.ts` 的 `encodeInvite`/`decodeInvite` 同构） |
-| `createFriend(o, peerId)` | 生成/复用会话密钥 → 落 `dm_keys` → 出好友码（**全程离线**） |
+| `encodeFriendCode` / `decodeFriendCode(code, myId)` | 好友码编解码 + 离线自验（§3.2，形制与 `group.ts` 的 `encodeInvite`/`decodeInvite` 同构）。**比 `decodeInvite` 多一个 `myId` 参数**：§3.2 的「定向」一步要校验 `peer_id === 本机身份 id`；`myId === ''`（本机无身份）一律判 `friend_code_invalid` |
+| `createFriend(o, peerId)` | 生成/复用会话密钥 → 落 `dm_keys` → 出好友码（**全程离线**）。重复出码复用已存密钥，保证码与本地一致 |
 | `acceptFriendCode(o, code)` | 验码 → 落 `dm_keys`（幂等 / `key_conflict`） |
-| `listFriends(o)` | 会话列表：`dm_keys` ∪ 「给我发过消息的人」（§5.3） |
-| `postDM(o, peerId, text)` | 明文上限校验 → `sealText` → `buildDmWire` → `submitWire(target_id=dm/<peer>)` |
-| `fetchConversation(o, peerId)` | 合并双 `target_id` → 逐条取块 → 解密（§5.3） |
+| `listFriends(o)` | 会话列表，返回 `{ peerId, hasKey }[]`：`dm_keys` ∪ 「给我发过消息的人」（§5.3）；`hasKey` 供 UI 区分「有密钥可读」与「只有来信」。**拉收件箱失败时静默回落为仅本地好友**，不抛错 |
+| `postDM(o, peerId, text)` | 三条前置校验（有身份 / 明文字节数上限 / 本地有会话密钥）**全部在入队之前** → `sealText` 出密文 → `buildEventWire('dm.v1', {to, text_cipher})` → 入 `comment_out`（离线也成功） |
+| `fetchConversation(o, peerId)` | 合并双 `target_id` → 逐条取块 → 解密（§5.3）。**只取首页、不翻页**——与既有小组会话页口径一致 |
 
-**收编既有件（唯一一处对已上线代码的改动）**：`group.ts` 里的 `buildGroupWire` 与 `submitWire` 抽到新文件 `core/wire.ts`，导出为 `buildEventWire(type, body)` 与 `submitWire(o, {...})`；`group.ts` 与 `dm.ts` 都改为 import。改动是**纯抽取、行为零变化**，由既有 `group.test.ts`（149 项里的小组部分）与新增 `dm.test.ts` 双向覆盖。若 `comment.ts` 中存在同构实现则一并收编（开工时确认，见计划）。
+**收编既有件（唯一一处对已上线代码的改动）**：`group.ts` 里的事件层公共件抽到新文件 `core/wire.ts`，导出面为 `buildEventWire(ident, type, body)` / `submitWire(o, {...})` 加事件层原语 `bytesToBase64Url` / `base64UrlToBytes` / `sealText` / `openText` / `sealKeyCipher` / `openKeyCipher`；`group.ts` 与 `dm.ts` 都改为 import。改动是**纯抽取、行为零变化**：仅两处异常文案因去掉 `group:` 前缀而变化（无任何测试断言），`sealGroupKey`→`sealKeyCipher`、`openGroupKey`→`openKeyCipher` 四处调用点改名。由既有 `group.test.ts` 与新增 `dm.test.ts` 双向覆盖。
+
+**刻意不收编 `comment.ts`**：其 `buildCommentWire` 与 `buildEventWire` 同构，但收编会让 `comment.ts` 与 `wire.ts` 形成**模块环**（`wire.ts` 的 `submitWire` 要调 `sendComment`），与「纯抽取、行为零变化」冲突 ⇒ 本轮一行不动。
 
 **密码学零新代码**：`sealWithNonce` / `openWithNonce` / `randomBytes` / `sign` / `verify` / `deriveIdentityId` 全部来自 `@base/protocol-ts`，与 #9 一字不差。
 
@@ -322,4 +392,4 @@ A↔B 的会话由两次匿名读 + 客户端合并得到：
 
 1. **总纲**：新增 `## 0.` 一节（§0.6）登记 §0.2 的两处口径对齐；§8.2 表格「私信正文（本地持久化）」一行改口为「**不适用**（2026-09-29 §0.6：私信册子不缓存正文；该形态延期不取消）」；§9 本地表清单 `messages` 行加注「**2026-09-29 §0.6：本册不落地**——私信册子不缓存他人正文，本表**延期不取消**」。
 2. **`docs/README.md`**：§3 文档清单新增本册行（第 32 行：职责 / 明确不做什么 / 依赖 / 状态）并把原第 10 行占位行的状态由「待写」改指本行；§4 依赖图把 `私信 (#10)` 补为「册子 #32 已定稿 → 计划待出」；§5「风险前置」与本册所对应的「下一步（关键路径）」段同步口径（计划编号待出计划时回填）。
-3. **本册 §0.2** 在计划执行结束时回填执行期更正（若有）。
+3. **本册 §0.3 / §4.4 / §5.2** 已在写计划阶段同步回填（F5′/F6′ 两处缺陷级缺口与 6 条口径填空）；§0.2 在计划执行结束时回填执行期更正（若有）。
