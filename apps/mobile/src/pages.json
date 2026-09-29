@@ -59,6 +59,10 @@
     {
       "path": "pages/contribution/contribution",
       "style": { "navigationBarTitleText": "我的贡献" }
+    },
+    {
+      "path": "pages/group/group",
+      "style": { "navigationBarTitleText": "小组会话" }
     }
   ],
   "tabBar": {
