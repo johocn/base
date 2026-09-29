@@ -3106,7 +3106,7 @@ git push origin master
 | 2 | `group.v1` roster v2 多签与门槛 | `0c048a6` | `go build`/`vet` 干净；`go test ./... -count=1` 8 包全 ok；`TestRosterV2*` 8 用例（含 3 子例）全 PASS |
 | 3 | 读权分支（开放匿名 / 封闭签名） | `a7a945f` | `go build`/`vet` 干净；`go test ./... -count=1` 10 包全 ok；`TestGroupRead*` 5 用例 + `TestGroupGet*` 3 用例 + `TestAuth*OutOfWindow/NonceReplay/BadSignature` 全 PASS；动过的 5 个文件 `gofmt -l` 无输出 |
 | 4 | 反熵接收侧 v2 三列 + 信封 | `539f68c` | `go build`/`vet` 干净；`go test ./... -count=1` 全包 ok；`TestApplySyncedGroupEvent*` 4 用例全 PASS（另验证：换回旧实现时 V2/Legacy/Dissolve 三条 FAIL，非空跑）；`gofmt -l` 两文件无输出 |
-| 5 | `core/group.ts` v2（双形态 / 多签码 / 信封链） | — | 待填 |
+| 5 | `core/group.ts` v2（双形态 / 多签码 / 信封链） | `148b745` + `c9a087f` | `npx vitest run` 18 文件 / 167 用例全绿（group 17 用例）；`npx tsc --noEmit` 无输出；动 5 文件（含 `platform/index.ts` 的存量库补列调用） |
 | 6 | 圈子列表形态与治者面板 | — | 待填 |
 | 7 | 0.11.0 发布四步 + 节点二进制部署 | — | 待填 |
 | 8 | `govern.v1` 注册 + 投影 + 水位 + 老路径只写投影 | — | 待填 |
@@ -3145,3 +3145,15 @@ git push origin master
 **更正 27（Task 4）接收侧必须放行 `dissolve` 的空名单**。计划 Step 3 的 `len(m.MemberIDs) == 0 → return false, nil` 会把解散事件整个丢弃：补充 11 要求解散把名单写成 `[]`（Task 2 更正 18 已按此解析），对端于是永远保留旧名单——已被移出/已解散的成员在缓存节点上仍能读封闭圈（安全侧错误，且与源节点读权表现不一致）。实际做法：结构体加 `Sub string`，判据改为 `len(m.MemberIDs) == 0 && m.Sub != "dissolve" → 忽略`；v1 键集无 `sub`（`parseGroupRoster` 键白名单），不会误放垃圾事件。
 
 **更正 28（Task 4）测试助手名不符**。计划测试用 `newTestStore(t)`，peersync 包内不存在；实为 `openTemp(t) *store.Store`（`testsupport_test.go:52`）。`group_id` 用 `"g1"` 不影响（peersync 侧不做 16 hex 校验，与 httpapi 的 `isHexN(gid,16)` 不同）。另：计划 Step 3 里那段 `encPointer` 死代码，按计划自己的批注已删，只留 `enc := int64(1); if m.Encrypted != nil { enc = *m.Encrypted }`（**必须用 `*int64`**，`int64` 零值 0 会把 v1 老事件误判成开放圈）。
+
+**更正 29（Task 5，真机阻断）v2 名单必须「epoch 与 rosterRev 一起 +1」，且**每次都换钥并随事件 body 下发信封**。计划 `buildRosterRequest` 的 `bumpEpoch?: boolean` 是错的：节点 `handleGroupRosterV2` 前置 `found && r.Epoch <= cur.Epoch ⇒ 409 group_roster_epoch_stale`（`group.go:461`），`store.PutGroupRosterV2` 亦要求 `epoch` 与 `roster_rev` **都**严格递增，设计册 §3.8 同口径；按计划让 `remove/rename/leave/dissolve` 出 `epoch = cur` 的草稿，真机 100% 被拒。实际做法：`buildRosterRequest` 去掉 `bumpEpoch`，六个 sub 恒 `epoch = cur+1`、`rosterRev = cur.rosterRev+1`；六个便捷入口统一走 `draftThenRotate`（**先出草稿、再用 `cur` 本地换钥**，顺序反了会双推 epoch）。第二步「换钥并分发」原本无路径：`rotateGroup` 产出的 `envelopes` 在计划里没有任何入体口子（AC 4 / 验收 M3「其余成员未粘任何码却读到新消息」直接断链）⇒ `submitRoster` 增加**可选第 4 参** `envelopes`，非空才往 body 写 `envelopes: [{from_epoch, cipher}]`（键名即节点读路径契约）。节点重建的多签载荷 `rosterApprovalPayload`（`group.go:527-544`）**不含 `envelopes`** ⇒ 信封不进签名域，`base2:` 草稿码形态与回执 `request_hash` 全不受影响。
+
+**更正 30（Task 5）便捷入口的返回类型统一扩为 `{ requestCode, envelopes }`**。计划 API 表只给 `rotateGroup` 带 `envelopes`，但更正 29 落地后 `renameGroup`/`removeMember`/`leaveGroup`/`dissolveGroup` 也都换钥产信 ⇒ 全部返回 `{ requestCode: string; envelopes: GroupEnvelope[] }`（无旧钥可封时为 `[]`）。**Task 6 的多签编排必须把 `envelopes` 一并交给 `submitRoster`**（`multsigSubmit(build)` 的 `build` 返回 `{ request, envelopes }`），否则「不粘码自动获新钥」在真机上不成立。
+
+**更正 31（Task 5）`joinOpenGroup` 必须先匿名读节点**。计划签名 `joinOpenGroup(o, groupId)` 只有本地 `groups` 行可用，而陌生人本地无行 ⇒ 草稿 epoch 只能猜（更新一点的圈子必被 409）。实际做法：先匿名 `getGroupPage(o, groupId, {}, false)`（开放圈匿名可读）取节点当前 `epoch`/`roster_rev`/`member_ids`/`name`，草稿用 `epoch+1`、`rosterRev+1`、名单 ∪ 自己，并把读回的名单**落本地 `groups` 行**（否则这个圈子不会出现在「我的圈子」，M2 看不到）。读失败（404 等）抛 `group_not_found`/`server`，不猜。
+
+**更正 32（Task 5）计划 Step 2 的测试示例不可用**。它引用了不存在的 helper（`encodeInviteV1` / `MEMBER_B` / `stubGroupReadWithEnvelopes` / `envelopeOfEpoch1To2`），断言的文案 `需 2 名签名（移出成员需治理者）` 也与 `submitRoster` 实际格式（`需 N 名签名（label），当前 M 名`）不符。实际做法：按文件内真实体例（`fixture()` / `gateOffline()` / `a.http.routes.set` 打桩）重写，新增 AC 4 / AC 5 / AC 6-7 / AC 13 / `base2-base3` 往返与篡改 / `resolveKeyChain` 断链 / 六 sub epoch+1 / `remove` 提交带信封且旧钥可解 / `joinOpenGroup` 匿名读共 12 组用例（group 17 用例）。更正 21（`action: 'roster'`）已在本 Task 落地。
+
+**更正 33（Task 5 遗留，Task 6 必须处理）低风险档的签名者必须**全是治者**。节点 `rosterQuorumError`（`group.go:614-619`）对 `rename`/`rotate`/`leave` 判 `subsetOf(signers, governors) && countIn(signers, governors) >= 1`，`remove` 要求治者签数 ≥ `RemoveQuorum(k)`。故非治者的「自己退出」**自签必被 403**——计划 Task 6 的 `onLeave` 已给「请把请求码发给治理者」的提示，但 `multsigSubmit` 不能只交自己的回执就当作已提交成功；`rename/rotate` 也要求签名者是治者（UI 已用 `isGovernor` 门控面板）。
+
+**更正 34（Task 5）两处落地细节**。① `GCM_NONCE_BYTES` 在 `core/wire.ts` 里是**未导出**的模块内常量（=12），`group.ts` 不能 import ⇒ 在 `group.ts` 内自定同名常量，不改 `wire.ts`。② 存量设备库要补列：`CREATE TABLE IF NOT EXISTS` 对既有 `groups` 表不补列 ⇒ `repo.ts` 额外导出 `ensureGroupColumns(db)`（`PRAGMA table_info(groups)` 查列名，缺则 `ALTER`），由 `platform/index.ts` 在建表循环之后调用 ⇒ **Task 5 的实际提交范围比计划多一个文件 `apps/mobile/src/platform/index.ts`**。
