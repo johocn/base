@@ -1,8 +1,11 @@
 <template>
   <view class="wrap">
     <view class="bar">
-      <text class="title">{{ groupName || '小组会话' }}</text>
-      <text class="act" @click="paste">粘贴续期码</text>
+      <text class="title">{{ groupName || '圈子会话' }}</text>
+      <view class="bar-acts">
+        <text class="act" @click="paste">粘贴续期码</text>
+        <text class="act" @click="pasteReceipt">粘贴回执</text>
+      </view>
     </view>
 
     <!-- feed.notice 原文：被移出 / 密钥已轮换，读不出新消息时必须原位告知，禁止静默跳过 -->
@@ -10,11 +13,31 @@
     <text v-if="error" class="error">{{ error }}</text>
     <text v-if="error" class="act" @click="retry">重试</text>
 
+    <view v-if="group" class="sec">
+      <text class="sec-title">圈子</text>
+      <text class="li">形态：{{ group.encrypted === 1 ? '封闭圈子（内容加密）' : '开放圈子（内容公开）' }}</text>
+      <text class="li">治理席位：{{ group.seatCount }} 席</text>
+      <text class="li">当前治理者：{{ govText }}</text>
+    </view>
+
+    <view v-if="isGovernor" class="sec panel">
+      <text class="sec-title">治理操作</text>
+      <view class="acts">
+        <text class="act" @click="onRename">改名</text>
+        <text class="act" @click="onRemove">移出成员</text>
+        <text class="act" @click="onRotate">轮换密钥</text>
+        <text class="act" @click="onDissolve">发起解散</text>
+      </view>
+    </view>
+
+    <view v-if="group" class="sec panel">
+      <text class="act" @click="onLeave">退出圈子</text>
+    </view>
+
     <view v-if="members.length > 0" class="sec">
       <text class="sec-title">成员 {{ members.length }}</text>
       <view v-for="m in members" :key="m" class="member">
-        <text class="member-id">{{ short(m) }}{{ m === myId ? '（我）' : '' }}</text>
-        <text v-if="isCreator && m !== groupCreatorId" class="act" @click="remove(m)">移出</text>
+        <text class="member-id">{{ short(m) }}{{ m === myId ? '（我）' : '' }}{{ isGovernorId(m) ? ' · 治者' : '' }}</text>
       </view>
     </view>
 
@@ -62,11 +85,19 @@ import { onLoad, onReachBottom, onShow } from '@dcloudio/uni-app';
 
 import {
   acceptInvite,
+  dissolveGroup,
   fetchGroupMessages,
+  leaveGroup,
   postGroupMessage,
+  removeMember,
+  renameGroup,
   rotateGroup,
+  signSigRequest,
+  submitRoster,
   GroupError,
+  type GroupEnvelope,
   type GroupFeed,
+  type GroupInfo,
   type GroupMessage,
   type GroupOptions,
 } from '../../core/group';
@@ -84,7 +115,7 @@ import {
 const opts = ref<GroupOptions | null>(null);
 const groupId = ref('');
 const groupName = ref('');
-const groupCreatorId = ref('');
+const group = ref<GroupInfo | null>(null);
 const myId = ref('');
 const members = ref<string[]>([]);
 const feed = ref<GroupMessage[]>([]);
@@ -98,6 +129,11 @@ const sending = ref(false);
 const draft = ref('');
 const unconfigured = ref(false);
 
+/** 多签编排的待提交态：请求码 + 已收集回执 + 轮换产出的信封（信封不进签名域，但必须随提交带上）。 */
+const pendingRequest = ref('');
+const pendingReceipts = ref<string[]>([]);
+const pendingEnvelopes = ref<GroupEnvelope[]>([]);
+
 /** 待发区：只显示本组的行（评论页不过滤是因为评论只有一个 tab，小组页必须按组隔离）。 */
 const pending = ref<CommentOutRow[]>([]);
 
@@ -109,9 +145,18 @@ const canInput = computed(() => canPostComment(caps.value));
 const canSend = computed(
   () => canPostComment(caps.value) && draft.value.trim() !== '' && !sending.value,
 );
-const isCreator = computed(
-  () => myId.value !== '' && groupCreatorId.value !== '' && myId.value === groupCreatorId.value,
+/** 治理者判定：节点下发的 `governors` 含我即视为治理者（客户端算不出贡献度排名，只读节点裁决）。 */
+const isGovernor = computed(
+  () => myId.value !== '' && (group.value?.governors ?? []).includes(myId.value),
 );
+const govText = computed(() => {
+  const gs = group.value?.governors ?? [];
+  return gs.length === 0 ? '（无）' : gs.map(short).join('、');
+});
+
+function isGovernorId(id: string): boolean {
+  return (group.value?.governors ?? []).includes(id);
+}
 
 async function load() {
   try {
@@ -150,7 +195,7 @@ async function dropPending(eventId: string) {
 
 function applyFeed(f: GroupFeed) {
   groupName.value = f.group.name;
-  groupCreatorId.value = f.group.creatorId;
+  group.value = f.group;
   members.value = f.group.memberIds;
   feed.value = f.events;
   nextCursor.value = f.nextCursor;
@@ -224,17 +269,139 @@ async function send() {
   }
 }
 
-/** 移出成员（仅创建者）：轮换新密钥 → 出新续期码 → 复制，让剩余成员粘入后读到新消息。 */
-async function remove(target: string) {
+/** 从列表里单选一项；取消返回 null。 */
+function pick(itemList: string[]): Promise<number | null> {
+  return new Promise((resolve) => {
+    uni.showActionSheet({
+      itemList,
+      success: (res) => resolve(res.tapIndex),
+      fail: () => resolve(null),
+    });
+  });
+}
+
+/**
+ * 多签编排：出草稿 → 自签 → 复制请求码 → 提交（信封必须一并交给 `submitRoster`）。
+ * 门槛不足时 `submitRoster` 抛 `roster_quorum_missing`，此时请求码已复制、pending 已留存，
+ * 用户可继续走「粘贴回执」——这就是期望行为（原地提示，不静默、不入队）。
+ */
+async function multsigSubmit(build: () => Promise<{ request: string; envelopes: GroupEnvelope[] }>) {
   if (!opts.value) return;
   error.value = '';
-  tip.value = '';
+  notice.value = '';
   try {
-    const remaining = members.value.filter((id) => id !== target);
-    const r = await rotateGroup(opts.value, groupId.value, remaining);
-    members.value = remaining;
-    uni.setClipboardData({ data: r.inviteCode });
-    tip.value = '已生成续期码，请发给剩余成员（他们粘入后才能读新消息）';
+    const { request, envelopes } = await build();
+    const mine = await signSigRequest(opts.value, request);
+    const receipts = [mine];
+    pendingRequest.value = request;
+    pendingReceipts.value = receipts;
+    pendingEnvelopes.value = envelopes; // 必须留存，供「粘贴回执」二次提交
+    uni.setClipboardData({ data: request });
+    notice.value = '签名请求已复制，请发给其他治理者；收到回执后用「粘贴回执」提交';
+    const r = await submitRoster(opts.value, request, receipts, envelopes);
+    notice.value = r.queued ? '已提交，联网后自动发送' : '已提交';
+    await load();
+    await loadPending();
+    await refresh();
+  } catch (e) {
+    error.value = e instanceof GroupError ? e.message : (e as Error).message;
+  }
+}
+
+/** 改名（治者）：`sub='rename'`。 */
+async function onRename() {
+  if (!opts.value) return;
+  const name = await ask('改名', '新的圈子名字');
+  if (name === null || name.trim() === '') return;
+  const n = name.trim();
+  await multsigSubmit(async () => {
+    const r = await renameGroup(opts.value!, groupId.value, n);
+    return { request: r.requestCode, envelopes: r.envelopes };
+  });
+}
+
+/** 轮换密钥（治者）：名单取当前快照，不作变更。 */
+async function onRotate() {
+  if (!opts.value || !group.value) return;
+  const memberIds = [...group.value.memberIds];
+  await multsigSubmit(async () => {
+    const r = await rotateGroup(opts.value!, groupId.value, { memberIds });
+    return { request: r.requestCode, envelopes: r.envelopes };
+  });
+}
+
+/** 移出成员（治者）：列表排除自己，选中后走多签。 */
+async function onRemove() {
+  if (!opts.value || !group.value) return;
+  const targets = group.value.memberIds.filter((id) => id !== myId.value);
+  if (targets.length === 0) {
+    error.value = '';
+    notice.value = '没有可移出的成员';
+    return;
+  }
+  const idx = await pick(targets.map(short));
+  if (idx === null) return;
+  const target = targets[idx]!;
+  await multsigSubmit(async () => {
+    const r = await removeMember(opts.value!, groupId.value, target);
+    return { request: r.requestCode, envelopes: r.envelopes };
+  });
+}
+
+/** 发起解散（治者）：名单清空。 */
+async function onDissolve() {
+  await multsigSubmit(async () => {
+    const r = await dissolveGroup(opts.value!, groupId.value);
+    return { request: r.requestCode, envelopes: r.envelopes };
+  });
+}
+
+/**
+ * 退出圈子：节点 `rosterQuorumError` 要求签名者集合**是治者名单的子集**，故非治者自签必被 403。
+ * 非治者只出草稿码（含换钥信封）并复制，交给治者去凑签名；治者才自签提交。
+ */
+async function onLeave() {
+  if (!opts.value || !group.value) return;
+  error.value = '';
+  notice.value = '';
+  try {
+    if (!isGovernor.value) {
+      const r = await leaveGroup(opts.value, groupId.value);
+      pendingRequest.value = r.requestCode;
+      pendingReceipts.value = [];
+      pendingEnvelopes.value = r.envelopes;
+      uni.setClipboardData({ data: r.requestCode });
+      notice.value = '退出圈子需要一名治理者确认：请求码已复制，请发给治理者，收到回执后用「粘贴回执」提交';
+      return; // 不走 multsigSubmit ⇒ 不会自签、不会提交
+    }
+    await multsigSubmit(async () => {
+      const r = await leaveGroup(opts.value!, groupId.value);
+      return { request: r.requestCode, envelopes: r.envelopes };
+    });
+  } catch (e) {
+    error.value = e instanceof GroupError ? e.message : (e as Error).message;
+  }
+}
+
+/** 粘贴签名回执：把新回执并入待提交集合，连同留存信封一起提交（门槛不足的提示显示在原位 error）。 */
+async function pasteReceipt() {
+  if (!opts.value) return;
+  error.value = '';
+  notice.value = '';
+  const code = await ask('粘贴签名回执', '粘贴 base3: 开头的回执码');
+  if (code === null || code === '') return;
+  if (pendingRequest.value === '') {
+    notice.value = '还没有待提交的签名请求';
+    return;
+  }
+  const merged = [...pendingReceipts.value, code.trim()];
+  try {
+    const r = await submitRoster(opts.value, pendingRequest.value, merged, pendingEnvelopes.value);
+    pendingReceipts.value = merged;
+    notice.value = r.queued ? '已提交，联网后自动发送' : '已提交';
+    await load();
+    await loadPending();
+    await refresh();
   } catch (e) {
     error.value = e instanceof GroupError ? e.message : (e as Error).message;
   }
@@ -292,8 +459,14 @@ onReachBottom(() => {
 .bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .title { font-size: 20px; font-weight: 600; }
 .act { color: #2b6cb0; font-size: 14px; }
+.bar-acts { display: flex; }
+.bar-acts .act { margin-left: 14px; }
 .sec { margin-bottom: 12px; }
 .sec-title { display: block; font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.li { display: block; color: #555555; font-size: 13px; margin: 3px 0; }
+.acts { display: flex; flex-wrap: wrap; }
+.acts .act { margin-right: 18px; }
+.panel { padding: 8px 10px; background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 6px; }
 .member { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
 .member-id { color: #555555; font-size: 13px; }
 .pending { margin-bottom: 12px; padding: 10px; background: #fffaf0; border: 1px solid #f6e05e; border-radius: 6px; }
