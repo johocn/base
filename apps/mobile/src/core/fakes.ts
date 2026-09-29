@@ -366,7 +366,8 @@ export class MemoryDb implements LocalDb {
 
   async select(sql: string): Promise<Record<string, unknown>[]> {
     const rb = /randomblob\((\d+)\)/i.exec(sql);
-    if (rb) return [{ b: 'ab'.repeat(Number(rb[1])) }];
+    // 照抄真实 SQLite：hex() 输出**大写**。假实现返回小写会掩盖探测的大小写缺陷（2026-09-29 真机暴露）。
+    if (rb) return [{ b: 'AB'.repeat(Number(rb[1])) }];
     const cnt = /count\(\*\)\s+AS\s+n\s+FROM\s+(\w+)/i.exec(sql);
     if (cnt) return [{ n: (this.tables.get(String(cnt[1])) ?? []).length }];
     throw new Error(`MemoryDb 不支持的查询: ${sql}`);

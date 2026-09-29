@@ -127,7 +127,8 @@ const PROBES: Probe[] = [
     async run(c) {
       const rows = await c.db.select('SELECT hex(randomblob(32)) AS b');
       const hex = String(rows[0]?.b ?? '');
-      if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error(`randomblob 返回异常（${hex.length} 字符）`);
+      // SQLite 的 hex() 输出**大写**（真机 randomblob(32) → 64 个大写字符）；此处只判形态，大小写都合法。
+      if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error(`randomblob 返回异常（${hex.length} 字符）`);
       return '64 位 hex';
     },
   },
