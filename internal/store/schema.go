@@ -209,6 +209,19 @@ var schemaStatements = []string{
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_govern_proposals_item ON govern_proposals(item_id, action)`,
+
+	// tag_links：统一标签与内容的关联（#37 册子 §3.2）。**节点侧唯一权威**——
+	// 内容包不加表，导出靠同一次写入物化出的 segments 行传播（§3.3）。
+	// 目标被下架（remove）后**不做级联删除**：悬空引用由客户端静默跳过（§3.2）。
+	`CREATE TABLE IF NOT EXISTS tag_links(
+		tag_id     TEXT NOT NULL,
+		target_id  TEXT NOT NULL,
+		kind       TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		PRIMARY KEY (tag_id, target_id)
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_tag_links_target ON tag_links(target_id)`,
 }
 
 // eventColumnMigrations 是 events 表的**后加列**（B 阶段引入）。
