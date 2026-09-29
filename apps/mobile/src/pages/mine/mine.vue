@@ -14,6 +14,9 @@
     <navigator url="/pages/governance/governance" class="link">提案与投票<text class="tail">{{ rosterText }}</text></navigator>
     <navigator url="/pages/contribution/contribution" class="link">我的贡献</navigator>
 
+    <text class="group">私信</text>
+    <navigator url="/pages/dm/list" class="link">好友与私信</navigator>
+
     <navigator url="/pages/favorite/favorite" class="link">我的收藏</navigator>
     <navigator url="/pages/setting/setting" class="link">设置</navigator>
   </view>

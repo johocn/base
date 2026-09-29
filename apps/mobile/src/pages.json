@@ -63,6 +63,14 @@
     {
       "path": "pages/group/group",
       "style": { "navigationBarTitleText": "小组会话" }
+    },
+    {
+      "path": "pages/dm/list",
+      "style": { "navigationBarTitleText": "私信" }
+    },
+    {
+      "path": "pages/dm/chat",
+      "style": { "navigationBarTitleText": "私信会话" }
     }
   ],
   "tabBar": {
