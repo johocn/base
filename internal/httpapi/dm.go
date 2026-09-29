@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/johocn/base/internal/protocol"
@@ -100,4 +101,53 @@ func (s *Server) handleDMEvent(w http.ResponseWriter, actor string, req eventReq
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"event_id": req.EventID, "payload_cid": payloadCID, "received_at": now,
 	})
+}
+
+type dmEventDTO struct {
+	EventID    string `json:"event_id"`
+	Actor      string `json:"actor"`
+	CreatedAt  int64  `json:"created_at"`
+	PayloadCID string `json:"payload_cid"`
+}
+
+type dmResponse struct {
+	Events     []dmEventDTO `json:"events"`
+	NextCursor *string      `json:"next_cursor"`
+}
+
+// handleDMGet 匿名分页读「所有人发给 peer_id 的私信索引」（册子 §4.2）。
+// 正文一律另取 GET /v1/blob/{payload_cid}（密文，节点不解释）。
+// **无 404 分支**：私信没有投影表，查无数据即 {"events": [], "next_cursor": null}。
+func (s *Server) handleDMGet(w http.ResponseWriter, r *http.Request) {
+	peerID := r.PathValue("peer_id")
+	if !isHexN(peerID, 16) {
+		s.writeError(w, http.StatusBadRequest, "event_param_invalid")
+		return
+	}
+	q := r.URL.Query()
+	limit := dmDefaultLimit
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= dmMaxLimit {
+			limit = n
+		}
+	}
+	curTS, curID := parseCommentCursor(q.Get("cursor")) // 同一套不透明游标 <created_at>_<event_id>
+	rows, err := s.st.ListDMEvents(peerID, curTS, curID, limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := dmResponse{Events: []dmEventDTO{}}
+	for _, e := range rows {
+		resp.Events = append(resp.Events, dmEventDTO{
+			EventID: e.EventID, Actor: e.ID, CreatedAt: e.CreatedAt, PayloadCID: e.PayloadCID,
+		})
+	}
+	// 满页才给游标：与 GET /v1/comment 同口径
+	if len(rows) == limit {
+		last := rows[len(rows)-1]
+		next := strconv.FormatInt(last.CreatedAt, 10) + "_" + last.EventID
+		resp.NextCursor = &next
+	}
+	s.writeJSON(w, http.StatusOK, resp)
 }

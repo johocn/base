@@ -130,6 +130,10 @@ func (s *Server) publicMux() *http.ServeMux {
 	// 代价是明确的——索引匿名可读 ⇒「谁、何时、在哪个组发言」这层元数据公开；内容仍不可读（无组密钥）。
 	mux.HandleFunc("GET /v1/group/{group_id}", s.handleGroupGet)
 
+	// 私信公开读（匿名，私信册 §4.2）：「谁、何时、给谁发了多大一条密文」这层元数据公开；
+	// 内容仍不可读（无会话密钥）。**无 404 分支**：私信没有投影表，查无即空数组。
+	mux.HandleFunc("GET /v1/dm/{peer_id}", s.handleDMGet)
+
 	// 名册公开读（匿名，治理册 §5.1）：与 catalog / manifest / pack 同级。
 	mux.HandleFunc("GET /v1/contributors", s.handleContributors)
 

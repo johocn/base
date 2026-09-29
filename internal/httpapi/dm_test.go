@@ -156,3 +156,68 @@ func TestDMSigInvalidDoesNotStoreBlob(t *testing.T) {
 		t.Fatalf("验签失败不得落块 ok=%v err=%v", ok, err)
 	}
 }
+
+// 验收 4（索引侧）：未持有密钥者也能匿名分页读到私信索引。
+func TestDMGetAnonymousListingAndPagination(t *testing.T) {
+	_, base := newDmNode(t)
+	to := dmPeerOf(4)
+	// 4 条事件；limit=3 → 首页 3 条 + next_cursor，第二页 1 条 + null
+	for i := 1; i <= 4; i++ {
+		postDmMsg(t, testSeed, base, eventIDOf(i), to, fmt.Sprintf("cipher-%d", i))
+	}
+
+	// 匿名：不带任何 X-Base-* 头
+	status, page1 := doJSONMap(t, http.MethodGet, base+"/v1/dm/"+to+"?limit=3", "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("匿名读 status=%d out=%v", status, page1)
+	}
+	events, _ := page1["events"].([]any)
+	if len(events) != 3 {
+		t.Fatalf("第一页应满 3 条: %v", page1)
+	}
+	first, _ := events[0].(map[string]any)
+	if first["event_id"] != eventIDOf(4) || first["actor"] == "" || first["created_at"] == nil {
+		t.Fatalf("事件 DTO 字段异常: %v", first)
+	}
+	if cid, _ := first["payload_cid"].(string); !protocol.IsBlobID(cid) {
+		t.Fatalf("payload_cid 不合法: %v", first)
+	}
+	next, _ := page1["next_cursor"].(string)
+	if next == "" {
+		t.Fatalf("满页必须给 next_cursor: %v", page1)
+	}
+
+	status, page2 := doJSONMap(t, http.MethodGet, base+"/v1/dm/"+to+"?limit=3&cursor="+next, "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("第二页 status=%d out=%v", status, page2)
+	}
+	if events, _ := page2["events"].([]any); len(events) != 1 {
+		t.Fatalf("第二页应只剩 1 条: %v", page2)
+	}
+	if page2["next_cursor"] != nil {
+		t.Fatalf("不满页必须给 null 游标: %v", page2)
+	}
+}
+
+// 册子 §4.2：**无 404 分支**（查无即空数组）；peer_id 非 32 hex → 400。
+func TestDMGetNo404AndBadPeer(t *testing.T) {
+	_, base := newDmNode(t)
+
+	status, out := doJSONMap(t, http.MethodGet, base+"/v1/dm/"+dmPeerOf(99), "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("查无数据应 200 而非 404: status=%d out=%v", status, out)
+	}
+	if events, _ := out["events"].([]any); len(events) != 0 {
+		t.Fatalf("查无数据 events 应为空数组: %v", out)
+	}
+	if out["next_cursor"] != nil {
+		t.Fatalf("查无数据 next_cursor 应为 null: %v", out)
+	}
+
+	for _, bad := range []string{"zz", "0000000000000000000000000000000"} {
+		status, out = doJSONMap(t, http.MethodGet, base+"/v1/dm/"+bad, "", nil)
+		if status != http.StatusBadRequest || out["error"] != "event_param_invalid" {
+			t.Fatalf("peer_id=%q status=%d out=%v, want 400/event_param_invalid", bad, status, out)
+		}
+	}
+}
