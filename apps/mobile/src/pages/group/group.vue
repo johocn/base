@@ -48,7 +48,8 @@
 
     <text v-if="blocked" class="blocked">{{ blocked }}</text>
     <view class="composer">
-      <input v-model="draft" class="input" :disabled="!canSend" placeholder="说点什么…" />
+      <!-- 输入框只按「结构性不可写」禁用：若用 canSend（含「草稿非空」），空草稿会锁死输入框，永远打不出字 -->
+      <input v-model="draft" class="input" :disabled="!canPostComment(caps.value)" placeholder="说点什么…" />
       <button size="mini" :disabled="!canSend" @click="send">{{ sending ? '发表中…' : '发表' }}</button>
     </view>
     <text v-if="tip" class="hint">{{ tip }}</text>
