@@ -2,8 +2,10 @@ package peersync
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +80,80 @@ func TestSyncEventsPropagatesCommentBodyInOneRound(t *testing.T) {
 	evs, err := dst.ListEvents(commentActor, 10)
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("重复拉取不得产生第二行 err=%v evs=%+v", err, evs)
+	}
+}
+
+// 验收 11（真实实现路径）：govern.v1 经一轮反熵落到缓存节点后，由 peersync 自己的投影 + 生效判定闭环，
+// 提案被判 effective。名册在**接收侧**本地派生、**每页一次**后传参（更正 46 ⑧ 的重构点）——
+// httpapi 侧的 drainGovernFromPeer 只是镜像，这里断言真实现（更正 45 ⑥ 的覆盖缺口）。
+func TestSyncEventsGovernProposalSettlesOnPeer(t *testing.T) {
+	src, url, tr, pub := newSourceNode(t)
+	dst := openTemp(t)
+
+	// 接收侧先具备两样东西：受审条目（active + 已知内容哈希）与 3 名达质量门槛的治者。
+	targetHash := seedGovernArticle(t, dst, "article/gb", "")
+	govs := []string{
+		"a1111111111111111111111111111111",
+		"b2222222222222222222222222222222",
+		"c3333333333333333333333333333333",
+	}
+	for i, id := range govs {
+		seedGovernArticle(t, dst, fmt.Sprintf("article/gov%d", i), id)
+	}
+
+	// 源节点：提案事件（提案人自投第 1 票）+ 2 条投票事件 = remove 门槛 3 票。
+	t0 := time.Now().UnixMilli()
+	seedGovernEvent(t, src, eventIDHex(11), govs[0], t0, `{"action":"proposal","proposal_id":"7",`+
+		`"target_item_id":"article/gb","verb":"remove","content_hash":"`+targetHash+`",`+
+		`"content_version":0,"revoked_rev":0}`)
+	seedGovernEvent(t, src, eventIDHex(12), govs[1], t0+1, `{"action":"vote","proposal_id":"7","choice":"yes"}`)
+	seedGovernEvent(t, src, eventIDHex(13), govs[2], t0+2, `{"action":"vote","proposal_id":"7","choice":"yes"}`)
+
+	cfg := Config{TransportFor: tr, IssuerPubKeys: map[string]string{srcIssuer: pub}}
+	cfg.RunOnce(context.Background(), dst, []Peer{{URL: url}}, func(string, ...any) {})
+
+	views, err := dst.ListProposalViews(deriveGovernRoster(dst))
+	if err != nil || len(views) != 1 {
+		t.Fatalf("缓存节点应有 1 条提案 err=%v views=%+v", err, views)
+	}
+	if views[0].Status != store.GovernStatusEffective || views[0].ExecutedResult == "" {
+		t.Fatalf("票满门槛后应判为生效（名册未传到 ⇒ 停在 pending）: %+v", views[0])
+	}
+}
+
+// seedGovernArticle 在指定节点落一篇 ≥ArticleMinRunes 的文章（名册质量门槛），
+// 并按需直写归属缓存列（归属只由导入/投稿产生，测试无公开写路径），返回其内容哈希。
+func seedGovernArticle(t *testing.T, st *store.Store, itemID, authorID string) string {
+	t.Helper()
+	body := "正文" + strings.Repeat("文", 200)
+	hash := protocol.SHA256Hex([]byte(body))
+	if err := st.UpsertArticle(store.Article{
+		ItemID: itemID, Title: itemID, BodyMD: body,
+		ContentHash: hash, UpdatedAt: "2026-01-02T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("UpsertArticle(%s): %v", itemID, err)
+	}
+	if authorID == "" {
+		return hash
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(st.DataDir(), "base.db"))+"?mode=rw")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`UPDATE items SET author_id=?, author_sig=? WHERE item_id=?`, authorID, "00", itemID); err != nil {
+		t.Fatalf("set cached author: %v", err)
+	}
+	return hash
+}
+
+// seedGovernEvent 直落一条 govern.v1 事件行（写路径的验签由 internal/httpapi 覆盖）。
+func seedGovernEvent(t *testing.T, st *store.Store, eventID, actor string, createdAt int64, body string) {
+	t.Helper()
+	if err := st.PutEvent(store.Event{
+		EventID: eventID, ID: actor, Type: "govern.v1", BodyJSON: body, CreatedAt: createdAt,
+	}); err != nil {
+		t.Fatalf("PutEvent(%s): %v", eventID, err)
 	}
 }
 

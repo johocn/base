@@ -89,6 +89,15 @@ func (c Config) pullEvents(ctx context.Context, st *store.Store, hc *http.Client
 		if err := c.postEventSync(ctx, hc, p, "event", cur, &out); err != nil {
 			return total, err
 		}
+		// 治理事件才派生名册，且**整页只派生一次**（册子 §4.3）：派生要扫 items + articles + quizzes + videos，
+		// 纯评论 / 圈子页不该付这笔开销；本页只写事件与投影，不碰名册输入，故页内复用同一份安全。
+		var govRoster map[string]bool
+		for _, it := range out.Items {
+			if it.Type == "govern.v1" {
+				govRoster = deriveGovernRoster(st)
+				break
+			}
+		}
 		for _, it := range out.Items {
 			proj := parseEventProjection(it.Type, it.BodyJSON)
 			// 本地 received_at 用本机 now（不落对端的值）：游标口径必须与本地读接口一致。
@@ -103,7 +112,7 @@ func (c Config) pullEvents(ctx context.Context, st *store.Store, hc *http.Client
 				return total, err
 			}
 			// govern.v1 投影失败**不阻断整页反熵**：事件行才是权威来源，读接口可从事件重算。
-			if _, err := applySyncedGovernEvent(st, it); err != nil {
+			if _, err := applySyncedGovernEvent(st, it, govRoster); err != nil {
 				log.Printf("peersync: govern.v1 投影失败（事件行已落，读接口可从事件重算）: %v", err)
 			}
 			total++
@@ -296,7 +305,8 @@ func applySyncedGroupEvent(st *store.Store, it eventSyncItem) (bool, error) {
 // applySyncedGovernEvent 把对端来的 govern.v1 事件投影进本地 govern_* 两表（册子 §4.3）。
 // 投影是**幂等**的：重复事件静默忽略；冲突事件（已被更早的 (created_at,event_id) 占位）**不算错**；
 // 投影失败**不阻断事件行落地**（事件行才是权威来源，读接口可以从事件重算）。
-func applySyncedGovernEvent(st *store.Store, it eventSyncItem) (bool, error) {
+// roster 由调用方**每页派生一次**传入（见 pullEvents）；nil 视作空名册（settle 停在 pending）。
+func applySyncedGovernEvent(st *store.Store, it eventSyncItem, roster map[string]bool) (bool, error) {
 	if it.Type != "govern.v1" {
 		return false, nil
 	}
@@ -343,20 +353,25 @@ func applySyncedGovernEvent(st *store.Store, it eventSyncItem) (bool, error) {
 		return false, nil
 	}
 	// 投影后 settle（册子 §4.3 / §4.4）：proposal 与 vote **两支都要**——反熵不保证
-	// proposal 事件先于 vote 事件到达。名册派生失败按空名册降级（settle 停在 pending）；
-	// settle 失败只记日志、**不阻断整页反熵**（事件行才是权威来源，读接口可从事件重算）。
-	roster := map[string]bool{}
-	rows, err := st.ContributorRoster()
-	if err != nil {
-		log.Printf("peersync: 治理名册派生失败，按空名册降级（settle 停在 pending）: %v", err)
-	} else {
-		roster = make(map[string]bool, len(rows))
-		for _, c := range rows {
-			roster[c.ID] = true
-		}
-	}
+	// proposal 事件先于 vote 事件到达。settle 失败只记日志、**不阻断整页反熵**
+	//（事件行才是权威来源，读接口可从事件重算）。
 	if err := st.SettleGovernProposal(pid, roster); err != nil {
 		log.Printf("peersync: 治理提案 %d 生效判定失败（事件行已落，读接口可从事件重算）: %v", pid, err)
 	}
 	return true, nil
+}
+
+// deriveGovernRoster 派生本节点治者名册（册子 §4.3）；失败按空名册降级（settle 停在 pending）。
+// 返回 nil 与空集等价（Go 的 nil map 读为假），调用方无需再判错。
+func deriveGovernRoster(st *store.Store) map[string]bool {
+	rows, err := st.ContributorRoster()
+	if err != nil {
+		log.Printf("peersync: 治理名册派生失败，按空名册降级（settle 停在 pending）: %v", err)
+		return nil
+	}
+	set := make(map[string]bool, len(rows))
+	for _, c := range rows {
+		set[c.ID] = true
+	}
+	return set
 }
