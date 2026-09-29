@@ -5,6 +5,7 @@
       <view class="bar-acts">
         <text class="act" @click="paste">粘贴续期码</text>
         <text class="act" @click="pasteReceipt">粘贴回执</text>
+        <text class="act" @click="signRequest">代签请求码</text>
       </view>
     </view>
 
@@ -402,6 +403,25 @@ async function pasteReceipt() {
     await load();
     await loadPending();
     await refresh();
+  } catch (e) {
+    error.value = e instanceof GroupError ? e.message : (e as Error).message;
+  }
+}
+
+/**
+ * 代签：同伴拿到发起者的 `base2:` 签名请求码后，在**本机**对这份草稿签名，回出 `base3:` 回执码。
+ * 这是多签收集通道的另一半（补充 15）：没有它，M4 / M5 在真机上凑不够签名。
+ */
+async function signRequest() {
+  if (!opts.value) return;
+  error.value = '';
+  notice.value = '';
+  const code = await ask('代签请求码', '粘贴 base2: 开头的签名请求码');
+  if (code === null || code.trim() === '') return;
+  try {
+    const receipt = await signSigRequest(opts.value, code.trim());
+    uni.setClipboardData({ data: receipt });
+    notice.value = '回执已复制，请发回给发起者（由发起者「粘贴回执」提交）';
   } catch (e) {
     error.value = e instanceof GroupError ? e.message : (e as Error).message;
   }
