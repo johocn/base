@@ -118,3 +118,18 @@ func TestIdentityIDVectors(t *testing.T) {
 		}
 	}
 }
+
+func TestValidSlug(t *testing.T) {
+	ok := []string{"a", "c1", "course-2026", strings.Repeat("a", 64), "a-b-c"}
+	for _, s := range ok {
+		if !ValidSlug(s) {
+			t.Fatalf("ValidSlug(%q) = false, want true", s)
+		}
+	}
+	bad := []string{"", "-a", "A", "a_b", "中文", "a/b", strings.Repeat("a", 65)}
+	for _, s := range bad {
+		if ValidSlug(s) {
+			t.Fatalf("ValidSlug(%q) = true, want false", s)
+		}
+	}
+}

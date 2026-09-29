@@ -28,3 +28,26 @@ func IdentityID(pubHex string) (string, error) {
 
 // IsIdentityID 校验身份 id 是否为 32 字符小写十六进制。
 func IsIdentityID(id string) bool { return isHex32(id) }
+
+// ValidSlug 校验 slug 形态（册子 #25 §2.4）：[a-z0-9][a-z0-9-]{0,63}，总长 1..64。
+// 这是契约级规则：投稿 item_id 的 slug 段、导入器产出的 category slug 都按它判定，
+// 故落在 protocol 而非任一调用方包内，避免两处口径漂移。
+func ValidSlug(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isAlnum := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+		if i == 0 {
+			if !isAlnum {
+				return false
+			}
+			continue
+		}
+		if !isAlnum && c != '-' {
+			return false
+		}
+	}
+	return true
+}

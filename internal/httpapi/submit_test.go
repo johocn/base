@@ -16,12 +16,12 @@ func TestValidSlug(t *testing.T) {
 	ok := []string{"a", "abc", "a1", "0", "a-b-c", "a" + repeat("b", 63)}
 	bad := []string{"", "-a", "A", "a_b", "a b", "é", "a" + repeat("b", 64), "a/b"}
 	for _, s := range ok {
-		if !validSlug(s) {
+		if !protocol.ValidSlug(s) {
 			t.Fatalf("应合法: %q", s)
 		}
 	}
 	for _, s := range bad {
-		if validSlug(s) {
+		if protocol.ValidSlug(s) {
 			t.Fatalf("应非法: %q", s)
 		}
 	}

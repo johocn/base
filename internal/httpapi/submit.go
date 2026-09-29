@@ -30,32 +30,11 @@ const (
 	maxTitleRunes = 200
 )
 
-// validSlug 按册子 §2.4：[a-z0-9][a-z0-9-]{0,63}（总长 ≤ 64）。
-func validSlug(s string) bool {
-	if len(s) == 0 || len(s) > 64 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		isAlnum := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-		if i == 0 {
-			if !isAlnum {
-				return false
-			}
-			continue
-		}
-		if !isAlnum && c != '-' {
-			return false
-		}
-	}
-	return true
-}
-
 // splitSubmitItemID 校验 item_id 形态并返回 slug；code 非空即失败，
 // 取值 item_id_invalid（形态/前缀/slug 不合法，含 course/ 前缀）或 item_type_mismatch（册子 §2.4）。
 func splitSubmitItemID(itemID, typ string) (slug, code string) {
 	prefix, rest, ok := strings.Cut(itemID, "/")
-	if !ok || (prefix != itemTypeArticle && prefix != itemTypeQuiz) || !validSlug(rest) {
+	if !ok || (prefix != itemTypeArticle && prefix != itemTypeQuiz) || !protocol.ValidSlug(rest) {
 		return "", "item_id_invalid"
 	}
 	if prefix != typ {
