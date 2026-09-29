@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { childrenOf, lessonNo, splitCourses } from './course-tree';
+import {
+  childrenOf,
+  coursesOfCategory,
+  lessonOfCarrier,
+  lessonNo,
+  splitCategories,
+  splitCourses,
+} from './course-tree';
 import type { ItemRow, SegmentRow } from './types';
 
 function item(itemId: string, type: string): ItemRow {
@@ -86,5 +93,70 @@ describe('lessonNo', () => {
 
   it('不在清单里返回 0', () => {
     expect(lessonNo(segs, 'course/c1/lesson/l9')).toBe(0);
+  });
+});
+
+describe('splitCategories', () => {
+  it('取 source=category 的条目，按 itemId 升序，不改动入参', () => {
+    const items = [
+      item('category/zz', 'category'),
+      item('category/aa', 'category'),
+      item('course/c1', 'course'),
+    ];
+    const snapshot = [...items];
+    expect(splitCategories(items).map((c) => c.itemId)).toEqual(['category/aa', 'category/zz']);
+    expect(items).toEqual(snapshot);
+  });
+
+  it('无分类时返回空数组（旧包兼容：首页退化为两级）', () => {
+    expect(splitCategories([item('course/c1', 'course')])).toEqual([]);
+  });
+});
+
+describe('coursesOfCategory', () => {
+  const cat = item('category/math', 'category');
+  const c1 = item('course/c1', 'course');
+  const c2 = item('course/c2', 'course');
+
+  it('按清单 seq 升序解析课程，乱序入参也按 seq', () => {
+    const segs = [
+      seg('category/math', 2, 'course', 'course/c2'),
+      seg('category/math', 0, 'digest', '简介'),
+      seg('category/math', 1, 'course', 'course/c1'),
+    ];
+    expect(coursesOfCategory(cat.itemId, [c1, c2], segs).map((c) => c.itemId)).toEqual([
+      'course/c1',
+      'course/c2',
+    ]);
+  });
+
+  it('悬空引用静默跳过，不报错、不影响其它课程', () => {
+    const segs = [
+      seg('category/math', 1, 'course', 'course/nope'),
+      seg('category/math', 2, 'course', 'course/c1'),
+    ];
+    expect(coursesOfCategory(cat.itemId, [c1], segs).map((c) => c.itemId)).toEqual(['course/c1']);
+  });
+
+  it('只认自己 itemId 的 segments 行', () => {
+    const segs = [
+      seg('category/other', 1, 'course', 'course/c1'),
+      seg('category/math', 1, 'course', 'course/c2'),
+    ];
+    expect(coursesOfCategory(cat.itemId, [c1, c2], segs).map((c) => c.itemId)).toEqual(['course/c2']);
+  });
+});
+
+describe('lessonOfCarrier', () => {
+  it('课程内载体返回其课时 id', () => {
+    expect(lessonOfCarrier('course/c1/lesson/l1/article/a1')).toBe('course/c1/lesson/l1');
+    expect(lessonOfCarrier('course/c1/lesson/l2/quiz/q1')).toBe('course/c1/lesson/l2');
+  });
+
+  it('独立文章 / 独立题库 / 课程与课时自身返回空串', () => {
+    expect(lessonOfCarrier('article/a1')).toBe('');
+    expect(lessonOfCarrier('quiz/q1')).toBe('');
+    expect(lessonOfCarrier('course/c1')).toBe('');
+    expect(lessonOfCarrier('course/c1/lesson/l1')).toBe('');
   });
 });
