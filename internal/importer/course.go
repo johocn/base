@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/johocn/base/internal/protocol"
 	"github.com/johocn/base/internal/store"
 )
 
@@ -35,6 +36,35 @@ func resolvePlacement(meta map[string]string, kind, slug, filename string) (plac
 	}
 	p.ItemID = fmt.Sprintf("course/%s/lesson/%s/%s/%s", course, lesson, kind, slug)
 	return p, nil
+}
+
+// validateCategories 是导入器侧的**硬校验**（册子 §3.4），必须在任何写库之前执行，
+// 失败即整批退出、不产出任何包——静默取其一会让「哪一份声明生效」取决于文件遍历顺序，
+// 产生不可复现的导出结果。
+//
+// 三条判定：
+//  1. `category` 非空时必须是合法 slug（契约级 protocol.ValidSlug）；
+//  2. 声明了 `category` 就必须有 `course`（分类只承载课程归属，孤立分类是配置错误）；
+//  3. 一个 course 至多属一个分类——出现两个不同的非空 category 即报错。
+//     空 category 不参与判定：它就是「该课程进未归类」，不是第二个分类。
+func validateCategories(items []parsedMD) error {
+	seen := map[string]string{}
+	for _, it := range items {
+		if it.category == "" {
+			continue
+		}
+		if !protocol.ValidSlug(it.category) {
+			return fmt.Errorf("importer: %s 的 front-matter `category=%s` 不是合法 slug（[a-z0-9][a-z0-9-]{0,63}）", it.name, it.category)
+		}
+		if it.p.Course == "" {
+			return fmt.Errorf("importer: %s 声明了 category=%s 但没有 course（分类只承载课程归属）", it.name, it.category)
+		}
+		if prev, ok := seen[it.p.Course]; ok && prev != it.category {
+			return fmt.Errorf("importer: 课程 %s 同时声明了分类 %s 与 %s（一个课程至多属一个分类，册子 §3.4）", it.p.Course, prev, it.category)
+		}
+		seen[it.p.Course] = it.category
+	}
+	return nil
 }
 
 // mergeChildren 是容器清单的合并式重算（册子 §4.2 规则 6 的落地口径）：
@@ -128,6 +158,97 @@ func kindOf(itemID string) string {
 		return ""
 	}
 	return parts[len(parts)-2]
+}
+
+// rebuildCategories 全量重算分类容器（册子 §3.1 / §3.2）。
+//
+// 与 lesson / course 容器**刻意不同**：分类清单是「本 Run 声明」的快照，**不做 mergeChildren 合并**。
+// 合并会让课程换分类后仍留在旧分类清单里（AC 3 失败），也会让悬空的 course 引用永久沉淀。
+//
+// 覆盖集合 = 本 Run 声明的分类 ∪ 库中既有的分类：
+// 未被声明的既有分类被重写成「无课程行」的容器（title / digest 沿用既有），
+// 手机端跳过空清单分类（册子 §5.2），故不会出现空分组。
+// 返回失败明细，不整批失败（与 rebuildContainers 同口径）。
+func rebuildCategories(st *store.Store, items []parsedMD) []string {
+	bySlug := map[string][]string{} // slug → cid
+	title := map[string]string{}
+	digest := map[string]string{}
+	seen := map[string]bool{} // "<slug>/<cid>"：同一分类下的同一课程只收一次
+	for _, it := range items {
+		if it.p.Course == "" || it.category == "" {
+			continue
+		}
+		if key := it.category + "/" + it.p.Course; !seen[key] {
+			seen[key] = true
+			bySlug[it.category] = append(bySlug[it.category], it.p.Course)
+		}
+		if title[it.category] == "" {
+			title[it.category] = it.categoryTitle
+		}
+		if digest[it.category] == "" {
+			digest[it.category] = it.categoryDigest
+		}
+	}
+
+	existing, err := st.ListItems("active")
+	if err != nil {
+		return []string{"列出既有分类失败: " + err.Error()}
+	}
+	slugs := map[string]bool{}
+	for slug := range bySlug {
+		slugs[slug] = true
+	}
+	for _, it := range existing {
+		if it.Source != "category" || !strings.HasPrefix(it.ItemID, "category/") {
+			continue
+		}
+		slug := strings.TrimPrefix(it.ItemID, "category/")
+		slugs[slug] = true
+		if title[slug] == "" {
+			title[slug] = it.Title
+		}
+	}
+
+	ordered := make([]string, 0, len(slugs))
+	for slug := range slugs {
+		ordered = append(ordered, slug)
+	}
+	sort.Strings(ordered)
+
+	errs := []string{}
+	for _, slug := range ordered {
+		itemID := "category/" + slug
+		if digest[slug] == "" {
+			segs, err := st.ListSegments(itemID)
+			if err != nil {
+				errs = append(errs, itemID+": "+err.Error())
+				continue
+			}
+			digest[slug] = digestTextOf(segs)
+		}
+		courses := append([]string{}, bySlug[slug]...)
+		sort.Strings(courses)
+
+		segs := []store.Segment{}
+		seq := 1
+		if digest[slug] != "" {
+			segs = append(segs, store.Segment{Seq: 0, Kind: "digest", Text: digest[slug]})
+		}
+		for _, cid := range courses {
+			segs = append(segs, store.Segment{Seq: seq, Kind: "course", Text: "course/" + cid})
+			seq++
+		}
+		t := title[slug]
+		if t == "" {
+			t = slug
+		}
+		if err := st.UpsertSegmentItem(store.SegmentItem{
+			ItemID: itemID, Source: "category", Type: "category", Title: t, Segments: segs,
+		}); err != nil {
+			errs = append(errs, itemID+": "+err.Error())
+		}
+	}
+	return errs
 }
 
 // ensureLessonChild 把一个载体 id 并入课时清单（import-video 用）。

@@ -143,6 +143,7 @@ type parsedMD struct {
 	p                                                    placement
 	doc                                                  Doc // kind == article 时有意义
 	courseTitle, courseDigest, lessonTitle, lessonDigest string
+	category, categoryTitle, categoryDigest              string
 }
 
 // Run 导入目录下全部 *.md（按文件名升序），幂等覆盖同 slug 条目。
@@ -177,7 +178,10 @@ func Run(st *store.Store, dir string, opts Options) (Result, error) {
 		it := parsedMD{
 			name: name, raw: raw,
 			courseTitle: meta["course_title"], courseDigest: meta["course_digest"],
-			lessonTitle: meta["lesson_title"], lessonDigest: meta["lesson_digest"],
+			category:       strings.TrimSpace(meta["category"]),
+			categoryTitle:  meta["category_title"],
+			categoryDigest: meta["category_digest"],
+			lessonTitle:    meta["lesson_title"], lessonDigest: meta["lesson_digest"],
 		}
 		if meta["type"] == "quiz" {
 			q, err := ParseQuiz(name, raw)
@@ -211,6 +215,11 @@ func Run(st *store.Store, dir string, opts Options) (Result, error) {
 		items = append(items, it)
 	}
 
+	// 阶段 1.5：分类硬校验（册子 §3.4）。必须在任何写库之前失败：失败即整批退出、不产出任何包。
+	if err := validateCategories(items); err != nil {
+		return Result{}, err
+	}
+
 	// 阶段 2：写全部载体。
 	for _, it := range items {
 		var err error
@@ -229,6 +238,13 @@ func Run(st *store.Store, dir string, opts Options) (Result, error) {
 
 	// 阶段 3：合并式重建受影响容器。
 	for _, e := range rebuildContainers(st, items) {
+		res.Failed++
+		res.Errors = append(res.Errors, e)
+	}
+
+	// 阶段 3.5：分类容器全量重算（册子 §3.2）。必须在课程/课时容器重建之后，
+	// 因为它要读「库中既有的分类」，而不依赖本次 Run 之外的信息。
+	for _, e := range rebuildCategories(st, items) {
 		res.Failed++
 		res.Errors = append(res.Errors, e)
 	}
