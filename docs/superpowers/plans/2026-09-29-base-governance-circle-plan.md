@@ -3102,8 +3102,8 @@ git push origin master
 
 | # | Task | commit | 实测 |
 |---|---|---|---|
-| 1 | `groups` 三列 + 席位/贡献度派生 | — | 待填 |
-| 2 | `group.v1` roster v2 多签与门槛 | — | 待填 |
+| 1 | `groups` 三列 + 席位/贡献度派生 | `7e7dac5` | `go build`/`vet` 干净；`go test ./... -count=1` 全包 ok（`c9ac6a5` 补三处文件尾换行） |
+| 2 | `group.v1` roster v2 多签与门槛 | `0c048a6` | `go build`/`vet` 干净；`go test ./... -count=1` 8 包全 ok；`TestRosterV2*` 8 用例（含 3 子例）全 PASS |
 | 3 | 读权分支（开放匿名 / 封闭签名） | — | 待填 |
 | 4 | 反熵接收侧 v2 三列 + 信封 | — | 待填 |
 | 5 | `core/group.ts` v2（双形态 / 多签码 / 信封链） | — | 待填 |
@@ -3117,3 +3117,17 @@ git push origin master
 ## 执行期更正（实施后回填，后续 Task 请以本节为准）
 
 （执行时在此追加：与计划的偏差、实测发现、口径更正。每条写清「计划怎么写的 / 实际怎么做的 / 为什么」。编号从**更正 15** 起——#31 计划已用到更正 14。）
+
+**更正 15（Task 2）测试代码与实况不符**。计划 Step 2/6 写的是 `st, ts := newTestServer(t)`、`doJSONMap(t, …, map[…]any{…})`、`sigHeaders(…)`、`group_id` 用 `"g1"`，实况是：`newTestServer` 返回 **3 个值**（`st, _, ts`）、`doJSONMap` 第二参是 **string body**、**不存在** `sigHeaders`、`group_id` 必须是 **32 hex**（`isHexN(gid,16)`）。实际做法：新文件 `internal/httpapi/group_roster_test.go` 按 `testsupport_test.go` / `group_test.go` 的真实体例重写，并自建 `postRosterV2(t, seed, baseURL, eventID, createdAt, body)`——多签载荷要用**同一个** `created_at`，故不能复用内部用 `time.Now()` 的 `groupEventBody`。
+
+**更正 16（Task 2）测试侧不能重复声明签名域常量**。计划 Step 2 让测试文件再写一份 `const rosterApprovalDomain`，但测试与实现同属 `package httpapi`，重复声明编译不过。实际做法：测试侧改名 `rosterDomainWant = "base/group-roster-v2"`，保住「两处独立写、不一致就红」的校验意图。
+
+**更正 17（Task 2）补齐 16 落地的 store 侧改动**。补充 16 要求「新客户端建开放圈 ⇒ body 带 `encrypted:0`，节点按 0 落库」，但 Task 1 的 `PutGroupRoster` v1 INSERT **硬编码** encrypted=1，会把这个 0 吃掉。实际做法：`internal/store/group.go` 的 v1 INSERT 改用调用方解析好的 `r.Encrypted`（UPDATE 分支仍不动 encrypted，形态建圈时定死），并在方法注释里写明缺省口径。因此 Task 2 的提交范围比计划多一个文件：`internal/store/group.go`。
+
+**更正 18（Task 2）`member_ids` 空数组只有 `dissolve` 放行**。计划 Step 4 的 `len(items)==0` 一律拒，但补充 11 要求解散事件把 `member_ids_json` 写成 `[]` ⇒ 计划里的解散用例（`TestRosterV2DissolveQuorumSatisfied`）按计划代码根本不可达。实际做法：`> maxGroupMembers` 恒拒；`==0` 仅当 `sub == subDissolve` 放行；其余 sub 仍要求 1..maxGroupMembers。
+
+**更正 19（Task 2）`join` 的「签名者集合恒等于 {actor}」必须真判**。补充 9 写「签名者集合恒等于 `{actor}`（自己签自己）」，但计划 `rosterQuorumError` 只判了 `len(signers) != 1`，没判那唯一签名者是不是发起者本人。实际做法：`rosterQuorumError` 加首个参数 `actor string`，`subJoin` 分支判 `len(signers) != 1 || !signers[actor] || r.Encrypted != 0`。`TestRosterV2JoinOpenOnly` 里「换成创建者签名提交同一 join」的用例正是这条的负向断言。
+
+**更正 20（Task 2）删掉空分支**。计划 `parseGroupRosterV2` 里有 `if r.Encrypted == 0 && r.Sub == subJoin { /* 只有注释 */ }` 的空分支（与 Task 1 的占位空分支同族）：真判定在更正 19 与 `handleGroupRosterV2` 的封闭圈预判里，空分支只是噪音，已删。
+
+**更正 21（留给 Task 5，未修）客户端 v2 body 的 `action` 值写错**。计划第 2066 行 `submitRoster` 里 `body.action = 'roster_v2'`，但：节点按 `action:"roster"` + body 有无 `sigs` 分流（本 Task 已这样实现），补充 4 的多签待签载荷里 `action` 也固定成 `"roster"`（客户端 `approvalFields` 同）。⇒ **Task 5 实施时必须改成 `action: 'roster'`**，否则 v2 名单在真机上会被节点判 `event_param_invalid`（400）。
