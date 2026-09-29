@@ -24,6 +24,7 @@ const (
 // 新增类型 = 在此加一行 + 在 handleEventPost 的 switch 里加一个分支，不改验签管线。
 var eventTypeRegistry = map[string]struct{}{
 	"comment.v1": {},
+	"group.v1":   {},
 }
 
 type eventReq struct {
@@ -56,8 +57,12 @@ func (s *Server) handleEventPost(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthErr(w, http.StatusTooManyRequests, "event_rate_limited")
 		return
 	}
-	if req.Type == "comment.v1" {
+	switch req.Type {
+	case "comment.v1":
 		s.handleCommentEvent(w, actor, req, createdAt)
+		return
+	case "group.v1":
+		s.handleGroupEvent(w, actor, req, createdAt)
 		return
 	}
 	s.putBareEvent(w, actor, req, createdAt)
@@ -94,34 +99,7 @@ func (s *Server) handleCommentEvent(w http.ResponseWriter, actor string, req eve
 		s.writeError(w, http.StatusBadRequest, "event_param_invalid")
 		return
 	}
-	// 归属（§3.4）：内容签名覆盖 canonical({event_id,type,created_at,body})，与请求头无关，
-	// 因此事件被反熵搬到别的节点后仍可独立验签。
-	signBytes, err := protocol.Canonicalize(map[string]any{
-		"event_id":   req.EventID,
-		"type":       req.Type,
-		"created_at": req.CreatedAt,
-		"body":       rawBody,
-	})
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "event_param_invalid")
-		return
-	}
-	if !isHexN(req.Sig, 64) {
-		s.writeAuthErr(w, http.StatusForbidden, "event_sig_invalid")
-		return
-	}
-	it, found, err := s.st.LookupIdentity(actor)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if !found {
-		s.writeAuthErr(w, http.StatusForbidden, "identity_unregistered")
-		return
-	}
-	valid, err := protocol.Verify(it.PubKey, signBytes, req.Sig)
-	if err != nil || !valid {
-		s.writeAuthErr(w, http.StatusForbidden, "event_sig_invalid")
+	if !s.verifyEventSig(w, actor, req, rawBody) {
 		return
 	}
 	// 已审核删除的评论不允许再落（否则删块会被同一条重发复活）。
@@ -175,6 +153,40 @@ func (s *Server) handleCommentEvent(w http.ResponseWriter, actor string, req eve
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"event_id": req.EventID, "payload_cid": payloadCID, "received_at": now,
 	})
+}
+
+// verifyEventSig 校验事件归属签名：内容签名覆盖 canonical({event_id,type,created_at,body})，
+// 与请求头无关，因此事件被反熵搬到别的节点后仍可独立验签（册子 §3.4）。失败时已写好响应。
+func (s *Server) verifyEventSig(w http.ResponseWriter, actor string, req eventReq, rawBody map[string]any) bool {
+	signBytes, err := protocol.Canonicalize(map[string]any{
+		"event_id":   req.EventID,
+		"type":       req.Type,
+		"created_at": req.CreatedAt,
+		"body":       rawBody,
+	})
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "event_param_invalid")
+		return false
+	}
+	if !isHexN(req.Sig, 64) {
+		s.writeAuthErr(w, http.StatusForbidden, "event_sig_invalid")
+		return false
+	}
+	it, found, err := s.st.LookupIdentity(actor)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	if !found {
+		s.writeAuthErr(w, http.StatusForbidden, "identity_unregistered")
+		return false
+	}
+	valid, err := protocol.Verify(it.PubKey, signBytes, req.Sig)
+	if err != nil || !valid {
+		s.writeAuthErr(w, http.StatusForbidden, "event_sig_invalid")
+		return false
+	}
+	return true
 }
 
 // parseCommentBody 校验 comment.v1 的 body；返回的 map 保留**客户端原始键集**——

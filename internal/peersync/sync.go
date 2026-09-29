@@ -30,14 +30,14 @@ func (r RoundResult) String() string {
 		r.Peer, r.ContentVersion, r.PackID, r.Imported, r.Equal, r.Missing, r.Extra, r.Fetched, r.BadFrames, r.NoReplica)
 }
 
-// ownershipIndex 汇总本地「声明持有」的块归属：内容包的 media_meta 声明块序列 + 评论事件引用的正文块。
+// ownershipIndex 汇总本地「声明持有」的块归属：内容包的 media_meta 声明块序列 + 事件（评论 / 小组）引用的正文块。
 // 少了后者，评论正文块在缓存节点上无归属可挂，永远拉不下来（册子验收 8）。
 func ownershipIndex(st *store.Store) (map[string]store.BlobRef, error) {
 	idx, err := st.MediaChunkIndex()
 	if err != nil {
 		return nil, err
 	}
-	comments, err := st.CommentBlobIndex()
+	comments, err := st.EventBlobIndex()
 	if err != nil {
 		return nil, err
 	}

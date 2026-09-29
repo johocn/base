@@ -60,28 +60,30 @@ func (s *Store) ListComments(targetID string, cursorTS int64, cursorID string, l
 	return out, rows.Err()
 }
 
-// CommentBlobIndex 返回评论正文块 → 归属事件的映射，来源是 events.payload_cid。
-//
-// 为什么需要它：反熵补齐块时只认 media_meta 的声明块序列，评论正文不在其中，
-// 缓存节点因此永远拉不到正文块（册子验收 8）。事件行就是正文块的引用方
-// （§0.2 #4「杜绝写了块却没人引用」），故以事件为归属。
-func (s *Store) CommentBlobIndex() (map[string]BlobRef, error) {
-	rows, err := s.db.Query(`SELECT event_id,payload_cid FROM events
-		WHERE type='comment.v1' AND payload_cid IS NOT NULL AND payload_cid<>''`)
+// EventBlobIndex 返回事件正文块 → 归属事件的映射，来源是 events.payload_cid。
+// ① 类评论正文与 ② 类小组密文都挂在这里：两者都是「块被事件引用」，
+// 少了归属，缓存节点永远拉不下来、scrub 还会把块当孤儿删掉（册子 §4.4）。
+func (s *Store) EventBlobIndex() (map[string]BlobRef, error) {
+	rows, err := s.db.Query(`SELECT type,event_id,payload_cid FROM events
+		WHERE type IN ('comment.v1','group.v1') AND payload_cid IS NOT NULL AND payload_cid<>''`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := map[string]BlobRef{}
 	for rows.Next() {
-		var eventID, cid string
-		if err := rows.Scan(&eventID, &cid); err != nil {
+		var typ, eventID, cid string
+		if err := rows.Scan(&typ, &eventID, &cid); err != nil {
 			return nil, err
 		}
 		if _, ok := out[cid]; ok {
 			continue
 		}
-		out[cid] = BlobRef{BlobID: cid, ItemID: "comment:" + eventID}
+		prefix := "comment:"
+		if typ == "group.v1" {
+			prefix = "group:"
+		}
+		out[cid] = BlobRef{BlobID: cid, ItemID: prefix + eventID}
 	}
 	return out, rows.Err()
 }

@@ -162,6 +162,19 @@ var schemaStatements = []string{
 		updated_at INTEGER NOT NULL
 	)`,
 
+	// groups：小组名单投影（第 9 册 §4.2）。**节点侧唯一的组状态**——
+	// 只含 id 列表与 epoch，不含任何密钥、不解密任何内容（总纲 §3.1）。
+	// 首个 epoch=1 的 roster 事件锁定 creator_id；后续事件必须同 actor 且 epoch 严格更大。
+	// event_id 指向最新一条 roster 事件（组名 name 在它的 body_json 里，故本表不存 name）。
+	`CREATE TABLE IF NOT EXISTS groups(
+		group_id        TEXT PRIMARY KEY,
+		creator_id      TEXT NOT NULL,
+		epoch           INTEGER NOT NULL,
+		member_ids_json TEXT NOT NULL,
+		event_id        TEXT NOT NULL,
+		updated_at      INTEGER NOT NULL
+	)`,
+
 	// govern_proposals / govern_votes：审批治理的提案与票（第 3 册 §5.1）。
 	// 只存本节点，不进 events、不参与反熵、不跨节点同步（§2.5）。
 	// 两张都是新增表，schemaStatements 的 CREATE TABLE IF NOT EXISTS 足够，无需 ALTER 补列。
