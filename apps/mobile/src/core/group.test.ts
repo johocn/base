@@ -24,13 +24,18 @@ import {
   createGroup,
   decodeInvite,
   decodeRosterRequest,
+  dissolveGroup,
   encodeInvite,
   encodeRosterRequest,
   fetchGroupMessages,
   governorSeats,
+  joinOpenGroup,
+  leaveGroup,
   openEnvelope,
   postGroupMessage,
   readSigReceipt,
+  removeMember,
+  renameGroup,
   resolveKeyChain,
   rotateGroup,
   sealEnvelope,
@@ -133,6 +138,28 @@ async function legacyInviteV1(storage: MemoryStorage, groupId: string, keyHex: s
     createdAt,
     sig,
   });
+}
+
+/**
+ * 造一个「两人圈」：A 建圈（离线出码），再把名单补成 [创建者, B]。
+ * 六个便捷入口都在**本地行**上读名单，故 remove / leave 需要第二名成员才不至于把名单清空
+ * （空名单只有 dissolve 放行）。
+ */
+async function twoMemberGroup(): Promise<{
+  a: ReturnType<typeof fixture>;
+  gid: string;
+  creatorId: string;
+  bId: string;
+}> {
+  const a = fixture();
+  gateOffline(a.o);
+  const created = await createGroup(a.o, { name: '读书', encrypted: true });
+  const bId = (await ensureLocalIdentity(fixture().storage)).id;
+  await a.repo.saveGroup({
+    ...created.group,
+    memberIdsJson: JSON.stringify([created.group.creatorId, bId]),
+  });
+  return { a, gid: created.group.groupId, creatorId: created.group.creatorId, bId };
 }
 
 describe('group', () => {
@@ -457,5 +484,117 @@ describe('group', () => {
 
     const err = await postGroupMessage(a.o, { groupId: 'a'.repeat(32), text: 'x' }).catch((e: unknown) => e);
     expect((err as GroupError).code).toBe('group_not_found');
+  });
+
+  it('六个 sub 的草稿码：epoch 与 roster_rev 都严格 +1（设计册 §3.8）', async () => {
+    const run = async (
+      sub: RosterDraft['sub'],
+      fn: (o: GroupOptions, gid: string, creatorId: string, bId: string) => Promise<{ requestCode: string }>,
+    ): Promise<RosterDraft> => {
+      const { a, gid, creatorId, bId } = await twoMemberGroup();
+      const cur = (await a.repo.getGroup(gid))!;
+      const { requestCode } = await fn(a.o, gid, creatorId, bId);
+      const d = decodeRosterRequest(requestCode);
+      const after = (await a.repo.getGroup(gid))!;
+      expect(d.sub).toBe(sub);
+      expect(d.epoch).toBe(cur.epoch + 1);
+      expect(d.rosterRev).toBe(cur.rosterRev + 1);
+      expect(after.epoch).toBe(cur.epoch + 1); // 本地换钥前推到**同一个**值（不出现「草稿 2、本地 3」的双推）
+      expect(after.rosterRev).toBe(cur.rosterRev + 1);
+      return d;
+    };
+
+    await run('rename', (o, gid) => renameGroup(o, gid, '新名'));
+    await run('rotate', (o, gid, c, b) => rotateGroup(o, gid, { memberIds: [c, b] }));
+    await run('remove', (o, gid, _c, b) => removeMember(o, gid, b));
+    await run('leave', (o, gid) => leaveGroup(o, gid));
+    const diss = await run('dissolve', (o, gid) => dissolveGroup(o, gid));
+    expect(diss.memberIds).toEqual([]); // 解散：名单清空（补充 11）
+  });
+
+  it('移出成员：提交的 body 带 envelopes，旧钥可解出新钥（AC 4 / M3 的提交侧镜像）', async () => {
+    const { a, gid, bId } = await twoMemberGroup();
+    const cur = (await a.repo.getGroup(gid))!;
+    const oldRow = (await a.repo.listGroupKeys(gid)).find((k) => k.epoch === cur.epoch)!;
+    const oldKey = hexToBytes(await groupKeyHex(a.storage, oldRow.keyCipher));
+
+    const rm = await removeMember(a.o, gid, bId);
+    expect(rm.envelopes).toHaveLength(1); // 名单变更 ⇒ 换钥并出信封
+
+    // m=1（移出后只剩创建者）⇒ remove 需 1 签
+    const mine = await signSigRequest(a.o, rm.requestCode);
+    await submitRoster(a.o, rm.requestCode, [mine], rm.envelopes);
+
+    const rows = await a.repo.listCommentOut(); // 断网 ⇒ 入队，wire 落在队列里
+    const wire = JSON.parse(rows[rows.length - 1]!.wire) as { body: Record<string, unknown> };
+    expect(wire.body.sub).toBe('remove');
+    expect(wire.body.epoch).toBe(cur.epoch + 1);
+    expect(wire.body.roster_rev).toBe(cur.rosterRev + 1);
+    const envs = wire.body.envelopes as Array<{ from_epoch: number; cipher: string }>;
+    expect(envs).toHaveLength(1);
+    expect(envs[0]!.from_epoch).toBe(cur.epoch); // 旧 epoch 封新钥
+
+    // 旧钥能解开信封 ⇒ 新钥，且与本地 epoch+1 的钥一致
+    const env: GroupEnvelope = { fromEpoch: envs[0]!.from_epoch, cipher: envs[0]!.cipher };
+    const newKey = openEnvelope(oldKey, env);
+    const localNew = hexToBytes(
+      await groupKeyHex(a.storage, (await a.repo.listGroupKeys(gid)).find((k) => k.epoch === cur.epoch + 1)!.keyCipher),
+    );
+    expect(bytesToHex(newKey)).toBe(bytesToHex(localNew));
+
+    // 另一台设备：本地只有 epoch cur 的钥，靠这一条信封即可补到 cur+1（AC 4 / M3）
+    const chain = resolveKeyChain(new Map([[cur.epoch, oldKey]]), [env], cur.epoch + 1);
+    expect(bytesToHex(chain!)).toBe(bytesToHex(localNew));
+  });
+
+  it('开放圈自助自加入：先匿名读拿节点 epoch / 名单，草稿 +1 且含自己，落本地行', async () => {
+    const a = fixture();
+    const gid = 'a'.repeat(32);
+    const creatorId = 'b'.repeat(32);
+    // 匿名读桩：本地无该圈行（未入圈），GET 却能成功 ⇒ 证明走的是匿名路径
+    a.http.routes.set(
+      `${BASE}/v1/group/${gid}`,
+      json({
+        group: {
+          group_id: gid,
+          creator_id: creatorId,
+          epoch: 4,
+          member_ids: [creatorId],
+          name: '开放读书',
+          encrypted: 0,
+          roster_rev: 7,
+          seat_count: 1,
+          governors: [creatorId],
+          envelopes: [],
+        },
+        events: [],
+        next_cursor: null,
+      }),
+    );
+    expect(await a.repo.getGroup(gid)).toBeNull();
+    // 提交态在线：登记 + 收事件都打桩
+    a.http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    a.http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'ignored', payload_cid: 'c'.repeat(32) }));
+
+    const r = await joinOpenGroup(a.o, gid);
+    expect(r.queued).toBe(false);
+
+    const evPost = a.http.posted.find((p) => p.url.endsWith('/v1/event'))!;
+    const wire = JSON.parse(decodeUtf8(evPost.body)) as { body: Record<string, unknown> };
+    expect(wire.body.action).toBe('roster');
+    expect(wire.body.sub).toBe('join');
+    expect(wire.body.encrypted).toBe(0); // 开放圈
+    expect(wire.body.epoch).toBe(5); // 节点值 4 + 1（epoch 猜错必被节点 409）
+    expect(wire.body.roster_rev).toBe(8); // 节点值 7 + 1
+    const me = (await ensureLocalIdentity(a.storage)).id;
+    expect(wire.body.member_ids).toEqual([creatorId, me]); // 节点名单 ∪ 自己
+
+    // 读回的名单落本地 ⇒ 出现在「我的圈子」；epoch / name 取自响应
+    const row = (await a.repo.getGroup(gid))!;
+    expect(row.encrypted).toBe(0);
+    expect(row.name).toBe('开放读书');
+    expect(row.epoch).toBe(4);
+    expect(row.rosterRev).toBe(7);
+    expect(JSON.parse(row.memberIdsJson)).toEqual([creatorId]);
   });
 });

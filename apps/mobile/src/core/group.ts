@@ -557,11 +557,14 @@ function buildGroupWireAt(ident: Identity, eventId: string, createdAt: number, b
 /**
  * 提交一次名单变更（册子 §3.4）。`receipts` 里只保留**验过的**那几条；门槛不足时**原地报错**——
  * 错误文案按册子 §6 的原位提示口径（「需 N 名签名（…），当前 M 名」）。
+ * `envelopes` 是轮换产出的「旧钥封新钥」信封，**不进签名域**（节点重建的待签载荷不含它），
+ * 只在非空时往 body 加 `envelopes` 键 —— 它正是成员「不粘码自动获新钥」的分发载体（册子 §3.5 / M3）。
  */
 export async function submitRoster(
   o: GroupOptions,
   requestCode: string,
   receipts: string[],
+  envelopes: GroupEnvelope[] = [],
 ): Promise<{ queued: boolean; epoch: number }> {
   const d = decodeRosterRequest(requestCode);
   // 1. 只留「针对这份草稿、签名有效」的回执；同一 id 只算一签（节点侧也去重，这里只是镜像）
@@ -590,6 +593,10 @@ export async function submitRoster(
     sigs: [...signers.values()],
   };
   if (d.name) body.name = d.name;
+  if (envelopes.length > 0) {
+    // 键名即节点读路径的契约（`group.go` 按 `{from_epoch, cipher}` 解包并原样回吐）
+    body.envelopes = envelopes.map((e) => ({ from_epoch: e.fromEpoch, cipher: e.cipher }));
+  }
   const wire = buildGroupWireAt(ident, d.eventId, d.createdAt, body);
   const { queued } = await submitWire(o, {
     eventId: d.eventId,
@@ -604,11 +611,14 @@ export async function submitRoster(
  * 便捷入口（建圈请求 / 开放圈自加入 / 改名 / 轮换 / 移出 / 退出 / 解散）
  * ------------------------------------------------------------------ */
 
-/** 读本地 `groups` 行 → 组草稿 → `base2:` 码。`bumpEpoch` 表达这次的名单变更是否同步前推 epoch。 */
+/**
+ * 读本地 `groups` 行 → 组草稿 → `base2:` 码。
+ * 设计册 §3.8：v2 名单的 `epoch` 与 `roster_rev` 必须**都严格递增**，故恒为 `cur + 1`（六个 sub 一视同仁）。
+ */
 export async function buildRosterRequest(
   o: GroupOptions,
   groupId: string,
-  input: { sub: RosterSub; memberIds: string[]; name?: string; bumpEpoch?: boolean },
+  input: { sub: RosterSub; memberIds: string[]; name?: string },
 ): Promise<string> {
   const cur = await o.repo.getGroup(groupId);
   if (!cur) throw new GroupError('group_not_found', '本地没有这个圈子');
@@ -617,7 +627,7 @@ export async function buildRosterRequest(
     eventId: bytesToHex(randomBytes(16)),
     groupId,
     sub: input.sub,
-    epoch: input.bumpEpoch ? cur.epoch + 1 : cur.epoch,
+    epoch: cur.epoch + 1,
     rosterRev: (cur.rosterRev || 0) + 1,
     memberIds: [...input.memberIds],
     encrypted: cur.encrypted,
@@ -627,44 +637,75 @@ export async function buildRosterRequest(
   return encodeRosterRequest(d);
 }
 
-/** 开放圈自助自加入：`sub='join'`、`encrypted=0`、只有自己一签（节点侧要求签名者恒等于 actor）。 */
+/** 先出草稿（用 `cur`）→ 本地换钥前推 epoch / rosterRev 到**同一个**值（顺序反了会双推）。 */
+async function draftThenRotate(
+  o: GroupOptions,
+  cur: GroupRow,
+  input: { sub: RosterSub; memberIds: string[]; name?: string },
+): Promise<{ requestCode: string; envelopes: GroupEnvelope[] }> {
+  const requestCode = await buildRosterRequest(o, cur.groupId, input);
+  const { envelope } = await localRotate(o, cur, input.memberIds);
+  return { requestCode, envelopes: envelope ? [envelope] : [] };
+}
+
+/**
+ * 开放圈自助自加入：`sub='join'`、`encrypted=0`、只有自己一签（节点侧要求签名者恒等于 actor）。
+ * 开放圈匿名可读 ⇒ 先**匿名**读拿节点的当前 `epoch` / `roster_rev` / 名单（epoch 猜错必被 409），
+ * 再把读回的名单落本地（这样它才会出现在「我的圈子」）。
+ */
 export async function joinOpenGroup(o: GroupOptions, groupId: string): Promise<{ queued: boolean }> {
   const ident = await ensureLocalIdentity(o.adapters.storage);
-  const cur = await o.repo.getGroup(groupId);
-  const memberIds = cur ? (JSON.parse(cur.memberIdsJson) as string[]) : [];
+  const res = await getGroupPage(o, groupId, {}, false);
+  if (res.status === 404) throw new GroupError('group_not_found', '圈子不存在或不是开放圈');
+  if (res.status !== 200) throw new GroupError('server', `读取圈子失败（HTTP ${res.status}）`);
+  const page = parseGroupPage(res, groupId);
+  const memberIds = [...page.group.memberIds];
   if (!memberIds.includes(ident.id)) memberIds.push(ident.id);
   const d: RosterDraft = {
     v: 2,
     eventId: bytesToHex(randomBytes(16)),
     groupId,
     sub: 'join',
-    epoch: (cur?.epoch ?? 0) + 1, // 节点要求 epoch 严格递增；本机未知的圈子按首个 epoch 出草稿
-    rosterRev: (cur?.rosterRev ?? 0) + 1,
+    epoch: page.group.epoch + 1,
+    rosterRev: page.group.rosterRev + 1,
     memberIds,
     encrypted: 0,
     createdAt: Date.now(),
   };
   const requestCode = encodeRosterRequest(d);
+  await o.repo.saveGroup({
+    groupId,
+    name: page.group.name,
+    creatorId: page.group.creatorId,
+    epoch: page.group.epoch,
+    encrypted: 0,
+    rosterRev: page.group.rosterRev,
+    memberIdsJson: JSON.stringify(page.group.memberIds),
+    joinedAt: new Date().toISOString(),
+  });
   const mine = await signSigRequest(o, requestCode);
   const { queued } = await submitRoster(o, requestCode, [mine]);
   return { queued };
 }
 
-/** 改名：`sub='rename'`、不带新名以外的东西。 */
-export async function renameGroup(o: GroupOptions, groupId: string, name: string): Promise<{ requestCode: string }> {
+/** 改名：`sub='rename'`。名单变更 ⇒ 同步换钥前推 epoch（设计册 §3.8）。 */
+export async function renameGroup(
+  o: GroupOptions,
+  groupId: string,
+  name: string,
+): Promise<{ requestCode: string; envelopes: GroupEnvelope[] }> {
   const cur = await o.repo.getGroup(groupId);
   if (!cur) throw new GroupError('group_not_found', '本地没有这个圈子');
-  const requestCode = await buildRosterRequest(o, groupId, {
+  return draftThenRotate(o, cur, {
     sub: 'rename',
     memberIds: JSON.parse(cur.memberIdsJson) as string[],
     name,
   });
-  return { requestCode };
 }
 
 /**
  * 轮换：新 epoch 钥 → 用旧钥封一个信封 → 本地写钥并前推 epoch → 组 `sub='rotate'` 草稿。
- * 返回 `envelopes` 供分发（节点读接口的 `envelopes` 字段即由它落库）。
+ * `envelopes` 随 `submitRoster` 入 body 分发（成员读接口即可解出新钥，册子 §3.5 / M3）。
  */
 export async function rotateGroup(
   o: GroupOptions,
@@ -673,40 +714,41 @@ export async function rotateGroup(
 ): Promise<{ requestCode: string; envelopes: GroupEnvelope[] }> {
   const cur = await o.repo.getGroup(groupId);
   if (!cur) throw new GroupError('group_not_found', '本地没有这个圈子');
-  // 先出草稿（epoch = cur+1、rosterRev = cur+1），本地换钥再前推到**同一个** epoch（顺序不可反）
-  const requestCode = await buildRosterRequest(o, groupId, {
-    sub: 'rotate',
-    memberIds: opts.memberIds,
-    bumpEpoch: true,
-  });
-  const { envelope } = await localRotate(o, cur, opts.memberIds);
-  return { requestCode, envelopes: envelope ? [envelope] : [] };
+  return draftThenRotate(o, cur, { sub: 'rotate', memberIds: opts.memberIds });
 }
 
-/** 移出成员：`sub='remove'` 草稿（**不**换钥、**不**推 epoch——换钥走 `rotateGroup`）。 */
+/** 移出成员：`sub='remove'`，名单去掉目标 ⇒ 同步换钥（被移出者拿不到新钥，M3）。 */
 export async function removeMember(
   o: GroupOptions,
   groupId: string,
   memberId: string,
-): Promise<{ requestCode: string }> {
+): Promise<{ requestCode: string; envelopes: GroupEnvelope[] }> {
   const cur = await o.repo.getGroup(groupId);
   if (!cur) throw new GroupError('group_not_found', '本地没有这个圈子');
   const members = (JSON.parse(cur.memberIdsJson) as string[]).filter((id) => id !== memberId);
-  return { requestCode: await buildRosterRequest(o, groupId, { sub: 'remove', memberIds: members }) };
+  return draftThenRotate(o, cur, { sub: 'remove', memberIds: members });
 }
 
 /** 退出圈子（需要一名治者确认，册子 §3.4）：名单去掉自己。 */
-export async function leaveGroup(o: GroupOptions, groupId: string): Promise<{ requestCode: string }> {
+export async function leaveGroup(
+  o: GroupOptions,
+  groupId: string,
+): Promise<{ requestCode: string; envelopes: GroupEnvelope[] }> {
   const ident = await ensureLocalIdentity(o.adapters.storage);
   const cur = await o.repo.getGroup(groupId);
   if (!cur) throw new GroupError('group_not_found', '本地没有这个圈子');
   const members = (JSON.parse(cur.memberIdsJson) as string[]).filter((id) => id !== ident.id);
-  return { requestCode: await buildRosterRequest(o, groupId, { sub: 'leave', memberIds: members }) };
+  return draftThenRotate(o, cur, { sub: 'leave', memberIds: members });
 }
 
-/** 解散圈子：名单清空（补充 11）。 */
-export async function dissolveGroup(o: GroupOptions, groupId: string): Promise<{ requestCode: string }> {
-  return { requestCode: await buildRosterRequest(o, groupId, { sub: 'dissolve', memberIds: [] }) };
+/** 解散圈子：名单清空（补充 11），同样换钥（名单变更一律换钥）。 */
+export async function dissolveGroup(
+  o: GroupOptions,
+  groupId: string,
+): Promise<{ requestCode: string; envelopes: GroupEnvelope[] }> {
+  const cur = await o.repo.getGroup(groupId);
+  if (!cur) throw new GroupError('group_not_found', '本地没有这个圈子');
+  return draftThenRotate(o, cur, { sub: 'dissolve', memberIds: [] });
 }
 
 /** 轮换：新 epoch 钥 → 用旧钥封一个信封 → 本地写钥并前推 epoch（册子 §3.5）。 */
