@@ -3104,7 +3104,7 @@ git push origin master
 |---|---|---|---|
 | 1 | `groups` 三列 + 席位/贡献度派生 | `7e7dac5` | `go build`/`vet` 干净；`go test ./... -count=1` 全包 ok（`c9ac6a5` 补三处文件尾换行） |
 | 2 | `group.v1` roster v2 多签与门槛 | `0c048a6` | `go build`/`vet` 干净；`go test ./... -count=1` 8 包全 ok；`TestRosterV2*` 8 用例（含 3 子例）全 PASS |
-| 3 | 读权分支（开放匿名 / 封闭签名） | — | 待填 |
+| 3 | 读权分支（开放匿名 / 封闭签名） | `a7a945f` | `go build`/`vet` 干净；`go test ./... -count=1` 10 包全 ok；`TestGroupRead*` 5 用例 + `TestGroupGet*` 3 用例 + `TestAuth*OutOfWindow/NonceReplay/BadSignature` 全 PASS；动过的 5 个文件 `gofmt -l` 无输出 |
 | 4 | 反熵接收侧 v2 三列 + 信封 | — | 待填 |
 | 5 | `core/group.ts` v2（双形态 / 多签码 / 信封链） | — | 待填 |
 | 6 | 圈子列表形态与治者面板 | — | 待填 |
@@ -3131,3 +3131,11 @@ git push origin master
 **更正 20（Task 2）删掉空分支**。计划 `parseGroupRosterV2` 里有 `if r.Encrypted == 0 && r.Sub == subJoin { /* 只有注释 */ }` 的空分支（与 Task 1 的占位空分支同族）：真判定在更正 19 与 `handleGroupRosterV2` 的封闭圈预判里，空分支只是噪音，已删。
 
 **更正 21（留给 Task 5，未修）客户端 v2 body 的 `action` 值写错**。计划第 2066 行 `submitRoster` 里 `body.action = 'roster_v2'`，但：节点按 `action:"roster"` + body 有无 `sigs` 分流（本 Task 已这样实现），补充 4 的多签待签载荷里 `action` 也固定成 `"roster"`（客户端 `approvalFields` 同）。⇒ **Task 5 实施时必须改成 `action: 'roster'`**，否则 v2 名单在真机上会被节点判 `event_param_invalid`（400）。
+
+**更正 22（Task 3）`authenticate` 必须用具名结果，且**不能**叫 `ok`**。计划 Step 3 要求「1–6 步裸 `return` 逐行搬运」+ 签名 `(string, bool)`，两者互斥（无具名结果时裸 `return` 报 `not enough return values`）。实际做法：签名改 `(actorID string, authed bool)`。**关键坑**：具名结果不能命名成 `ok`——第 3 步 `it, ok, err := s.st.LookupIdentity(id)` 会把具名结果 `ok` 绑到局部（`:=` 只新声明 `it`/`err`），于是 `identity_unregistered` 等失败分支的裸 `return` 会带回 `ok=true`，`requireAuth` 继续 `next(...)` ⇒ **双写响应**，`TestAuthTsOutOfWindow` / `TestAuthNonceReplay` / `TestAuthBadSignature` 变红。同理 `id` 也别与局部重名（本实现里第 3 步用的是 `it`，故 `id` 可用）。
+
+**更正 23（Task 3）既有两个匿名读用例必须改传 `encrypted:0`**。加形态分支后，`TestGroupGetAnonymousListing`（`group_test.go:223`）与 `TestGroupGetPagination`（`:294`）用 v1 建圈（缺省 `encrypted=1`）再匿名 GET，会 404。实际做法：`postGroupRoster` 补 `encrypted int64` 形参并写进 body（`TestGroupRosterOwnerMismatch`/`TestGroupRosterEpochStale` 传 1，两个读用例传 0）——新语义下「匿名可读」只对开放圈成立，用例必须显式表达形态。
+
+**更正 24（Task 3）计划里的存量形态用例写法无效**。计划 `TestGroupReadLegacyRowDefaultsEncrypted` 直接 `st.PutGroupRoster(...)` 且**不传** `Encrypted`，但更正 17 后 store 写的就是调用方给的 `r.Encrypted`（零值 0），「缺省封闭」的语义实际落在 **httpapi 解析层**（`parseGroupRoster` 缺键补 1），所以该用例恒为开放圈、断言必挂。实际做法：改走 HTTP v1 路径（`postGroupBody` 建圈**不带** `encrypted`）→ 匿名 GET 期望 404 `group_read_denied`；再加一个显式 `encrypted:0` 的对照圈期望 200。
+
+**更正 25（Task 3）路由注册只能用 `mux.Handle`**。计划 Step 4 写 `mux.HandleFunc("GET /v1/group/{group_id}", s.optionalAuth(s.handleGroupGet))`，但 `optionalAuth` 返回 `http.Handler`（不是 `func(w,r)`），`HandleFunc` 编译不过。实际做法：`mux.Handle(pattern, s.optionalAuth(s.handleGroupGet))`。
