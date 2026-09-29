@@ -49,7 +49,7 @@
     <text v-if="blocked" class="blocked">{{ blocked }}</text>
     <view class="composer">
       <!-- 输入框只按「结构性不可写」禁用：若用 canSend（含「草稿非空」），空草稿会锁死输入框，永远打不出字 -->
-      <input v-model="draft" class="input" :disabled="!canPostComment(caps.value)" placeholder="说点什么…" />
+      <input v-model="draft" class="input" :disabled="!canInput" placeholder="说点什么…" />
       <button size="mini" :disabled="!canSend" @click="send">{{ sending ? '发表中…' : '发表' }}</button>
     </view>
     <text v-if="tip" class="hint">{{ tip }}</text>
@@ -104,6 +104,8 @@ const pending = ref<CommentOutRow[]>([]);
 /** 写门控：与评论同一条「能否写事件」的能力，不新增自检探测（补充 9）。 */
 const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
 const blocked = computed(() => postBlockedReason(caps.value));
+/** 输入框可写性：只按「结构性不可写」判断（草稿为空不禁用）。ref 在模板里自动解包，故模板只能写 `canInput`。 */
+const canInput = computed(() => canPostComment(caps.value));
 const canSend = computed(
   () => canPostComment(caps.value) && draft.value.trim() !== '' && !sending.value,
 );
