@@ -115,7 +115,7 @@ export interface MySubmissionRow {
 
 /** 我参与的小组（本地 `groups` 表，本册 §5.1）。名单是**快照**，以节点读回为准。 */
 export interface GroupRow {
-  /** 16 hex，与节点侧同一 id */
+  /** 32 hex（16 字节），与节点侧同一 id（与 `event_id` 同形） */
   groupId: string;
   /** 组名，可空串 */
   name: string;

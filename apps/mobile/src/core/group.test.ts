@@ -65,7 +65,7 @@ describe('group', () => {
 
     expect(created.queued).toBe(true); // 断网 → roster 入队，但邀请码已可用
     expect(created.inviteCode.startsWith('base1:')).toBe(true);
-    expect(created.group.groupId).toMatch(/^[0-9a-f]{16}$/);
+    expect(created.group.groupId).toMatch(/^[0-9a-f]{32}$/); // 16 字节，与 event_id 同形
 
     const b = fixture();
     gateOffline(b.o); // 入组**全程零网络**
@@ -221,17 +221,17 @@ describe('group', () => {
     gateOffline(a.o);
     const { group } = await createGroup(a.o, { name: '读书' });
 
-    await postGroupMessage(a.o, { groupId: group.groupId, text: '甲', replyTo: 'f'.repeat(16) });
+    await postGroupMessage(a.o, { groupId: group.groupId, text: '甲', replyTo: 'f'.repeat(32) });
     const rows = await a.repo.listCommentOut();
     const last = JSON.parse(rows[rows.length - 1]!.wire) as { body: Record<string, unknown> };
-    expect(last.body.reply_to).toBe('f'.repeat(16));
+    expect(last.body.reply_to).toBe('f'.repeat(32));
 
     await postGroupMessage(a.o, { groupId: group.groupId, text: '乙' });
     const rows2 = await a.repo.listCommentOut();
     const last2 = JSON.parse(rows2[rows2.length - 1]!.wire) as { body: Record<string, unknown> };
     expect('reply_to' in last2.body).toBe(false);
 
-    const err = await postGroupMessage(a.o, { groupId: 'a'.repeat(16), text: 'x' }).catch((e: unknown) => e);
+    const err = await postGroupMessage(a.o, { groupId: 'a'.repeat(32), text: 'x' }).catch((e: unknown) => e);
     expect((err as GroupError).code).toBe('group_not_found');
   });
 });

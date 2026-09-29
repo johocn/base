@@ -191,7 +191,8 @@ export function decodeInvite(code: string): GroupInvite {
     sig: String(m.sig ?? ''),
   };
   if (inv.v !== 1) throw invalidInvite();
-  if (!isHexN(inv.groupId, 16) || inv.targetId !== `group/${inv.groupId}`) throw invalidInvite();
+  // group_id 与 event_id 同形：16 字节 = 32 hex（节点侧 isHexN(id,16) 即 len==32）。
+  if (!isHexN(inv.groupId, 32) || inv.targetId !== `group/${inv.groupId}`) throw invalidInvite();
   if (!isHexN(inv.groupKeyHex, 64)) throw invalidInvite();
   if (!isIdentityId(inv.creatorId) || !isHexN(inv.creatorPubHex, 64)) throw invalidInvite();
   if (!Number.isInteger(inv.epoch) || inv.epoch < 1 || !Number.isInteger(inv.createdAt)) throw invalidInvite();
@@ -301,7 +302,7 @@ export async function createGroup(
   opts: { name: string },
 ): Promise<{ group: GroupRow; inviteCode: string; queued: boolean }> {
   const ident = await ensureLocalIdentity(o.adapters.storage);
-  const groupId = bytesToHex(randomBytes(8));
+  const groupId = bytesToHex(randomBytes(16)); // 16 字节 = 32 hex，与 event_id 同形（节点侧契约）
   const groupKeyHex = bytesToHex(randomBytes(GROUP_KEY_BYTES));
   const now = new Date().toISOString();
   const group: GroupRow = {
