@@ -4,10 +4,22 @@ import { bytesToHex, canonicalize, hexToBytes, openWithNonce, sign, utf8, type J
 
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, MemoryStorage } from './fakes';
 import type { Adapters } from '../platform/adapter';
+import { flushPending } from './comment';
 import { deviceKek, ensureLocalIdentity, type Identity } from './identity';
 import { decodeUtf8 } from './sync';
-import { base64UrlToBytes, bytesToBase64Url } from './wire';
-import { acceptFriendCode, createFriend, decodeFriendCode, DmError, type DmOptions } from './dm';
+import { base64UrlToBytes, bytesToBase64Url, openKeyCipher, sealText } from './wire';
+import {
+  acceptFriendCode,
+  createFriend,
+  decodeFriendCode,
+  DM_DECRYPT_FAILED_NOTICE,
+  DM_KEY_MISSING_NOTICE,
+  DmError,
+  fetchConversation,
+  listFriends,
+  postDM,
+  type DmOptions,
+} from './dm';
 
 const BASE = 'https://node.test';
 
@@ -18,6 +30,11 @@ function fixture() {
   const adapters: Adapters = { fs: new MemoryFs(), storage, http, packReader: new FakePackReader() };
   const o: DmOptions = { adapters, repo, nodeBaseUrl: BASE };
   return { http, storage, repo, o };
+}
+
+/** 造一个 200 JSON 响应（与 group.test.ts 同名同形）。 */
+function json(v: unknown) {
+  return { status: 200, body: utf8(JSON.stringify(v)) };
 }
 
 /** 可开关的「网络不可达」模拟：只挡 http，本地存储与仓储照常走（照 comment.test.ts 的 gatePost）。 */
@@ -142,5 +159,154 @@ describe('dm', () => {
     const before = (await b.repo.listDmKeys())[0]!.keyCipher;
     await expectDmError(acceptFriendCode(b.o, handSignedCode(ownerA, { peerId: idB, keyHex: k2 })), 'key_conflict');
     expect((await b.repo.listDmKeys())[0]!.keyCipher).toBe(before);
+  });
+
+  it('AC 5：会话只合并双方的消息，第三方发给同一 peer 的条目被硬过滤', async () => {
+    const a = fixture();
+    const b = fixture();
+    const idA = (await ensureLocalIdentity(a.storage)).id;
+    const idB = (await ensureLocalIdentity(b.storage)).id;
+    const idThird = 'c'.repeat(32);
+
+    const made = await createFriend(a.o, idB, '阿甲');
+    await acceptFriendCode(b.o, made.code);
+    const key = await openKeyCipher(a.o.adapters.storage, (await a.repo.getDmKey(idB))!.keyCipher);
+
+    // A 的收件箱：B → A 一条
+    a.http.routes.set(
+      `${BASE}/v1/dm/${idA}`,
+      json({ events: [{ event_id: '1'.repeat(32), actor: idB, created_at: 1790000002000, payload_cid: 'cidIn' }], next_cursor: null }),
+    );
+    // 查 B：第三方 → B 一条（必须被过滤）+ A → B 一条
+    a.http.routes.set(
+      `${BASE}/v1/dm/${idB}`,
+      json({
+        events: [
+          { event_id: '2'.repeat(32), actor: idThird, created_at: 1790000003000, payload_cid: 'cidThird' },
+          { event_id: '3'.repeat(32), actor: idA, created_at: 1790000001000, payload_cid: 'cidOut' },
+        ],
+        next_cursor: null,
+      }),
+    );
+    a.http.routes.set(`${BASE}/v1/blob/cidIn`, { status: 200, body: utf8(sealText(key, '在吗')) });
+    a.http.routes.set(`${BASE}/v1/blob/cidOut`, { status: 200, body: utf8(sealText(key, '在的')) });
+    a.http.routes.set(`${BASE}/v1/blob/cidThird`, { status: 200, body: utf8(sealText(key, '不该出现')) });
+
+    const convo = await fetchConversation(a.o, idB);
+    // 第三方条目被丢弃，只留 A ↔ B 两条，按 created_at 升序
+    expect(convo.messages.map((m) => m.eventId)).toEqual(['3'.repeat(32), '1'.repeat(32)]);
+    expect(convo.messages.map((m) => m.text)).toEqual(['在的', '在吗']);
+    expect(convo.messages.map((m) => m.mine)).toEqual([true, false]);
+    expect(convo.notice).toBe('');
+    expect(JSON.stringify(convo)).not.toContain('不该出现');
+  });
+
+  it('AC 6：断网发言入队，联网后仅补发一条；wire 含 dm.v1、不含明文', async () => {
+    const a = fixture();
+    await ensureLocalIdentity(a.storage);
+    const idB = 'b'.repeat(32);
+    await createFriend(a.o, idB, '阿乙');
+    const gate = gateOffline(a.o);
+
+    const sent = await postDM(a.o, idB, '睡前读一段');
+    expect(sent.queued).toBe(true);
+    const rows = await a.repo.listCommentOut();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.targetId).toBe(`dm/${idB}`);
+    expect(rows[0]!.wire).toContain('dm.v1');
+    expect(rows[0]!.wire).not.toContain('睡前读一段'); // 明文不进 wire，只进 text_cipher
+
+    gate.offline = false;
+    a.http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    a.http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'ignored', payload_cid: 'c'.repeat(32) }));
+
+    const first = await flushPending(a.o);
+    expect(first.sent).toBe(1);
+    expect(await a.repo.listCommentOut()).toHaveLength(0);
+
+    const second = await flushPending(a.o);
+    expect(second.sent).toBe(0);
+    expect(a.http.posted.filter((p) => p.url.endsWith('/v1/event'))).toHaveLength(1);
+  });
+
+  it('AC 9：本地无该 peer 密钥时显示索取提示、不显示密文原文', async () => {
+    const a = fixture();
+    const idA = (await ensureLocalIdentity(a.storage)).id;
+    const idB = 'b'.repeat(32);
+    // 没有任何好友关系（dm_keys 为空），但收件箱里有 B 发来的密文
+    a.http.routes.set(
+      `${BASE}/v1/dm/${idA}`,
+      json({ events: [{ event_id: '1'.repeat(32), actor: idB, created_at: 1790000000000, payload_cid: 'cidX' }], next_cursor: null }),
+    );
+    a.http.routes.set(`${BASE}/v1/dm/${idB}`, json({ events: [], next_cursor: null }));
+    a.http.routes.set(`${BASE}/v1/blob/cidX`, { status: 200, body: utf8('不可能解开的密文') });
+
+    const convo = await fetchConversation(a.o, idB);
+    expect(convo.messages).toHaveLength(1);
+    expect(convo.messages[0]!.text).toBeNull();
+    expect(convo.notice).toBe(DM_KEY_MISSING_NOTICE);
+    expect(JSON.stringify(convo)).not.toContain('不可能'); // 密文原文永不进界面
+  });
+
+  it('解密失败：密钥在但认证失败 → 原位提示、不显示载荷', async () => {
+    const a = fixture();
+    const b = fixture();
+    const idA = (await ensureLocalIdentity(a.storage)).id;
+    const idB = (await ensureLocalIdentity(b.storage)).id;
+    const made = await createFriend(a.o, idB, '阿甲');
+    await acceptFriendCode(b.o, made.code);
+
+    const wrong = sealText(hexToBytes('aa'.repeat(32)), '不该出现');
+    a.http.routes.set(
+      `${BASE}/v1/dm/${idA}`,
+      json({ events: [{ event_id: '1'.repeat(32), actor: idB, created_at: 1790000000000, payload_cid: 'cidBad' }], next_cursor: null }),
+    );
+    a.http.routes.set(`${BASE}/v1/dm/${idB}`, json({ events: [], next_cursor: null }));
+    a.http.routes.set(`${BASE}/v1/blob/cidBad`, { status: 200, body: utf8(wrong) });
+
+    const convo = await fetchConversation(a.o, idB);
+    expect(convo.messages[0]!.text).toBeNull();
+    expect(convo.notice).toBe(DM_DECRYPT_FAILED_NOTICE);
+    expect(JSON.stringify(convo)).not.toContain('不该出现');
+  });
+
+  it('发言前置校验：非 32 hex / 空明文 / 超 4096 字节 / 无密钥各自被拒，且均不入队', async () => {
+    const a = fixture();
+    await ensureLocalIdentity(a.storage);
+    const idB = 'b'.repeat(32);
+
+    await expectDmError(postDM(a.o, 'zz', '在吗'), 'client');
+    await expectDmError(postDM(a.o, idB, ''), 'client');
+    await expectDmError(postDM(a.o, idB, '好'.repeat(4096)), 'too_long'); // 3 字节/字 ⇒ 12288 > 4096
+    await expectDmError(postDM(a.o, idB, '在吗'), 'not_friend'); // 尚未交换好友码
+
+    expect(await a.repo.listCommentOut()).toHaveLength(0); // 全部在入队前拦下
+  });
+
+  it('listFriends：本地好友与收件箱发件人取并集；拉收件箱失败时静默回落为仅本地好友', async () => {
+    const a = fixture();
+    const idA = (await ensureLocalIdentity(a.storage)).id;
+    const idB = 'b'.repeat(32);
+    const idC = 'c'.repeat(32);
+    await createFriend(a.o, idB, '阿甲');
+
+    a.http.routes.set(
+      `${BASE}/v1/dm/${idA}`,
+      json({
+        events: [
+          { event_id: '1'.repeat(32), actor: idC, created_at: 1790000000000, payload_cid: 'c1' },
+          { event_id: '2'.repeat(32), actor: idB, created_at: 1790000001000, payload_cid: 'c2' },
+        ],
+        next_cursor: null,
+      }),
+    );
+    expect(await listFriends(a.o)).toEqual([
+      { peerId: idB, hasKey: true },
+      { peerId: idC, hasKey: false },
+    ]);
+
+    // 节点不可达 → 静默回落为仅本地好友，不抛错
+    a.o.adapters.http = { get: () => Promise.reject(new Error('断网')), post: () => Promise.reject(new Error('断网')) };
+    expect(await listFriends(a.o)).toEqual([{ peerId: idB, hasKey: true }]);
   });
 });

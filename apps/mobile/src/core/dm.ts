@@ -20,7 +20,7 @@ import {
 
 import type { Adapters } from '../platform/adapter';
 import type { LocalRepo } from './repo';
-import { ensureLocalIdentity, type Identity } from './identity';
+import { ensureLocalIdentity, peekLocalIdentity, type Identity } from './identity';
 import { decodeUtf8 } from './sync';
 import {
   base64UrlToBytes,
@@ -208,4 +208,178 @@ export async function acceptFriendCode(o: DmOptions, code: string): Promise<{ pe
     createdAt: new Date().toISOString(),
   });
   return { peerId: c.ownerId, idempotent: false };
+}
+
+export interface FriendEntry {
+  peerId: string;
+  /** 本地是否有会话密钥（false = 只在收件箱见过来信，还没交换好友码）。 */
+  hasKey: boolean;
+}
+
+export interface DmIndexItem {
+  eventId: string;
+  actor: string;
+  createdAt: number;
+  payloadCid: string;
+}
+
+interface DmIndexPage {
+  events: DmIndexItem[];
+  nextCursor: string | null;
+}
+
+/** 匿名读一人的收件箱索引（册子 §4.2）：`GET /v1/dm/{peer_id}`。**无 404 分支**（查无数据即空数组）。 */
+export async function fetchDmIndex(o: DmOptions, peerId: string, cursor?: string | null): Promise<DmIndexPage> {
+  const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+  let res;
+  try {
+    res = await o.adapters.http.get(`${o.nodeBaseUrl}/v1/dm/${peerId}${qs}`);
+  } catch {
+    throw new DmError('network', '无法连接节点，请稍后重试');
+  }
+  if (res.status !== 200) throw new DmError('server', `读取私信失败（HTTP ${res.status}）`);
+  const page = JSON.parse(decodeUtf8(res.body)) as {
+    events?: Array<Record<string, unknown>>;
+    next_cursor?: string | null;
+  };
+  return {
+    events: (page.events ?? []).map((e) => ({
+      eventId: String(e.event_id ?? ''),
+      actor: String(e.actor ?? ''),
+      createdAt: Number(e.created_at ?? 0),
+      payloadCid: String(e.payload_cid ?? ''),
+    })),
+    nextCursor: page.next_cursor ?? null,
+  };
+}
+
+/** 取密文块（`GET /v1/blob/{payload_cid}`）；失败返回 null，由调用方降级为提示（密文原文永不进界面）。 */
+async function fetchDmCipher(o: DmOptions, payloadCid: string): Promise<string | null> {
+  try {
+    const res = await o.adapters.http.get(`${o.nodeBaseUrl}/v1/blob/${payloadCid}`);
+    if (res.status !== 200) return null;
+    return decodeUtf8(res.body);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 好友列表（册子 §5.2）：本地 `dm_keys`（`hasKey: true`）与收件箱发件人（`hasKey: false`）取并集。
+ * **拉收件箱失败静默回落为「仅本地好友」**（「补充 6」）：一次读失败不该让整页变空。
+ * 顺序：本地好友在前（按 `created_at ASC`），收件箱新增的按首次出现顺序。
+ */
+export async function listFriends(o: DmOptions): Promise<FriendEntry[]> {
+  const rows = await o.repo.listDmKeys();
+  const out: FriendEntry[] = rows.map((r) => ({ peerId: r.peerId, hasKey: true }));
+  const seen = new Set(out.map((e) => e.peerId));
+  const myId = (await peekLocalIdentity(o.adapters.storage))?.id ?? '';
+  if (myId === '' || o.nodeBaseUrl === '') return out;
+  let page: DmIndexPage;
+  try {
+    page = await fetchDmIndex(o, myId);
+  } catch {
+    return out; // 收件箱读不到（断网 / 节点不可达）→ 只列本地好友
+  }
+  for (const ev of page.events) {
+    if (ev.actor === myId || seen.has(ev.actor)) continue;
+    seen.add(ev.actor);
+    out.push({ peerId: ev.actor, hasKey: false });
+  }
+  return out;
+}
+
+/**
+ * 发一条私信（册子 §3.3）。三条前置校验都在**入队前**（不产生事件、不入队，「补充 7」）：
+ * `peerId` 非 32 hex → `client`；明文为空 → `client`；超 4096 字节（UTF-8）→ `too_long`；无本地密钥 → `not_friend`。
+ * 正向走不通时**只有网络不可达**才入 `comment_out`（`wire` 存已签名请求体，补发零改动复用）。
+ */
+export async function postDM(o: DmOptions, peerId: string, text: string): Promise<{ eventId: string; queued: boolean }> {
+  if (!isIdentityId(peerId)) throw new DmError('client', '对方身份 id 形态不对');
+  if (text.length === 0) throw new DmError('client', '私信内容不能为空');
+  if (utf8(text).length > DM_TEXT_MAX_BYTES) throw new DmError('too_long', `单条私信不超过 ${DM_TEXT_MAX_BYTES} 字节`);
+  const row = await o.repo.getDmKey(peerId);
+  if (!row) throw new DmError('not_friend', '还没有与该好友建立会话，请先交换好友码');
+  const key = await openKeyCipher(o.adapters.storage, row.keyCipher);
+  const textCipher = sealText(key, text);
+  const ident = await ensureLocalIdentity(o.adapters.storage);
+  const { eventId, wire } = buildEventWire(ident, 'dm.v1', { to: peerId, text_cipher: textCipher });
+  const { queued } = await submitWire(o, {
+    eventId,
+    wire,
+    targetId: `dm/${peerId}`,
+    queueText: textCipher,
+  });
+  return { eventId, queued };
+}
+
+export interface DmMessage {
+  eventId: string;
+  actor: string;
+  createdAt: number;
+  /** 是否我发出的（`actor === 本机 id`），供会话页左右分栏。 */
+  mine: boolean;
+  /** 解密成功为明文；密钥缺失或解不开为 null（**不是**空串，UI 据此显示提示而非空白）。 */
+  text: string | null;
+}
+
+export interface DmConversation {
+  peerId: string;
+  messages: DmMessage[];
+  nextCursor: string | null;
+  /** 非空即为册子 §5.3 的**显式提示原文**，UI 必须原位显示（禁止静默跳过）。 */
+  notice: string;
+}
+
+/**
+ * 会话页数据（册子 §5.3）：合并**两个 `target_id`**——发件箱 `dm/<peer>`（只留 `actor === 我`）与
+ * 收件箱 `dm/<我>`（只留 `actor === peer`），按时间升序，逐条用该 peer 的会话密钥解密。
+ * **过滤是硬要求**：`dm/<peer>` 里混有第三方发给 peer 的条目，不过滤就会进入本会话（AC 5）。
+ * 无密钥 → `DM_KEY_MISSING_NOTICE`；有密钥但认证失败 / 块取不到 → `DM_DECRYPT_FAILED_NOTICE`。
+ */
+export async function fetchConversation(o: DmOptions, peerId: string): Promise<DmConversation> {
+  if (!isIdentityId(peerId)) throw new DmError('client', '对方身份 id 形态不对');
+  const myId = (await ensureLocalIdentity(o.adapters.storage)).id;
+
+  const [inbox, outbox] = await Promise.all([fetchDmIndex(o, myId), fetchDmIndex(o, peerId)]);
+  const picked: DmIndexItem[] = [
+    ...inbox.events.filter((e) => e.actor === peerId),
+    ...outbox.events.filter((e) => e.actor === myId),
+  ];
+  picked.sort((a, b) => (a.createdAt === b.createdAt ? (a.eventId < b.eventId ? -1 : 1) : a.createdAt - b.createdAt));
+
+  const row = await o.repo.getDmKey(peerId);
+  let key: Uint8Array | null = null;
+  if (row) {
+    try {
+      key = await openKeyCipher(o.adapters.storage, row.keyCipher);
+    } catch {
+      key = null; // 本地密钥损坏 → 与「无密钥」同处置
+    }
+  }
+
+  let missingKey = false;
+  let decryptFailed = false;
+  const messages: DmMessage[] = [];
+  for (const ev of picked) {
+    let text: string | null = null;
+    const cipher = ev.payloadCid ? await fetchDmCipher(o, ev.payloadCid) : null;
+    if (cipher === null) {
+      decryptFailed = true; // 块取不到（断网 / 块缺失）：解不开
+    } else if (!key) {
+      missingKey = true; // 本地没有该 peer 密钥
+    } else {
+      try {
+        text = openText(key, cipher);
+      } catch {
+        decryptFailed = true; // 有密钥但认证失败（密文损坏 / 密钥不符）
+      }
+    }
+    messages.push({ eventId: ev.eventId, actor: ev.actor, createdAt: ev.createdAt, mine: ev.actor === myId, text });
+  }
+
+  const notice = missingKey ? DM_KEY_MISSING_NOTICE : decryptFailed ? DM_DECRYPT_FAILED_NOTICE : '';
+  // 翻页口径：本版不做翻页，任一方向还有更早的消息就原位提示（「补充 8」）
+  const nextCursor = inbox.nextCursor ?? outbox.nextCursor ?? null;
+  return { peerId, messages, nextCursor, notice };
 }
