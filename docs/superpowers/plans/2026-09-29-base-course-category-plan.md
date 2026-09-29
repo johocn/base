@@ -1467,19 +1467,44 @@ git push origin master
 
 ## 执行实况
 
-> 待执行后回填：每个 Task 的提交哈希、门禁实测数字、发布物字节数与 sha256、与计划的差异、以及需要登记为「更正 N」的项。
+> 执行期：2026-09-29 ～ 2026-09-30。Task 1–8 全部落地并推送；Task 9 的 Step 1 已执行，**Step 2–4（云打包 / 上线 / 签发）作废**（见更正 5），Step 5–6 见下。
 
 | # | 项 | 结果 |
 | --- | --- | --- |
-| 1 | Task 1 提交哈希 | 待填 |
-| 2 | Task 2+3 提交哈希 | 待填 |
-| 3 | Task 4 提交哈希 | 待填 |
-| 4 | Task 5 提交哈希 | 待填 |
-| 5 | Task 6 提交哈希 | 待填 |
-| 6 | Task 7 提交哈希 | 待填 |
-| 7 | Task 8 提交哈希（版本号与回填） | 待填 |
-| 8 | 全量门禁实况（go / vitest / tsc / build:h5 / build:app） | 待填 |
-| 9 | 云打包结果（字节数 / sha256 / 证书 SHA1） | 待填 |
-| 10 | 线上验证（`/v1/release`、APK 200、`verifyRelease`） | 待填 |
-| 11 | 真机验收三条（人工） | 待填 |
-| 12 | `docs/README.md` §4/§5 是否已随 #35 收口 | 待填 |
+| 1 | Task 1 提交哈希 | `7316288`（4 文件 +41/−24）：`protocol/id.go` + `id_test.go` 新增 `ValidSlug`；`httpapi/submit.go` 改调（−23 行）、`submit_test.go` 改断言。`go build`/`vet`/`test ./... -count=1` 全包 ok |
+| 2 | Task 2+3 提交哈希 | **合并为一个提交** `fd3b5d8`（3 文件 +347/−1）：`importer/md.go` 三键 + `importer/course.go` 单归属 fail-fast 与全量重算 + `importer/category_test.go` 209 行。`go test ./internal/importer/... -count=1` ok |
+| 3 | Task 4 提交哈希 | `1ac1eed`（**只加** `internal/packexport/category_test.go`，未出任何生产代码；见更正 1） |
+| 4 | Task 5 提交哈希 | `6e4cc37`（`core/course-tree.ts` 追加 `splitCategories` / `coursesOfCategory` / `lessonOfCarrier` 三个纯函数，既有 4 个函数逐字未动 + `course-tree.test.ts`）。vitest 该文件 14 项全绿（见更正 2） |
+| 5 | Task 6 提交哈希 | `cf8b69a`（`pages/course/course.vue` +85/−14）。vitest 18 文件全绿 + `tsc --noEmit` 无输出 + `build:h5`/`build:app` 通过 |
+| 6 | Task 7 提交哈希 | `6f7047f`（`course/detail.vue` +41/−2、`article/article.vue` +29）+ `9d05b22`（**审查发现** `openQuiz` 被插在治理注释块与 `openGovernance` 之间致注释挂到错误函数上，单独修正，见更正 4） |
+| 7 | Task 8 提交哈希（版本号与回填） | `ff62779`（`manifest.json` → `0.12.0`/`16`、册子加 §0.2 四条、`docs/README.md` 第 61 行） + `1dbe809`（版本改为 `0.11.0`/`15`）；**两次版本号均未成为最终值**——最终 `0.13.0`/`17` 由并行 #35 线 `f0a3a30` 落定（见更正 5） |
+| 8 | 全量门禁实况 | Go：`go build ./...` / `go vet ./...` / `go test ./... -count=1` **全包 ok**。mobile：`npx vitest run` **18 文件 / 176 项全绿**、`npx tsc --noEmit` 无输出、`npm run build:h5` 与 `npm run build:app` 均 `DONE Build complete`。两条发布前硬检查（**用 Grep 工具跑，未用 `Select-String`**）：① 模板 `\{\{[^}]*\.value` → **0 处**；② 产物 `app-service.js` 的 `\.value\.value` → **0 处** |
+| 9 | 云打包结果（字节数 / sha256 / 证书 SHA1） | **本册未打包（Step 2 作废）**。#36 的客户端改动随 #35 的发布上线：`base-0.13.0.apk` **27418563 字节 / sha256 `5649bc55021482ee60aec681d52450c2c4fd987a8813b0e51216311bc7c0e385`**、证书 SHA1 **`19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`**（我下载该 APK 后解 `META-INF/CERT.RSA` 用 `X509Certificate2.Thumbprint` **独立核验**，与 0.6.0–0.9.3 一致 ⇒ 可覆盖安装）；另有 #35 的补丁包 `base-0.13.1.apk` 27418505 字节 / `3091c4e8…11c50` |
+| 10 | 线上验证（`/v1/release`、APK 200、`verifyRelease`） | `HEAD http://118.190.217.242/dl/base-0.13.0.apk` → **200**，`Content-Length=27418563` 与本地一致；`GET /v1/release` 取到的最新值为 `version_name=0.13.1` / `min_version_name=0.8.0` / `issuer=base-node-1` / `apk_size=27418505` / `issued_at=2026-09-29T21:37:04Z`（0.13.0 于 `2026-09-29T18:09:25Z` 上线，随后被 0.13.1 取代）。**#36 客户端改动在包内的证据**：下载 APK 解包后在 `assets/apps/__UNI__936A667/www` 下 grep `group-cat\|未归类课程\|本课程测验\|本课测验\|quiz-lesson`，命中 `app-service.js`(5) + `pages/course/course.css`(1) + `pages/course/detail.css`(1)。`verifyRelease` 需客户端执行，**会话内未实测**（#35 计划记 `true`） |
+| 11 | 真机验收三条（人工） | **待人工**（三条见 Task 9 Step 6） |
+| 12 | `docs/README.md` §4/§5 是否已随 #35 收口 | **已收口**：#35 Phase 1+2 执行完毕后 `docs/README.md` §5 末段已含其收口记述。§4 依赖图**未列 #36**（#36 只占 §3 第 61 行），故**按计划保持不动**；第 61 行状态行另加一句「客户端改动随 0.13.0 上线」（见更正 5） |
+
+### 更正（执行期与计划的差异）
+
+**更正 1 —— Task 4 的计划缺陷：`pack.sqlite` 没有 `items` 表。**
+计划让测试从包内 `pack.sqlite` 的 `items` 表读 `source` / `type` / `sqlite_table` / `title`，但 `internal/packexport/export.go` 的 `packDDL` 只有 `meta` / `articles` / `segments` / `quizzes` / `media_meta` **五张表、无 `items`**。实际做法：这四列改从 `res.Manifest.Entries`（即 `manifest.json`）取，`segments` 仍从 `pack.sqlite` 读。已复核 `export.go` 的 `packDDL` 与 `Manifest.Entries` 的构造，口径与册子 §3.1 一致。
+
+**更正 2 —— Task 5 的计划口径误差：新增 7 个 `it`，不是 8 个。**
+计划写「既有 7 + 新增 8」，实际 `course-tree.test.ts` 追加 7 个 `it`（合计 14 项）。既有 4 个导出函数逐字未动。
+
+**更正 3 —— Task 6 的计划缺陷：照抄替换块会丢掉 `syncOnce` 的 import。**
+计划 Step 2 给出的替换块从 `import { splitCourses }` 起，机械照做会连带删除下一行 `import { syncOnce } from '../../core/sync';`，使 `doSync()` 编译失败。已在派单时预先指出并保留该行。另：`total` computed 会把「全部课程」与「各分类组内课程」重复计数——只用于 `v-if="total === 0 && !error"` 的**空态判定**，无展示影响，按计划原样保留。
+
+**更正 4 —— Task 7 的插入位置错误（已单独修正）。**
+子代理把 `openQuiz` 插在 `/** 「治理」恒显：… */` JSDoc 注释块与 `openGovernance` 之间，注释被挂到错误函数上。以 `9d05b22` 单独修正（**未 amend**，遵守「不用 amend」口径）。
+
+**更正 5 —— 版本号与发布口径（两次翻转后定案：本册不单独发布）。**
+① 计划 Task 8 Step 1 预期落 `0.13.0`/`17`（假设 #35 先发 `0.11.0`/`15` 与 `0.12.0`/`16`）。执行时现值已是 #35 Task 7 收口的 `0.11.0`/`15`（`63e8ddc`，00:20），故 `ff62779` 按「现值 +1」升为 `0.12.0`/`16`（00:30）；随后 `1dbe809` 又按用户当次决策改为 `0.11.0`/`15`。
+② 并行 #35 线随后把 Phase 2 定到 `0.13.0`/`17`（计划「更正 44」）并**完成云打包与线上发布**，其打包用的源码树已含本册全部四个手机端提交（`6e4cc37` / `cf8b69a` / `6f7047f` / `9d05b22` 均为 `f0a3a30` 的祖先，已用 `git log` 逐条核对）。
+③ 故 **`0.12.0`/`16` 最终从未发布**，本册 **Task 9 Step 2–4（云打包 → 上传 `/opt/appdl` → 落地页改指 → `based release` 签发）整条作废**——发布通道停在 `0.13.0`/`17`（其后 `0.13.1`/`18` 为 #35 的治理补丁），再发 `0.12.0`/`16` 将是**版本回退**（`versionCode` 16 < 17）。用户 2026-09-30 定案：「#36 不单独发布」。代价：本册失去「独立可回滚」的发布退路，与 #35 Phase 1 同一后果（其计划「更正 44」② 已登记同一条）。
+④ 落地：`docs/README.md` 第 61 行状态行补「客户端改动随 `0.13.0` 上线」；`manifest.json` **不再回改**（保持 #35 落的 `0.13.0`/`17`）。
+⑤ **留给 #35 线自行同步的一处**：`docs/README.md` 第 63 行仍写「Phase 2 的 `0.12.0`/`16` 已被并行课程分类线 #36 占用，故整体顺延一位」——该前提现已不成立（`0.12.0`/`16` 从未发布），但结论（Phase 2 = `0.13.0`/`17`）不变。该行归 #35 的 row，本册**不代改**，只在此登记。
+
+**更正 6 —— Task 9 Step 1 已执行；节点上另有一条并行线留下的「未被引用」旧副本（不构成漂移）。**
+本册节点二进制：`GOOS=linux GOARCH=amd64 go build -o based-linux-amd64 ./cmd/based` → **21679512 字节 / sha256 `c574de1d81967db9a3a1aaccc2dab3a29a3efd2384988ca85093ce181a91adbc`**，两节点各备份旧二进制（`/opt/base/based.bak-0.11.0-coursecat`，21625006 字节）后替换、`base` 与 `base-cache` 同日重启（均 `active`）。探活：**fail-fast**（两文件同 `course` 声明 `math` 与 `physics` → `exit=1`、报错文案与册子 §3.4 逐字一致、`SELECT count(*) FROM items` = **0**，证明写库前退出）+ **端到端**（带分类导入 `导入 2 篇，失败 0 篇` → 本地条目 `category/math` 与 segments `0|digest` / `1|course|course/c1` / `2|course|course/c2`（cid 字典序）→ 导出 `entries=7`，包内 `manifest.json` 含 `"item_id":"category/math"`）+ **无回归**（`/v1/comment` 200、`/v1/group/{32hex}` 404 `group_not_found`、`/v1/dm/{32hex}` 200）。执行期两处踩坑：① 用 `ssh me 'printf ...'` 传复杂命令会被 PowerShell 5.1 的引号规则 mangling（远端文件写成一整行，探活假绿）⇒ 改为**本地写 `.sh` → `scp` → `ssh me "sh /tmp/x.sh"`**；② 计划里 `export` 的签名参数写作 `-key`，实际 flag 是 **`-sign-key`**。
+**并行线随后又部署了更新的二进制**：`/opt/base/based` 现为 21685510 字节 / sha256 `ea1aca503386e3478640a78ba172c95fa2648f5c66924bab33f1f83d97967902`（#35 的 0.13.1 补丁）。`/opt/base-cache/based` 上仍是本册 01:48 的 `c574de1d…` 副本，**但两个 unit 的 `ExecStart` 同指 `/opt/base/based`**（已核 `/etc/systemd/system/base.service` 与 `base-cache.service`）⇒ 该文件是**未被引用的历史副本，不构成服务间版本漂移**。
