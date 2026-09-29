@@ -3105,7 +3105,7 @@ git push origin master
 | 1 | `groups` 三列 + 席位/贡献度派生 | `7e7dac5` | `go build`/`vet` 干净；`go test ./... -count=1` 全包 ok（`c9ac6a5` 补三处文件尾换行） |
 | 2 | `group.v1` roster v2 多签与门槛 | `0c048a6` | `go build`/`vet` 干净；`go test ./... -count=1` 8 包全 ok；`TestRosterV2*` 8 用例（含 3 子例）全 PASS |
 | 3 | 读权分支（开放匿名 / 封闭签名） | `a7a945f` | `go build`/`vet` 干净；`go test ./... -count=1` 10 包全 ok；`TestGroupRead*` 5 用例 + `TestGroupGet*` 3 用例 + `TestAuth*OutOfWindow/NonceReplay/BadSignature` 全 PASS；动过的 5 个文件 `gofmt -l` 无输出 |
-| 4 | 反熵接收侧 v2 三列 + 信封 | — | 待填 |
+| 4 | 反熵接收侧 v2 三列 + 信封 | `539f68c` | `go build`/`vet` 干净；`go test ./... -count=1` 全包 ok；`TestApplySyncedGroupEvent*` 4 用例全 PASS（另验证：换回旧实现时 V2/Legacy/Dissolve 三条 FAIL，非空跑）；`gofmt -l` 两文件无输出 |
 | 5 | `core/group.ts` v2（双形态 / 多签码 / 信封链） | — | 待填 |
 | 6 | 圈子列表形态与治者面板 | — | 待填 |
 | 7 | 0.11.0 发布四步 + 节点二进制部署 | — | 待填 |
@@ -3139,3 +3139,9 @@ git push origin master
 **更正 24（Task 3）计划里的存量形态用例写法无效**。计划 `TestGroupReadLegacyRowDefaultsEncrypted` 直接 `st.PutGroupRoster(...)` 且**不传** `Encrypted`，但更正 17 后 store 写的就是调用方给的 `r.Encrypted`（零值 0），「缺省封闭」的语义实际落在 **httpapi 解析层**（`parseGroupRoster` 缺键补 1），所以该用例恒为开放圈、断言必挂。实际做法：改走 HTTP v1 路径（`postGroupBody` 建圈**不带** `encrypted`）→ 匿名 GET 期望 404 `group_read_denied`；再加一个显式 `encrypted:0` 的对照圈期望 200。
 
 **更正 25（Task 3）路由注册只能用 `mux.Handle`**。计划 Step 4 写 `mux.HandleFunc("GET /v1/group/{group_id}", s.optionalAuth(s.handleGroupGet))`，但 `optionalAuth` 返回 `http.Handler`（不是 `func(w,r)`），`HandleFunc` 编译不过。实际做法：`mux.Handle(pattern, s.optionalAuth(s.handleGroupGet))`。
+
+**更正 26（Task 4）`key_envelopes` 必须写包装对象，不能写裸数组**。计划 Step 3 用 `json.Marshal(m.Envelopes)`（`[]json.RawMessage`）得到裸数组 `[{...}]`，但写路径 `httpapi/group.go:295–299` 存的是 `protocol.Canonicalize(map[string]any{"envelopes": arr})`（字段注释明写「读接口就这么解 key_envelopes 列，**别改成裸数组**」），读路径 `httpapi/group.go:726–733` 用 `struct{ Envelopes []json.RawMessage }` 解包——裸数组会 `Unmarshal` 失败且被**静默忽略**，对端 `envelopes` 恒为空数组 ⇒ AC 10（成员从缓存节点解密）在对端断链；而计划的测试只判「`KeyEnvelopesJSON != "" && != "[]"`」，正好漏检这个坑。实际做法：`json.Marshal(map[string]any{"envelopes": m.Envelopes})`（单键无排序歧义，元素为源节点 canonical 字节，故与写路径同形）；测试改为**用读接口同一形态解包并逐字段核对**（恰好 1 条、`cipher`/`from_epoch` 保真）。
+
+**更正 27（Task 4）接收侧必须放行 `dissolve` 的空名单**。计划 Step 3 的 `len(m.MemberIDs) == 0 → return false, nil` 会把解散事件整个丢弃：补充 11 要求解散把名单写成 `[]`（Task 2 更正 18 已按此解析），对端于是永远保留旧名单——已被移出/已解散的成员在缓存节点上仍能读封闭圈（安全侧错误，且与源节点读权表现不一致）。实际做法：结构体加 `Sub string`，判据改为 `len(m.MemberIDs) == 0 && m.Sub != "dissolve" → 忽略`；v1 键集无 `sub`（`parseGroupRoster` 键白名单），不会误放垃圾事件。
+
+**更正 28（Task 4）测试助手名不符**。计划测试用 `newTestStore(t)`，peersync 包内不存在；实为 `openTemp(t) *store.Store`（`testsupport_test.go:52`）。`group_id` 用 `"g1"` 不影响（peersync 侧不做 16 hex 校验，与 httpapi 的 `isHexN(gid,16)` 不同）。另：计划 Step 3 里那段 `encPointer` 死代码，按计划自己的批注已删，只留 `enc := int64(1); if m.Encrypted != nil { enc = *m.Encrypted }`（**必须用 `*int64`**，`int64` 零值 0 会把 v1 老事件误判成开放圈）。
