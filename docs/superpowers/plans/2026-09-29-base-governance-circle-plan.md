@@ -47,7 +47,7 @@
 | 写能力门控 | `core/selfcheck.ts` 导出 `canPostComment` / `postBlockedReason`（`comment.vue:80-115` 用法） |
 | 补发入口可跨模块用 | `core/comment.ts:282` 的 `flushPending(o)` 只依赖 `{adapters, repo, nodeBaseUrl}` ⇒ 圈子页可直接 import |
 | Go 测试基座 | `internal/httpapi/httpapi_test.go:64` 的 `newTestServer(t)`（返回 `*store.Store` + `inprocServer`，含确定性密钥 `testSeed` / `testPub`）；`comment_test.go:105` 的 `doJSONMap(t, method, url, body, headers)` |
-| 当前版本 | `apps/mobile/src/manifest.json` = `versionName "0.9.3"` / `versionCode "13"` → **Phase 1 发 0.11.0 / 15**、**Phase 2 发 0.12.0 / 16**（`0.10.0` / `14` 已被先发的私信册 #34 占用，见「补充 19」） |
+| 当前版本 | `apps/mobile/src/manifest.json` = `versionName "0.10.0"` / `versionCode "14"`（**私信册 #34 已执行完毕并发布上线**，见「补充 19」）→ **Phase 1 发 `0.11.0` / `15`**、**Phase 2 发 `0.12.0` / `16`** |
 | 节点侧必须部署 | 两个阶段都改了节点代码。按 #31「更正 3 / 更正 11」的后续口径：**发布清单必须含交叉编译 + 两个节点各备份替换 + 依次 restart + 逐个探活** |
 | 双节点二进制同一份 | `base.service` 与 `base-cache.service` 的 `ExecStart` **都指 `/opt/base/based`**，回滚要一起回 |
 
@@ -85,7 +85,7 @@
 
 编号说明：**15 / 16 / 17 就地写在对应 Task 的正文里**，因为它们的上下文就在那段代码旁边——15 = 多签收集两段码 + 回执带 `pub`（Task 5 Step 6），16 = 建圈一律走 v1 形态 roster（Task 5 Step 7），17 = v2 名单信封必须复用草稿的 `event_id`/`created_at`（Task 5 Step 7）。
 
-19. **版本定序已定：私信册（#32 册子 + #34 计划）先发，本计划整体 +1 让位。** 私信册保持原写的 `0.10.0` / `14`（基线 `0.9.3` / `13`）不动；本计划基线改为 `0.10.0` / `14`：**Phase 1 = `0.11.0` / `15`、Phase 2 = `0.12.0` / `16`**。判据是「**谁已经在跑**」而不是文档依赖顺序：私信册**已执行到 Task 10（发布阶段）**——工作区 `apps/mobile/src/manifest.json` 已被改指 `0.10.0` / `14`，`145d816`→`2de4f1c` 七个 commit 覆盖私信 Task 1–9；此时再改私信册版本号会与已在跑的发布链路冲突。册子 `2026-09-29-base-governance-circle-design.md` §0.2 第 2 条 / §9 已同步改写为「私信册先发、本册让位」。**建议先把私信 Task 10（打包 / 上传 / 签发）收尾，再开工本计划。**
+19. **版本定序已定并已收口：私信册（#32 册子 + #34 计划）先发，本计划整体 +1 让位。** 私信册 `0.10.0` / `14`（基线 `0.9.3` / `13`）**已执行完毕并发布上线**（`bb15a7c`→`2de4f1c` 覆盖 Task 1–9，`33f2556` 完成版本与发布并回填文档，`5f354a1` 修正回填笔误；APK 27413300 字节 / sha256 `683cfed841ccbc82a187a95afe34c36bf156081b8a4f6d1319d31aaa3e5fe15e`，落地页与 `/v1/release` 均已改指）。故本计划基线 = **`0.10.0` / `14`（即线上当前版本）**：**Phase 1 = `0.11.0` / `15`、Phase 2 = `0.12.0` / `16`**。判据是「**谁已经在跑**」而不是文档依赖顺序——私信册先落版本号且已上线，再改它就会与已发布链路冲突。册子 `2026-09-29-base-governance-circle-design.md` §0.2 第 2 条 / §9 与 `docs/README.md` 第 33/35 行、§5 已同步。**版本号冲突已收口：Task 7 Step 1 直接由 `0.10.0` / `14` 改指 `0.11.0` / `15`，无任何前置等待。**
 20. **客户端治理写路径改走原生事件（= 册子 §0.2 第 1 条 B 方案的客户端半边）**。老客户端（`0.9.3`）继续用 `POST /v1/proposal` / `/v1/proposal/{id}/vote`（reqsig，**只写本节点投影、不产事件**）；**新客户端**改用 `POST /v1/event` 产出带**真内容签名**的 `govern.v1` 事件，承担跨节点传播。落地在 Task 9（`core/govern.ts`）：
 
     - `createProposal` / `vote` 由 `signedPost`（reqsig 五头）改为**内容签名 + 事件投递**：`payload = canonicalize({event_id, type:'govern.v1', created_at, body})`、`sig = sign(ident.seedHex, utf8(payload))`，POST `/v1/event`（与 `core/group.ts` 的 `buildGroupWireAt` 逐字同构）。**不需要签名头**（事件路径只验内容签名）。
@@ -3167,3 +3167,7 @@ git push origin master
 **更正 38（Task 6，真机阻断）多签收集缺少「同伴签名」这半边**。补充 15 的口径是「发起者出 `base2:` 码 → 同伴签名 → 回 `base3:` 回执」，但计划 Task 6 只给了发起者侧（自签 + 「粘贴回执」收别人的回执），**没有任何入口能让同伴对别人的 `base2:` 码签名**（`signSigRequest` 只在自签路径被调用）⇒ 验收 M4（m=11 移出需 2 名治者签）与 M5（解散需 1 发起 + 2 成员签）在真机上**永远凑不够签名**。实际做法：`group.vue` 顶栏补第三个入口「代签请求码」（粘 `base2:` → `signSigRequest` → 复制回出的 `base3:` 回执），闭合收集回路（`912f76f`）。多签往返因此**跨设备可用**：发起者复制 `base2:` 发给同伴，同伴「代签请求码」后把 `base3:` 发回，发起者「粘贴回执」提交；发起者本机的 `pendingRequest` / `pendingEnvelopes` 只在**同机会话内**保留，跨设备时发起者那边的 pending 一直有效（它就是本机产生的），故不阻断。
 
 **更正 39（Task 6）两处实现取舍**。① 计划模板写 `feed.group.*`，但 `group.vue` 既有的 `feed` 是**消息数组**（`v-for="m in feed"`），按「不重构既有逻辑」改为新增 `group = ref<GroupInfo|null>` 承接 `f.group`（语义等价，`isGovernor` / `govText` 从它派生）。② **非治者「退出圈子」按更正 33 落地时仍调 `leaveGroup`**（它内部 `draftThenRotate` 会本地换钥并产出信封）：这是**必需的**——节点要求每个 roster 事件 epoch 递增，而新 epoch 的钥必须随事件 body 的 `envelopes` 分发（更正 29），所以「出草稿」与「产信封」不能拆开；非治者只是**不自签、不提交**，把 `{requestCode, envelopes}` 存成 pending 并复制请求码给治者。副作用：若该提案最终没提交，本机本地 `epoch`/`roster_rev` 会比节点超前（`fetchGroupMessages` 只在「节点 epoch ≥ 本地」时回写，故不会被拉回）；此时发出的消息用的是别人没有的新钥。属知情接受的边角态（M2–M10 不覆盖）。
+
+**更正 40（Task 7 开工前）版本基线口径收口（文档层，零代码改动）。** 本计划原写「当前版本 `0.9.3` / `13`」「建议先把私信 Task 10 收尾再开工本册」**已过期**：私信册 #34 已执行完毕并发布上线（`0.10.0` / `14`，APK 27413300 字节 / sha256 `683cfed841ccbc82a187a95afe34c36bf156081b8a4f6d1319d31aaa3e5fe15e`，落地页与 `/v1/release` 均已改指、线上验签通过）。故基线 = **`0.10.0` / `14`（线上当前版本）**：**Task 7 Step 1 直接由 `0.10.0` / `14` 改指 `0.11.0` / `15`**，无任何前置等待；Phase 2 收 `0.12.0` / `16`。册子 §0.2 第 2 条、总纲 §0.7、`docs/README.md` 第 35 行与 §5 已同步。
+
+**更正 41（Task 7 开工前）`govern.v1` 不新增签名域常量（Task 8 / Task 9 一律以本条为准）。** 册子 §4.2 / §4.4 原写「签名域新增常量 `base/govern-v1`（与 `base/author-v1` 同族）并产出契约向量」，与同段「复用既有 `verifyEventSig` 管线」**自相矛盾**——`verifyEventSig`（`internal/httpapi/event.go`）签的是 `canonical({event_id, type, created_at, body})`，**没有域分隔**。定案：**`govern.v1` 沿用通用事件内容签名，不新增 `base/govern-v1` 常量、不出新契约向量**（理由：`type` 已在待签载荷内 ⇒ 改 `type` 即改待签字节，跨事件类型重放不可行；新增域要并行维护第二条验签路径与一套新向量，与「密码学零新增面」相悖）。落地要求：**Task 8 节点侧照计划原样复用 `s.verifyEventSig(w, actor, req, rawBody)`，零改动**；**Task 9 客户端按「补充 20」自签 `canonical({event_id, type: 'govern.v1', created_at, body})`，与 `core/group.ts` 的 `buildEventWire` 逐字同构**。册子 §0.2 第 3 条 / §4.2 / §4.4、总纲 §0.7 与 §6.5 段 / §7.3 接口表、`docs/README.md` 第 33 行已同步。
