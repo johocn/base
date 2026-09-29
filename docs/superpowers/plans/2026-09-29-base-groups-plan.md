@@ -2198,6 +2198,10 @@ git push
   - ⑤ **签发**：`BASE_SIGN_KEY=… /opt/base/based release -version-name 0.9.0 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.9.0.apk -apk-file /opt/appdl/base-0.9.0.apk -notes 学习小组②加密：圈子建组入组_小组会话_邀请码 -out /opt/base-cache/data/release.json`（`-notes` 必须是无空格单 token；`-out` 必须落在**缓存节点**数据目录——nginx `/` 的后端是 8083）。输出 `apk_size=27409541`、`apk_sha256=fda99535…`（与 ② 一致）、`public_key=48c33db9…824f4`。
   - ⑥ **线上验证**：`GET /v1/release` → `version_name":"0.9.0"` 且 `apk_sha256` 一致、`min_version_name":"0.8.0"`、`notes` 中文无乱码；`HEAD http://118.190.217.242/dl/base-0.9.0.apk` → **200** 且 `Content-Length: 27409541` == `apk_size`；客户端 `verifyRelease(doc, '48c33db9…')` = **true**（临时 `tsx` 脚本用后即删）；`/dl/index.html` 已指 0.9.0。**至此 0.9.0 才真正触达终端用户**（此前仅版本号 + 节点二进制），真机 7 条验收可以开始。
   - **后续口径**：凡手机端有用户可见改动，Task 列表必须显式包含这四步发布动作（本计划漏写属计划缺陷，与「更正 3」同类）。
+- **更正 12（真机验收首日暴露的两处缺陷 + 热修复 0.9.1）**：两处现象独立，`0.9.0` 已发布且带 ①，故补发 `0.9.1`。
+  - ① **代码级缺陷：自检 `randomblob` 探测把大写 hex 误判为异常**。真机 `hex(randomblob(32))` 返回 **64 个大写**字符（SQLite `hex()` 固有行为；本机实测 `select hex(randomblob(4))` → `0627764F`），而探测白名单是 `/^[0-9a-f]{64}$/`（只收小写）：长度 64 通过、字符不匹配 ⇒ 报「randomblob 返回异常（64 字符）」。**影响面不止页面红叉**——`applySelfCheck` 把探测结果写回 `cached.capabilities`（`platform/index.ts`），`cryptoOk='fail'` 令 `postBlockedReason` 生效 ⇒ **评论与小组发言被禁用**。**冷启动路径不受影响**（`hexToBytes` 经 `asciiToBase16` 同时接受 `A-F`/`a-f`，实测 512 大写字符 → 256 字节成功），故两者必须分清；`cached` 是**模块级内存变量、不落盘**，误判后**重启应用即恢复**。它能长期藏住的原因与「更正 10」同类：`fakes.ts` 假实现返回小写、单测恒绿——已把假实现改为照抄大写。修复 = 正则改 `[0-9a-fA-F]`。
+  - ② **发布级缺陷：「真机安装包提示解析错误」的根因不是包，而是同名不同签的旧安装**。取证：0.8.0 与 0.9.0 **编译器同为 5.26、签名证书 SHA1/SHA256 完全相同、lib 压缩（`libgifimage.so` 318992→106612）与 ABI 一致、zip 条目 854 vs 855（只差新增小组页资源）**；公网 GET 下载件与本地逐字节一致、zip 首部 `50 4b 03 04`、EOCD 与 855 条目自洽 ⇒ **AAB / ABI 缺失 / 下载损坏 / zip 破坏 / 拿错包全部排除**。用户在机上**卸载同名旧安装**（此前装过同包名的自制基座，签名不同）后 **0.9.0 安装成功**。**口径**：凡真机装不上，先卸载同名旧安装再试，不要先怀疑构建。
+  - ③ **热修复 `0.9.1`/`11`（含 ①，四步发布一次走完）**：CLI 打包一次成功（12:09:01，`Android云端证书`）；APK **27409528 字节** / sha256 `3450f78dbbd0078963786fb7491fac3019fa0a8e3c3cb4aee7a881eb0b3981ec` / 证书 SHA1 仍为 `19:95:21:ED:…:FF:19`；上传 `/opt/appdl/base-0.9.1.apk`（远端 sha256 一致）；落地页整页重写改指 0.9.1，并在指引里补「报解析错误先卸载同名应用」；签发 `based release -version-name 0.9.1 -min-version-name 0.8.0 … -out /opt/base-cache/data/release.json`；线上 `GET /v1/release` → `0.9.1` / `apk_size=27409528` / `verifyRelease=true`，`HEAD /dl/base-0.9.1.apk` → **200** + 27409528。
 
 ## 执行实况（实施后回填）
 
@@ -2213,6 +2217,7 @@ git push
 | 8 | `core/group.test.ts`（AC 1/2/8/9/10） | `b784317` | AC 10 用例前提修正（更正 7）、7 个用例包 `describe`（更正 8） |
 | 9 | 圈子改小组列表页 + 小组会话页 + 路由 | `c00075a` | `pages.json` 只加 1 条路由、tabBar 未动；不翻页时**原位提示**（更正 9） |
 | 10 | `0.9.0`/`10` + 全量自测 + 节点部署探活 + 文档回填 + **发布补做** | `9f7156c`（group_id 修复）+ `a55c4be`（版本/文档） | mobile **17 文件 / 149 项全绿** + `tsc` 干净 + `build:h5` 通过；`go build`/`go vet`/`go test ./...` 全包 ok；两节点交叉编译部署后探活：`GET /v1/group/{32hex}` → **404 `group_not_found`**、`GET /v1/comment` → **200**；**`group_id` 长度缺陷即在此步暴露**（更正 10）；**0.9.0 APK 已发布上线**（补做，见更正 11）：27409541 字节 / sha256 `fda99535…c13a5` / 证书 SHA1 与 0.6.0–0.8.0 一致，落地页与 `/v1/release` 均改指 0.9.0、线上验签 `verifyRelease=true` |
+| 11 | 热修复 `0.9.1`/`11`：自检随机源误判（更正 12 ①）+ 发布四步 | `aa1360e`（正则 + fakes 照抄大写）+ 版本号 | mobile **17 文件 / 149 项全绿** + `tsc` 干净 + `build:h5` 通过；APK **27409528 字节** / sha256 `3450f78d…81ec` / 证书 SHA1 与 0.6.0–0.8.0 一致；落地页与 `/v1/release` 均改指 0.9.1、线上验签 `verifyRelease=true` |
 
 ### 待人工验收（真机）
 
