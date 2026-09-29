@@ -13,6 +13,12 @@
         <text class="act" @click="openComments">评论</text>
         <text class="act" @click="openGovernance">治理</text>
       </view>
+      <block v-if="siblingQuizzes.length > 0">
+        <text class="group">本课测验</text>
+        <view v-for="qz in siblingQuizzes" :key="qz.itemId" class="quiz-item" @click="openQuiz(qz.itemId)">
+          <text class="quiz-title">{{ qz.title }}</text>
+        </view>
+      </block>
       <text
         v-for="(p, i) in paragraphs"
         :key="i"
@@ -37,6 +43,7 @@ import {
   type ReaderFontScale,
   type ReaderTheme,
 } from '../../core/state';
+import { childrenOf, lessonOfCarrier } from '../../core/course-tree';
 import { setPendingTarget } from '../../core/comment';
 import type { ArticleRow } from '../../core/types';
 import { bootstrap } from '../../platform';
@@ -49,6 +56,11 @@ const fav = ref(false);
 const theme = ref<ReaderTheme>('light');
 const fontScale = ref<ReaderFontScale>(2);
 const progress = ref(0);
+interface SiblingQuiz {
+  itemId: string;
+  title: string;
+}
+const siblingQuizzes = ref<SiblingQuiz[]>([]);
 const itemId = ref('');
 /** 可滚动高度 = 正文实际高度 − 视口高度；为 0 表示还没量到，此时不显示进度条 */
 const scrollable = ref(0);
@@ -81,6 +93,16 @@ onLoad(async (query) => {
     theme.value = normalizeTheme(await repo.getConfig('reader_theme'));
     fontScale.value = normalizeFontScale(await repo.getConfig('reader_font_scale'));
     fav.value = await repo.isFavorite(row.itemId);
+    // 文章页的答题入口：文章所属课时内的姊妹 quiz；文章无课程归属时无此入口（册子 §4）
+    const lessonId = lessonOfCarrier(row.itemId);
+    if (lessonId) {
+      const acc: SiblingQuiz[] = [];
+      for (const id of childrenOf(await repo.listSegments(lessonId))) {
+        const sib = await repo.getItem(id);
+        if (sib?.type === 'quiz') acc.push({ itemId: id, title: sib.title || id });
+      }
+      siblingQuizzes.value = acc;
+    }
     // 进入即标记已读；readAtNext 保证只写首次
     await repo.markRead(row.itemId, new Date().toISOString());
     await nextTick();
@@ -147,6 +169,10 @@ function openComments() {
  * 「治理」恒显：本地 `items` 表没有 `author_id`，判不出「这条是不是我写的」，
  * 资格一律由服务端回 `item_self_owned` / `item_state_mismatch` 后提示（本册 §2.3）。
  */
+function openQuiz(itemId: string) {
+  uni.navigateTo({ url: `/pages/quiz/quiz?itemId=${encodeURIComponent(itemId)}` });
+}
+
 function openGovernance() {
   uni.navigateTo({ url: `/pages/governance/governance?itemId=${encodeURIComponent(itemId.value)}` });
 }
@@ -172,6 +198,9 @@ function decodedId(raw: string): string {
 .act-on { color: #b7791f; }
 .para { display: block; margin-bottom: 12px; line-height: 1.8; }
 .error { color: #c53030; font-size: 13px; }
+.group { display: block; margin: 16px 0 6px; color: #888888; font-size: 13px; }
+.quiz-item { padding: 10px 0; border-bottom: 1px solid #f2f2f2; }
+.quiz-title { color: #2b6cb0; font-size: 15px; }
 
 /* 护眼：米黄纸底 + 暖褐字，介于浅色与深色之间 */
 .wrap.sepia { background: #f4ecd8; color: #4a4034; }
