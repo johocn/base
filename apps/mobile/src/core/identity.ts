@@ -136,6 +136,19 @@ export async function peekLocalIdentity(storage: StorageAdapter): Promise<Identi
   return loadLocalIdentity(storage, kek);
 }
 
+/**
+ * 取本机身份；不存在就现建并落盘（**写路径**需要，与 `peekLocalIdentity` 的只读语义成对）。
+ * 从 `core/comment.ts` 的私有 `localIdentity()` 提上来——两处同一语义，复制必然漂移。
+ */
+export async function ensureLocalIdentity(storage: StorageAdapter): Promise<Identity> {
+  const kek = await deviceKek(storage);
+  const existing = await loadLocalIdentity(storage, kek);
+  if (existing) return existing;
+  const ident = createIdentity();
+  await saveLocalIdentity(storage, ident, kek, 'device');
+  return ident;
+}
+
 /** `PUT /v1/identity/escrow/{username}` 的请求体（册子 §5.3）。 */
 export interface EscrowPayload {
   id: string;
