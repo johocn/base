@@ -3598,3 +3598,15 @@ git push origin master
 实际怎么做的：第一条仍走直打，第二条改为直接造 `tag_links` 行（断言与排序覆盖不变）；改标提案生效路径落 Task 6（提交 `50c285f`）。
 依据：本用例的意图是覆盖**反查排序**，不是覆盖直打条件；跨标签共用目标的正规入口是 §3.5 提案，Task 6 落地后由它覆盖。
 
+**更正 3（Task 4 · `TestSubmitTagRejectsGroupEventTarget` 用例缺陷）**
+现象：Task 4 Step 2 的该用例先 `n.seedEvent(t, "g1", "group.v1")` 造一条 ② 类事件，但请求体里的目标是写死的假 id `comment/0123456789abcdef0123456789abcdef`——**与刚入库的事件毫无关系**。于是该用例退化为「一个库里不存在的 event_id 被拒」，与 §3.7「② 类 event_id 一律拒」这条红线的意图无关：即便 `HasCommentEvent` 完全不硬过滤 `type='comment.v1'`，用例照样绿。
+计划写的是：`seedEvent` 造事件，再用固定假 id 作目标（Step 2 代码块）。
+实际怎么做的：`n.seedEvent` 返回真实 `event_id`，用例用 `"comment/" + eid` 作目标，断言仍为 `400 tag_target_not_found`（提交 `8b1e495`）。
+依据：§3.7 的红线要证明的是「事件**确实存在**但类型是 ② 类时仍被拒」；只有把真事件 id 喂进去，`HasCommentEvent` 的 `type='comment.v1'` 硬过滤才是被真正覆盖的那一行代码。
+
+**更正 4（Task 4 · 测试基座假定与实况不符）**
+现象：Task 4 Step 2 假定的 `newTestNode` / `seedGovernor` / `seedGovernor2` / `seedOutsider` / `n.seedItem` / `n.seedEvent` / `n.tagLinkCount` / `n.itemExists` / `containsCode` / `signAuthorForTest` **在 `internal/httpapi` 里一个都不存在**；且 `tagSubmitBody` 按计划返回 `[]byte`，而真实 `signedRequest` 的 body 形参是 `string`。
+计划写的是：直接使用上述 helper，并附注「若同包测试基座已有等价物就复用；缺的在 `tag_test.go` 内以测试专用 helper 补」。
+实际怎么做的：复用既有等价物 `newSubmitNode`（返回 `*submitNode{st,public}`，已登记 `testSeed`）、`registerSeed`、`signedRequest`/`sendAuth`，错误码断言改回同包风格 `out["code"] != "…"`；缺的 helper 全部在 `tag_test.go` 内补齐（含两个 64-hex 测试 seed 常量）；名册内身份用「登记 + 走 `POST /v1/submit` 投 200 字 article」造，不直写库；`signedRequest` 调用处把 `[]byte` 显式转 `string`（提交 `8b1e495`）。
+依据：该附注本身就是计划预留的口径；`store.ArticleMinRunes` 未导出，同包测试只能写字面量 200。非测试代码零新增导出，契约未变。
+
