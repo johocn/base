@@ -387,8 +387,9 @@ describe('group', () => {
     const a = fixture();
     gateOffline(a.o);
     const created = await createGroup(a.o, { name: '读书', encrypted: true });
-    // m = 11 ⇒ k = 3 ⇒ 移出成员需 ceil(2*3/3) = 2 签
+    // 门槛用**变更前**人数：本地行放 11 人 ⇒ k = 3 ⇒ 移出成员需 ceil(2*3/3) = 2 签
     const memberIds = Array.from({ length: 11 }, (_, i) => i.toString(16).padStart(32, '0'));
+    await a.repo.saveGroup({ ...created.group, memberIdsJson: JSON.stringify(memberIds) });
     const req = await buildRosterRequest(a.o, created.group.groupId, { sub: 'remove', memberIds });
     const mine = await signSigRequest(a.o, req);
     const before = (await a.repo.listCommentOut()).length;
@@ -596,5 +597,44 @@ describe('group', () => {
     expect(row.epoch).toBe(4);
     expect(row.rosterRev).toBe(7);
     expect(JSON.parse(row.memberIdsJson)).toEqual([creatorId]);
+  });
+
+  it('门槛镜像用变更前人数：m=11 的圈子移出一人仍须 2 签（验收 M4）', async () => {
+    const a = fixture();
+    gateOffline(a.o);
+    const created = await createGroup(a.o, { name: '读书', encrypted: true });
+    const members = Array.from({ length: 11 }, (_, i) => i.toString(16).padStart(32, '0'));
+    await a.repo.saveGroup({ ...created.group, memberIdsJson: JSON.stringify(members) });
+
+    const rm = await removeMember(a.o, created.group.groupId, members[0]!);
+    expect(decodeRosterRequest(rm.requestCode).memberIds).toHaveLength(10); // 草稿是变更后（10 人）
+    expect((await a.repo.getGroup(created.group.groupId))!.memberIdsJson).toBe(JSON.stringify(members)); // 本地仍是变更前
+    const mine = await signSigRequest(a.o, rm.requestCode);
+    const before = (await a.repo.listCommentOut()).length;
+    const err = await submitRoster(a.o, rm.requestCode, [mine], rm.envelopes).catch((e: unknown) => e);
+    expect((err as GroupError).message).toBe('需 2 名签名（移出成员），当前 1 名'); // 用变更后 10 人算会误报「需 1 名」
+    expect((await a.repo.listCommentOut()).length).toBe(before); // 未提交、未入队
+
+    const second = await signSigRequest(fixture().o, rm.requestCode);
+    expect((await submitRoster(a.o, rm.requestCode, [mine, second], rm.envelopes)).queued).toBe(true);
+  });
+
+  it('门槛镜像用变更前人数：m=3 的圈子解散须 2 签（验收 M5）', async () => {
+    const a = fixture();
+    gateOffline(a.o);
+    const created = await createGroup(a.o, { name: '读书', encrypted: true });
+    const members = [created.group.creatorId, 'a'.repeat(32), 'b'.repeat(32)];
+    await a.repo.saveGroup({ ...created.group, memberIdsJson: JSON.stringify(members) });
+
+    const diss = await dissolveGroup(a.o, created.group.groupId);
+    expect(decodeRosterRequest(diss.requestCode).memberIds).toEqual([]); // 解散：名单清空（变更后 0 人）
+    const mine = await signSigRequest(a.o, diss.requestCode);
+    const before = (await a.repo.listCommentOut()).length;
+    const err = await submitRoster(a.o, diss.requestCode, [mine], diss.envelopes).catch((e: unknown) => e);
+    expect((err as GroupError).message).toBe('需 2 名签名（解散圈子），当前 1 名'); // 用变更后 0 人算会误报「需 1 名」
+    expect((await a.repo.listCommentOut()).length).toBe(before);
+
+    const second = await signSigRequest(fixture().o, diss.requestCode);
+    expect((await submitRoster(a.o, diss.requestCode, [mine, second], diss.envelopes)).queued).toBe(true);
   });
 });

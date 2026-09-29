@@ -573,8 +573,11 @@ export async function submitRoster(
     const r = readSigReceipt(code, d);
     if (r) signers.set(r.id, { id: r.id, sig: r.sig });
   }
-  // 2. 门槛镜像：k 只依赖 m（纯函数，客户端算得出）；「谁算治者」依赖贡献度排名，客户端算不出 ⇒ 留给节点裁决
-  const m = d.memberIds.length;
+  // 2. 门槛镜像：席位 k 按**变更前**的名单人数算（与节点同源，`handleGroupRosterV2` 用 `cur` 行）。
+  //    草稿里的名单是变更**后**的（remove 少一人、dissolve 为空、join 多一人），用它算会把门槛压低而误报。
+  //    「谁算治者」依赖贡献度排名，客户端算不出 ⇒ 留给节点裁决。
+  const cur = await o.repo.getGroup(d.groupId);
+  const m = cur ? (JSON.parse(cur.memberIdsJson) as string[]).length : d.memberIds.length; // 无本地行才退回草稿
   const q = quorumOf(d.sub, governorSeats(m), m);
   if (signers.size < q.votes) {
     throw new GroupError('roster_quorum_missing', `需 ${q.votes} 名签名（${q.label}），当前 ${signers.size} 名`);
@@ -644,7 +647,7 @@ async function draftThenRotate(
   input: { sub: RosterSub; memberIds: string[]; name?: string },
 ): Promise<{ requestCode: string; envelopes: GroupEnvelope[] }> {
   const requestCode = await buildRosterRequest(o, cur.groupId, input);
-  const { envelope } = await localRotate(o, cur, input.memberIds);
+  const { envelope } = await localRotate(o, cur);
   return { requestCode, envelopes: envelope ? [envelope] : [] };
 }
 
@@ -751,11 +754,14 @@ export async function dissolveGroup(
   return draftThenRotate(o, cur, { sub: 'dissolve', memberIds: [] });
 }
 
-/** 轮换：新 epoch 钥 → 用旧钥封一个信封 → 本地写钥并前推 epoch（册子 §3.5）。 */
+/**
+ * 轮换：新 epoch 钥 → 用旧钥封一个信封 → 本地写钥并前推 epoch（册子 §3.5）。
+ * **不动本地名单**：`groups.memberIdsJson` 代表「已提交」的名单，草稿里的名单是**变更后**的提案，
+ * 只有在节点确认后（读接口回写）才落到本地。否则门槛镜像会拿变更后人数去算，把门槛压低（M4 / M5）。
+ */
 async function localRotate(
   o: GroupOptions,
   cur: GroupRow,
-  memberIds: string[],
 ): Promise<{ group: GroupRow; envelope: GroupEnvelope | null; newKeyHex: string }> {
   const epoch = cur.epoch + 1;
   const newKeyHex = bytesToHex(randomBytes(GROUP_KEY_BYTES));
@@ -775,12 +781,7 @@ async function localRotate(
     keyCipher: await sealKeyCipher(o.adapters.storage, hexToBytes(newKeyHex)),
     createdAt: new Date().toISOString(),
   });
-  const group: GroupRow = {
-    ...cur,
-    epoch,
-    rosterRev: (cur.rosterRev || 0) + 1,
-    memberIdsJson: JSON.stringify(memberIds),
-  };
+  const group: GroupRow = { ...cur, epoch, rosterRev: (cur.rosterRev || 0) + 1 };
   await o.repo.saveGroup(group);
   return { group, envelope, newKeyHex };
 }
