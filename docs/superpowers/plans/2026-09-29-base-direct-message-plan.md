@@ -2567,9 +2567,27 @@ git push
 
 > 实施过程中若与册子 / 本计划出现口径冲突，按「先改册子（走 `## 0. 改版说明`）→ 再改计划 → 最后改代码」的次序处理，并在本节逐条追加（体例照 `#31` 计划的「执行期更正」）。
 
+- **更正 1（Task 5，文案级）**：`core/wire.ts` 为保持「纯抽取、行为零变化」，`openKeyCipher` / `openText` 的错误文案原样保留了 group 侧的 `'group: 组密钥密文格式损坏'` / `'group: 密文过短'` 前缀；dm 侧这两种失败都被降级为界面提示，不暴露给用户（册子 §0.4）。
+- **更正 2（Task 3，实现细节）**：匿名读接口 DTO 的 `payload_cid` 直接取事件行投影列 `e.PayloadCID`（与 `GET /v1/comment` 同口径），不解析 `body_json`。
+- **更正 3（Task 10 Step 3，执行方式）**：发布前硬检查①的正则，计划原文 `git grep -nE '...'` 在 PowerShell 5.1 下会因内层双引号被剥离而产生假阳性；须使用 ripgrep / `-f -` 方式执行同一正则。**检查结论本身不变（无输出）**。
+- **更正 4（Task 8 / Task 10，数字偏差）**：Task 8 的用例实为 **6 条**（非计划写的 5 条），故 `dm.test.ts` 为 **9 条**、移动端全量为 **18 文件 / 158 项**（计划写的 157 是旧数）。
+
 ## 执行实况（实施后回填）
 
 > 实施完成后逐 Task 回填「commit / 实测结论」，体例照 `#31` 计划的同名章节。
+
+| Task | 内容 | commit | 实测结论 |
+|---|---|---|---|
+| 1 | 节点 store 层 `ListDMEvents`（同构 `ListGroupEvents`） | `bb15a7c` | `go build` / `go vet` / `go test ./...` 全包 ok |
+| 2 | `dm.v1` 事件注册与密文落块 | `145d816` | 同上；`TestDMMsgStoresCipherNotPlaintext` / `TestDMContractValidation` / `TestDMSigInvalidDoesNotStoreBlob` 通过 |
+| 3 | 匿名读 `GET /v1/dm/{peer_id}` | `9ab102f` | DTO `payload_cid` 取投影列 `e.PayloadCID`（更正 2） |
+| 4 | 反熵接收侧接线（F5′ 投影还原 + F6′ 块归属） | `83d186f` | `parseEventProjection` 加 `dm.v1` 分支 + `EventBlobIndex` 纳入 `dm.v1` |
+| 5 | `core/wire.ts` 抽公共件（唯一一处改已上线代码） | `e66c67e` | `tsc --noEmit` 干净；纯抽取、行为零变化；错误文案保留 group 前缀（更正 1） |
+| 6 | 本地 `dm_keys` 表与 `LocalRepo` 三方法 | `e6143d3` | vitest 全绿 |
+| 7 | `core/dm.ts` 好友码与建友 / 收码 | `d6f5839` | AC 1 / 2 / 8 用例通过 |
+| 8 | `core/dm.ts` 好友列表、发言、会话合并解密 | `2998c72` | AC 5 / 6 / 9 用例通过；`dm.test.ts` 9 条（更正 4） |
+| 9 | 两页 + 路由 + 「我的」入口 | `2de4f1c` | `pages.json` 只加 1 条路由；模板 `.value` 扫描无输出 |
+| 10 | `0.10.0` / `14` + 全量门禁 + 节点部署探活 + 四步发布 + 回填 | `（本次提交）` | mobile **18 文件 / 158 项全绿** + `tsc` 干净 + `build:h5` / `build:app` 通过；`go build` / `go vet` / `go test ./...` 全包 ok；两节点交叉编译部署后探活：`GET /v1/dm/{32hex}` → **200 + `{"events":[],"next_cursor":null}`**（**非** 404）、`GET /v1/dm/zz` → **400**、`GET /v1/group/{32hex}` → **404**（既有读接口未回归）；APK **27413300 字节** / sha256 `683cfed8…5fe15e`；落地页与 `/v1/release` 均改指 0.10.0、`min_version_name=0.8.0`、`HEAD /dl/base-0.10.0.apk` → **200** + 27413300 |
 
 ### 待人工验收（真机）
 
