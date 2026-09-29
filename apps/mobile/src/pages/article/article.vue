@@ -165,14 +165,14 @@ function openComments() {
   uni.switchTab({ url: '/pages/comment/comment' });
 }
 
-/**
- * 「治理」恒显：本地 `items` 表没有 `author_id`，判不出「这条是不是我写的」，
- * 资格一律由服务端回 `item_self_owned` / `item_state_mismatch` 后提示（本册 §2.3）。
- */
 function openQuiz(itemId: string) {
   uni.navigateTo({ url: `/pages/quiz/quiz?itemId=${encodeURIComponent(itemId)}` });
 }
 
+/**
+ * 「治理」恒显：本地 `items` 表没有 `author_id`，判不出「这条是不是我写的」，
+ * 资格一律由服务端回 `item_self_owned` / `item_state_mismatch` 后提示（本册 §2.3）。
+ */
 function openGovernance() {
   uni.navigateTo({ url: `/pages/governance/governance?itemId=${encodeURIComponent(itemId.value)}` });
 }
