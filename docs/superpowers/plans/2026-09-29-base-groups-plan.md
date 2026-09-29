@@ -2190,6 +2190,14 @@ git push
 - **更正 8（Task 8，体例）**：Step 1 import 了 `describe`，但 Step 2–8 给的用例全是**顶层 `it`**（照抄则 `describe` 未使用）。实际把 7 个用例包进 `describe('group', …)`——与仓库其它 `*.test.ts` 体例一致，也用上了该 import。
 - **更正 9（Task 9）**：Step 3 说「`feed.nextCursor` 支持 `onReachBottom` 续页」，但 Step 10 给出的 `fetchGroupMessages(o, groupId)` **不接受游标**，内部 `fetchGroup` 也不传 `cursor` ⇒ 永远只取首页（节点 limit=30）；带解密的续页还需该模块**未导出**的 `openText`。册子 §5.5 对会话页只要求「消息流 / 发言输入框 / 待发区 / 成员列表」，**未要求翻页** ⇒ 不新增导出、不改 `core/`：保留 `onReachBottom` 接线与 `nextCursor`，游标非空时**原位提示**「更早的消息本版暂不支持翻页」（不静默显示「没有更多了」，也不混入未解密的原始事件）。另两点落地口径：① 创建者判定用零网络的 `peekLocalIdentity` 与本机 id 比对 `feed.group.creatorId`（计划未指定函数）；② 补发复用 `core/comment` 的 `flushPending`（`core/group.ts` 未导出补发函数）——与计划「补发编排零改动」一致。
 - **更正 10（Task 6/7/8 + Task 10 探活，缺陷级）**：计划把 `group_id` 写成「16 hex」（Step 给的是 `randomBytes(8)`、`decodeInvite` 校验 16 字符），但**节点契约是 32 hex（16 字节）**——`isHexN(s, n)` 的第二参是**字节数**（`len(s) == n*2`，`internal/httpapi/identity.go:48`），而 `event_id` 实为 `randomBytes(16)`（`core/comment.ts:181`）/ 节点侧 `isHexN(req.EventID, 16)`（`internal/httpapi/event.go:52`）⇒ 册子「与 `event_id` 同形」的**同形值是 32 hex**。不改则：建组 roster 与每条发言都会被节点判 **400 `event_param_invalid`**（AC 5/AC 6/AC 9 与 AC 10 的联网路径全部不可达）。**发现方式**：Task 10 部署后探活 `GET /v1/group/0000000000000000`（16 hex）得 **400** 而非期望的 404，用 32 hex 重探才得到 `404 group_not_found`。已改客户端三处（`core/group.ts` 的 `createGroup` → `randomBytes(16)`、`decodeInvite` → 校验 32 hex；`types.ts` 注释）+ 测试三处期望（`group.test.ts` 的 `groupId` 正则、`reply_to` 两例、`group_not_found` 用 32 hex 组 id），另把册子 §3.1/§3.3/§3.4 的「16 hex」口径回填为「16 字节（32 hex）」并记入册子 §0.2。
+- **更正 11（Task 10 发布缺口补做 + CLI 取证反转）**：本计划 Task 10 只写了「版本号 + 节点二进制部署」，**没有** 0.5.0–0.8.0 一贯的四步发布动作（APK 云打包 → 上传 → 落地页改指 → `based release` 签发）。同日补做：
+  - ① **打包**：`D:\HBuilderX\cli.exe open` 后执行 `cli.exe pack --project e:\code\base\apps\mobile --platform android --android.packagename uni.app.UNI936A667 --android.androidpacktype 3` **一次成功**（HBuilderX `5.26.2026091802`；09:15 提交云端 → 09:18 打包成功）。**这与 #30 计划留档的「任何 `pack` 调用必崩、CLI 桥接失效」相反**——那条取证基于 HBuilderX 5.24，现已不成立；两条记录并存备查（`pack` 输出显示「类型: Android云端证书」，但**证书 SHA1 仍是 `19:95:21:ED:…:FF:19`**，与 0.6.0–0.8.0 一致 ⇒ 可覆盖安装，无需卸载重装）。
+  - ② **指纹**：临时地址下载另存 `apps\mobile\dist\release\apk\base-0.9.0.apk`；**27409541 字节**，sha256 `fda995350d4605c96a7ddb433e3cc04653e9f05706bc6ce0bab0e847f93c13a5`（本地 `curl.exe` 仍报 `getaddrinfo()`，照 #30 经验改用 `Invoke-WebRequest`）。
+  - ③ **上传**：`scp` 到 `/opt/appdl/base-0.9.0.apk`，远端 `sha256sum` 与本地逐字一致。
+  - ④ **落地页**：仍**整页重写后 `scp`**（`sed` 单行替换会留下陈旧版本文案，同 #30 经验）：href → `./base-0.9.0.apk`，版本行 → 「版本 0.9.0（versionCode 10）· 2026-09-29 · 学习小组（② 加密）：圈子建组 / 入组、小组会话、邀请码」，操作指引补第 6 条圈子路径；远端 `grep` 复核得 `base-0.9.0.apk` / `versionCode 10`。
+  - ⑤ **签发**：`BASE_SIGN_KEY=… /opt/base/based release -version-name 0.9.0 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.9.0.apk -apk-file /opt/appdl/base-0.9.0.apk -notes 学习小组②加密：圈子建组入组_小组会话_邀请码 -out /opt/base-cache/data/release.json`（`-notes` 必须是无空格单 token；`-out` 必须落在**缓存节点**数据目录——nginx `/` 的后端是 8083）。输出 `apk_size=27409541`、`apk_sha256=fda99535…`（与 ② 一致）、`public_key=48c33db9…824f4`。
+  - ⑥ **线上验证**：`GET /v1/release` → `version_name":"0.9.0"` 且 `apk_sha256` 一致、`min_version_name":"0.8.0"`、`notes` 中文无乱码；`HEAD http://118.190.217.242/dl/base-0.9.0.apk` → **200** 且 `Content-Length: 27409541` == `apk_size`；客户端 `verifyRelease(doc, '48c33db9…')` = **true**（临时 `tsx` 脚本用后即删）；`/dl/index.html` 已指 0.9.0。**至此 0.9.0 才真正触达终端用户**（此前仅版本号 + 节点二进制），真机 7 条验收可以开始。
+  - **后续口径**：凡手机端有用户可见改动，Task 列表必须显式包含这四步发布动作（本计划漏写属计划缺陷，与「更正 3」同类）。
 
 ## 执行实况（实施后回填）
 
@@ -2204,7 +2212,7 @@ git push
 | 7 | `core/group.ts` + `ensureLocalIdentity` | `be19dc2` | `tsc --noEmit` 干净；签名域 9 键与册子 §3.3 逐字一致 |
 | 8 | `core/group.test.ts`（AC 1/2/8/9/10） | `b784317` | AC 10 用例前提修正（更正 7）、7 个用例包 `describe`（更正 8） |
 | 9 | 圈子改小组列表页 + 小组会话页 + 路由 | `c00075a` | `pages.json` 只加 1 条路由、tabBar 未动；不翻页时**原位提示**（更正 9） |
-| 10 | `0.9.0`/`10` + 全量自测 + 节点部署探活 + 文档回填 | `见下一条提交` | mobile **17 文件 / 149 项全绿** + `tsc` 干净 + `build:h5` 通过；`go build`/`go vet`/`go test ./...` 全包 ok；两节点交叉编译部署后探活：`GET /v1/group/{32hex}` → **404 `group_not_found`**、`GET /v1/comment` → **200**；**`group_id` 长度缺陷即在此步暴露**（更正 10） |
+| 10 | `0.9.0`/`10` + 全量自测 + 节点部署探活 + 文档回填 + **发布补做** | `9f7156c`（group_id 修复）+ `a55c4be`（版本/文档） | mobile **17 文件 / 149 项全绿** + `tsc` 干净 + `build:h5` 通过；`go build`/`go vet`/`go test ./...` 全包 ok；两节点交叉编译部署后探活：`GET /v1/group/{32hex}` → **404 `group_not_found`**、`GET /v1/comment` → **200**；**`group_id` 长度缺陷即在此步暴露**（更正 10）；**0.9.0 APK 已发布上线**（补做，见更正 11）：27409541 字节 / sha256 `fda99535…c13a5` / 证书 SHA1 与 0.6.0–0.8.0 一致，落地页与 `/v1/release` 均改指 0.9.0、线上验签 `verifyRelease=true` |
 
 ### 待人工验收（真机）
 
