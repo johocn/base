@@ -67,6 +67,11 @@ var authErrText = map[string]string{
 	"group_proposal_proposer_missing": "解散圈子需治理者发起",
 	"group_roster_epoch_stale":        "密钥已轮换，请先同步圈内状态",
 	"govern_event_conflict":           "同一提案存在并发冲突，已按确定性规则收敛",
+
+	"tag_not_governor":     "只有治理人（全站名册或圈子治者）能给无标签内容打标签",
+	"tag_target_tagged":    "该内容已有标签，改动请走治理提案",
+	"tag_links_invalid":    "links 不合法：kind 必须与 target_id 形态一致，且同一 target_id 不得重复",
+	"tag_target_not_found": "打标目标不存在或已下架",
 }
 
 // writeAuthErr 按契约 3.3 输出 {"error": "<人读消息>", "code": "<机器码>"}。

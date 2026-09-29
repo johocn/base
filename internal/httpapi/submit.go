@@ -25,6 +25,7 @@ const (
 	// submitSignableAlgs 的两种载体：本册只收独立 article 与独立 quiz（册子 §2.4）。
 	itemTypeArticle = "article"
 	itemTypeQuiz    = "quiz"
+	itemTypeTag     = "tag"
 
 	// maxTitleRunes 是标题的 rune 上限（册子 §2.1）。
 	maxTitleRunes = 200
@@ -86,7 +87,14 @@ type submitReq struct {
 	BodyMD       string          `json:"body_md"`
 	QuestionJSON string          `json:"question_json"`
 	AuthorSig    string          `json:"author_sig"`
+	Links        []submitLink    `json:"links"`
 	AuthorID     json.RawMessage `json:"author_id"`
+}
+
+// submitLink 是 type=tag 的一条关联（册子 §3.4）。
+type submitLink struct {
+	TargetID string `json:"target_id"`
+	Kind     string `json:"kind"`
 }
 
 // handleSubmitPost 是签名写路径 POST /v1/submit（册子 §2.1）：已登记身份的作者
@@ -102,11 +110,16 @@ func (s *Server) handleSubmitPost(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthErr(w, http.StatusBadRequest, "author_id_forbidden")
 		return
 	}
-	if req.Type != itemTypeArticle && req.Type != itemTypeQuiz {
+	if req.Type != itemTypeArticle && req.Type != itemTypeQuiz && req.Type != itemTypeTag {
 		s.writeAuthErr(w, http.StatusBadRequest, "item_type_unsupported")
 		return
 	}
-	if _, code := splitSubmitItemID(req.ItemID, req.Type); code != "" {
+	if req.Type == itemTypeTag {
+		if _, _, _, ok := protocol.ParseTagItemID(req.ItemID); !ok {
+			s.writeAuthErr(w, http.StatusBadRequest, "item_id_invalid")
+			return
+		}
+	} else if _, code := splitSubmitItemID(req.ItemID, req.Type); code != "" {
 		s.writeAuthErr(w, http.StatusBadRequest, code)
 		return
 	}
@@ -114,6 +127,14 @@ func (s *Server) handleSubmitPost(w http.ResponseWriter, r *http.Request) {
 	if !validItemTitle(req.Title) {
 		s.writeAuthErr(w, http.StatusBadRequest, "item_title_invalid")
 		return
+	}
+	if req.Type == itemTypeTag {
+		name, chapter, section, _ := protocol.ParseTagItemID(req.ItemID)
+		if strings.TrimSpace(req.Title) != protocol.TagTitle(name, chapter, section) {
+			// title 不是自由字段：它由 item_id 三段重建而来（册子 §3.1）
+			s.writeAuthErr(w, http.StatusBadRequest, "item_title_invalid")
+			return
+		}
 	}
 	content := req.BodyMD
 	if req.Type == itemTypeQuiz {
@@ -127,12 +148,27 @@ func (s *Server) handleSubmitPost(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthErr(w, http.StatusBadRequest, "item_question_invalid")
 		return
 	}
+	var tagLinks []store.TagLink
+	if req.Type == itemTypeTag {
+		links, ok := normalizeSubmitTagLinks(req.Links)
+		if !ok {
+			s.writeAuthErr(w, http.StatusBadRequest, "tag_links_invalid")
+			return
+		}
+		tagLinks = links
+	}
 	if !s.submitLimiterByID.allow(actor) || !s.submitLimiterByIP.allow(clientIP(r)) {
 		s.writeAuthErr(w, http.StatusTooManyRequests, "item_rate_limited")
 		return
 	}
 	// content_hash 一律由服务端算（册子 §2.2）：请求体带的那个已在上文被忽略。
-	contentHash := submissionContentHash(req.Type, req.BodyMD, req.QuestionJSON)
+	var contentHash string
+	if req.Type == itemTypeTag {
+		// 容器口径（#14 §3.3）：哈希只看物化的 segments 行——与 #25 的 article/quiz 口径不同。
+		contentHash = store.SegmentsContentHash(store.MaterializeTagSegments(req.ItemID, tagLinks))
+	} else {
+		contentHash = submissionContentHash(req.Type, req.BodyMD, req.QuestionJSON)
+	}
 
 	it, ok, err := s.st.LookupIdentity(actor)
 	if err != nil {
@@ -142,6 +178,27 @@ func (s *Server) handleSubmitPost(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		s.writeAuthErr(w, http.StatusForbidden, "identity_unregistered")
 		return
+	}
+	if req.Type == itemTypeTag {
+		// 资格（册子 §3.4）：本接口第一次出现「验签通过但仍可能无权写」——判定不可省略、不可配置。
+		governors, err := s.st.GovernorSet()
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !governors[actor] {
+			s.writeAuthErr(w, http.StatusForbidden, "tag_not_governor")
+			return
+		}
+		exists, err := s.checkTagTargetsExist(tagLinks)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !exists {
+			s.writeAuthErr(w, http.StatusBadRequest, "tag_target_not_found")
+			return
+		}
 	}
 	if !isHexN(req.AuthorSig, 64) {
 		s.writeAuthErr(w, http.StatusBadRequest, "author_sig_invalid")
@@ -153,13 +210,25 @@ func (s *Server) handleSubmitPost(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthErr(w, http.StatusBadRequest, "author_sig_invalid")
 		return
 	}
-	created, err := s.st.UpsertSubmission(store.Submission{
-		ItemID: req.ItemID, Type: req.Type, Title: title,
-		BodyMD: req.BodyMD, QuestionJSON: req.QuestionJSON,
-		ContentHash: contentHash, AuthorID: actor, AuthorSig: req.AuthorSig,
-	})
+	var created bool
+	if req.Type == itemTypeTag {
+		_, err = s.st.UpsertTagSubmission(store.TagSubmission{
+			TagID: req.ItemID, Title: title, Links: tagLinks,
+			AuthorID: actor, AuthorSig: req.AuthorSig,
+		})
+	} else {
+		created, err = s.st.UpsertSubmission(store.Submission{
+			ItemID: req.ItemID, Type: req.Type, Title: title,
+			BodyMD: req.BodyMD, QuestionJSON: req.QuestionJSON,
+			ContentHash: contentHash, AuthorID: actor, AuthorSig: req.AuthorSig,
+		})
+	}
 	if errors.Is(err, store.ErrItemTaken) {
 		s.writeAuthErr(w, http.StatusForbidden, "item_id_taken")
+		return
+	}
+	if errors.Is(err, store.ErrTagTargetTagged) {
+		s.writeAuthErr(w, http.StatusForbidden, "tag_target_tagged")
 		return
 	}
 	if err != nil {
@@ -170,4 +239,45 @@ func (s *Server) handleSubmitPost(w http.ResponseWriter, r *http.Request) {
 		"item_id": req.ItemID, "type": req.Type,
 		"content_hash": contentHash, "author_id": actor, "created": created,
 	})
+}
+
+// normalizeSubmitTagLinks 校验并规范化 links（册子 §3.4）：kind 必须与 target_id 形态自洽，
+// 同一 target_id 不得重复（tag_links 的主键是 (tag_id,target_id)）。
+func normalizeSubmitTagLinks(in []submitLink) ([]store.TagLink, bool) {
+	out := make([]store.TagLink, 0, len(in))
+	seen := map[string]bool{}
+	for _, l := range in {
+		kind := protocol.TagKindOfTarget(l.TargetID)
+		if kind == "" || kind != l.Kind || seen[l.TargetID] {
+			return nil, false
+		}
+		seen[l.TargetID] = true
+		out = append(out, store.TagLink{TargetID: l.TargetID, Kind: kind})
+	}
+	return out, true
+}
+
+// checkTagTargetsExist 逐个校验目标存在性（册子 §3.2）：条目必须在本节点且 state='active'；
+// 评论必须是一条本节点已收到的 comment.v1 事件——② 类由此天然被排除（§3.7）。
+func (s *Server) checkTagTargetsExist(links []store.TagLink) (bool, error) {
+	for _, l := range links {
+		if l.Kind == "comment" {
+			ok, err := s.st.HasCommentEvent(strings.TrimPrefix(l.TargetID, "comment/"))
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+			continue
+		}
+		it, ok, err := s.st.GetItem(l.TargetID)
+		if err != nil {
+			return false, err
+		}
+		if !ok || it.State != "active" {
+			return false, nil
+		}
+	}
+	return true, nil
 }
