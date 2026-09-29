@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/johocn/base/internal/store"
@@ -98,6 +101,10 @@ func (c Config) pullEvents(ctx context.Context, st *store.Store, hc *http.Client
 			}
 			if _, err := applySyncedGroupEvent(st, it); err != nil {
 				return total, err
+			}
+			// govern.v1 投影失败**不阻断整页反熵**：事件行才是权威来源，读接口可从事件重算。
+			if _, err := applySyncedGovernEvent(st, it); err != nil {
+				log.Printf("peersync: govern.v1 投影失败（事件行已落，读接口可从事件重算）: %v", err)
 			}
 			total++
 		}
@@ -284,4 +291,56 @@ func applySyncedGroupEvent(st *store.Store, it eventSyncItem) (bool, error) {
 		Encrypted: enc, MemberIDsJSON: string(membersJSON), KeyEnvelopesJSON: envelopesJSON,
 		EventID: it.EventID,
 	})
+}
+
+// applySyncedGovernEvent 把对端来的 govern.v1 事件投影进本地 govern_* 两表（册子 §4.3）。
+// 投影是**幂等**的：重复事件静默忽略；冲突事件（已被更早的 (created_at,event_id) 占位）**不算错**；
+// 投影失败**不阻断事件行落地**（事件行才是权威来源，读接口可以从事件重算）。
+func applySyncedGovernEvent(st *store.Store, it eventSyncItem) (bool, error) {
+	if it.Type != "govern.v1" {
+		return false, nil
+	}
+	// body_json 是**客户端原始键集**（httpapi 存的就是 req.Body 原文），故这里能取到全部字段。
+	var m struct {
+		Action         string `json:"action"`
+		ProposalID     string `json:"proposal_id"`
+		TargetItemID   string `json:"target_item_id"`
+		Verb           string `json:"verb"`
+		ContentHash    string `json:"content_hash"`
+		ContentVersion int64  `json:"content_version"`
+		RevokedRev     int64  `json:"revoked_rev"`
+		Reason         string `json:"reason"`
+		Title          string `json:"title"`
+		BodyMD         string `json:"body_md"`
+		Choice         string `json:"choice"`
+	}
+	if err := json.Unmarshal([]byte(it.BodyJSON), &m); err != nil || m.ProposalID == "" {
+		return false, nil // 形态不认识的事件：落行但不投影（与 parseEventProjection 的零值口径一致）
+	}
+	pid, err := strconv.ParseInt(m.ProposalID, 10, 64)
+	if err != nil || pid <= 0 {
+		return false, nil
+	}
+	switch m.Action {
+	case "proposal":
+		err := st.ProjectGovernProposal(store.GovernProposalEvent{
+			ProposalID: pid, TargetItemID: m.TargetItemID, Verb: m.Verb, ContentHash: m.ContentHash,
+			Reason: m.Reason, Title: m.Title, BodyMD: m.BodyMD,
+			ContentVersion: m.ContentVersion, RevokedRev: m.RevokedRev,
+			CreatedAt: it.CreatedAt, EventID: it.EventID, Actor: it.ID,
+		})
+		if err != nil && !errors.Is(err, store.ErrGovernEventConflict) {
+			return false, err
+		}
+		return true, nil
+	case "vote":
+		if err := st.ProjectGovernVote(store.GovernVoteEvent{
+			ProposalID: pid, Choice: m.Choice,
+			CreatedAt: it.CreatedAt, EventID: it.EventID, Actor: it.ID,
+		}); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
 }

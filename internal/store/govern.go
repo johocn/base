@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -68,6 +69,12 @@ type Proposal struct {
 	ExecutedAt      int64
 	VoidedAt        int64
 	ExecutedResult  string
+	// SourceEventID 指回来源 `govern.v1` 事件；空串 = 老路径本地写入（册子 §2.5）。
+	SourceEventID string
+	// ContentVersion / RevokedRev 是提案建立时固化的**快照水位**（册子 §4.3）：
+	// 票权按该水位复算，名册中途变化不改判（AC 12）。
+	ContentVersion int64
+	RevokedRev     int64
 }
 
 // ProposalView 是一条提案加上**当前有效票**与派生字段（册子 §3.3）。
@@ -79,7 +86,8 @@ type ProposalView struct {
 }
 
 // proposalColumns 的列顺序必须与 scanProposal 的 Scan 参数一一对应。
-const proposalColumns = `proposal_id,action,item_id,proposer_id,reason,title,body_md,base_content_hash,created_at,executed_at,voided_at,executed_result`
+// source_event_id 可空，故 COALESCE 成空串读回（NULL = 老路径本地写入）。
+const proposalColumns = `proposal_id,action,item_id,proposer_id,reason,title,body_md,base_content_hash,created_at,executed_at,voided_at,executed_result,COALESCE(source_event_id,''),content_version,revoked_rev`
 
 // rowScanner 抽象 *sql.Row 与 *sql.Rows 的 Scan。
 type rowScanner interface{ Scan(dest ...any) error }
@@ -87,7 +95,8 @@ type rowScanner interface{ Scan(dest ...any) error }
 func scanProposal(sc rowScanner) (Proposal, error) {
 	var p Proposal
 	err := sc.Scan(&p.ProposalID, &p.Action, &p.ItemID, &p.ProposerID, &p.Reason, &p.Title, &p.BodyMD,
-		&p.BaseContentHash, &p.CreatedAt, &p.ExecutedAt, &p.VoidedAt, &p.ExecutedResult)
+		&p.BaseContentHash, &p.CreatedAt, &p.ExecutedAt, &p.VoidedAt, &p.ExecutedResult,
+		&p.SourceEventID, &p.ContentVersion, &p.RevokedRev)
 	return p, err
 }
 
@@ -120,6 +129,104 @@ func filterRoster(ids []string, roster map[string]bool) []string {
 	return out
 }
 
+// filterRosterAtWatermark 过滤出「在提案快照水位下仍在名册内」的投票人（册子 §4.3，取代 #27 的实时复判）。
+// 以传入的**当前名册**为基线，再加回「水位之后才退役」的作者——与「当前名册」解耦（AC 12）。
+// content_version 记入口径但当前无 per-item 版本可 gate，可实施的杠杆只有 revoked_rev。
+func (s *Store) filterRosterAtWatermark(ids []string, roster map[string]bool, revokedRev int64) ([]string, error) {
+	restored, err := s.restoredRosterAuthors(revokedRev)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if roster[id] || restored[id] {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+// restoredRosterAuthors 返回「按快照水位应加回名册」的作者集合（册子 §4.3）：
+// 作者有一条**在水位之后才退役**（tombstone.revoked_rev > revokedRev）且当前仍达质量门槛的条目。
+// 派生口径与 ContributorRoster 完全同源（deriveRoster / meetsQualityGate），只在 state 判定上放宽退役条目。
+func (s *Store) restoredRosterAuthors(revokedRev int64) (map[string]bool, error) {
+	rows, err := s.db.Query(`SELECT item_id,author_id,type FROM items
+		WHERE author_id<>'' AND state<>'active'
+		  AND EXISTS(SELECT 1 FROM tombstones t WHERE t.item_id=items.item_id AND t.revoked_rev>?)
+		ORDER BY item_id ASC`, revokedRev)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cands []Candidate
+	articleIDs, videoIDs, quizIDs := []string{}, []string{}, []string{}
+	index := map[string]int{}
+	for rows.Next() {
+		var c Candidate
+		if err := rows.Scan(&c.ItemID, &c.AuthorID, &c.Type); err != nil {
+			return nil, err
+		}
+		index[c.ItemID] = len(cands)
+		cands = append(cands, c)
+		switch c.Type {
+		case "article":
+			articleIDs = append(articleIDs, c.ItemID)
+		case "video":
+			videoIDs = append(videoIDs, c.ItemID)
+		case "quiz":
+			quizIDs = append(quizIDs, c.ItemID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(articleIDs) > 0 {
+		articles, err := s.ListArticles(articleIDs)
+		if err != nil {
+			return nil, err
+		}
+		for id, a := range articles {
+			if i, ok := index[id]; ok {
+				cands[i].BodyMD = a.BodyMD
+			}
+		}
+	}
+	if len(quizIDs) > 0 {
+		quizzes, err := s.ListQuizzes(quizIDs)
+		if err != nil {
+			return nil, err
+		}
+		for id, q := range quizzes {
+			i, ok := index[id]
+			if !ok {
+				continue
+			}
+			var doc struct {
+				Questions []json.RawMessage `json:"questions"`
+			}
+			if err := json.Unmarshal([]byte(q.QuestionJSON), &doc); err == nil {
+				cands[i].QuestionCount = len(doc.Questions)
+			}
+		}
+	}
+	if len(videoIDs) > 0 {
+		durations, err := s.ListMediaDurations(videoIDs)
+		if err != nil {
+			return nil, err
+		}
+		for id, d := range durations {
+			if i, ok := index[id]; ok {
+				cands[i].DurationSeconds = d
+			}
+		}
+	}
+	set := map[string]bool{}
+	for _, c := range deriveRoster(cands) {
+		set[c.ID] = true
+	}
+	return set, nil
+}
+
 // CreateProposal 单事务写入提案行与提案人的第 1 票（册子 §2.3），返回新 proposal_id。
 //
 // 刻意**不做**生效判定：门槛最小为 2（册子 §2.1），此刻有效票恒为 1，判定必然 pending。
@@ -129,9 +236,19 @@ func (s *Store) CreateProposal(p Proposal) (int64, error) {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,base_content_hash,created_at)
-		VALUES(?,?,?,?,?,?,?,?)`,
-		p.Action, p.ItemID, p.ProposerID, p.Reason, p.Title, p.BodyMD, p.BaseContentHash, p.CreatedAt)
+	// 提案建时固化快照水位（册子 §4.3）：content_version 记当前版本，revoked_rev 记当前墓碑高水位。
+	// 之后票权按此水位复算，名册中途变化不改判（AC 12）。老路径不产事件，source_event_id 留 NULL。
+	cv, err := contentVersionTx(tx)
+	if err != nil {
+		return 0, err
+	}
+	rv, err := maxRevokedRevTx(tx)
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,base_content_hash,created_at,content_version,revoked_rev)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		p.Action, p.ItemID, p.ProposerID, p.Reason, p.Title, p.BodyMD, p.BaseContentHash, p.CreatedAt, cv, rv)
 	if err != nil {
 		return 0, fmt.Errorf("store: 写提案: %w", err)
 	}
@@ -144,6 +261,23 @@ func (s *Store) CreateProposal(p Proposal) (int64, error) {
 		return 0, fmt.Errorf("store: 写提案人第 1 票: %w", err)
 	}
 	return id, tx.Commit()
+}
+
+// contentVersionTx 读当前全局 content_version（meta 缺省视为 0），供 CreateProposal 固化水位。
+func contentVersionTx(tx *sql.Tx) (int64, error) {
+	var n int64
+	err := tx.QueryRow(`SELECT CAST(value AS INTEGER) FROM meta WHERE key=?`, metaContentVersion).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return n, err
+}
+
+// maxRevokedRevTx 读当前墓碑 revoked_rev 的高水位（无墓碑视为 0），供 CreateProposal 固化水位。
+func maxRevokedRevTx(tx *sql.Tx) (int64, error) {
+	var n int64
+	err := tx.QueryRow(`SELECT COALESCE(MAX(revoked_rev),0) FROM tombstones`).Scan(&n)
+	return n, err
 }
 
 // GetProposal 读一行提案；不存在返回 ok=false（册子 §3.2 的 404 分支）。
@@ -187,9 +321,14 @@ func (s *Store) ListProposalViews(roster map[string]bool) ([]ProposalView, error
 		if err != nil {
 			return nil, err
 		}
+		// 票权按提案**快照水位**判定（册子 §4.3），与「当前名册」解耦（AC 12）。
+		effective, err := s.filterRosterAtWatermark(voters, roster, p.RevokedRev)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, ProposalView{
 			Proposal:  p,
-			Votes:     filterRoster(voters, roster),
+			Votes:     effective,
 			Threshold: GovernThreshold(p.Action),
 			Status:    ProposalStatus(p.ExecutedAt, p.VoidedAt),
 		})

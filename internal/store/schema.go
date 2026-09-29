@@ -179,8 +179,9 @@ var schemaStatements = []string{
 	)`,
 
 	// govern_proposals / govern_votes：审批治理的提案与票（第 3 册 §5.1）。
-	// 只存本节点，不进 events、不参与反熵、不跨节点同步（§2.5）。
-	// 两张都是新增表，schemaStatements 的 CREATE TABLE IF NOT EXISTS 足够，无需 ALTER 补列。
+	// #33 起降级为**本地物化视图**：事件是权威来源，`govern.v1` 事件投影写入这两表，
+	// `source_event_id` 指回来源事件（可空；NULL = 本地路径写入的提案 / 票）。
+	// 只存本节点，老路径不进 events、不参与反熵、不跨节点同步（§2.5）。
 	`CREATE TABLE IF NOT EXISTS govern_proposals(
 		proposal_id       INTEGER PRIMARY KEY,
 		action            TEXT    NOT NULL,
@@ -193,13 +194,17 @@ var schemaStatements = []string{
 		created_at        INTEGER NOT NULL,
 		executed_at       INTEGER NOT NULL DEFAULT 0,
 		voided_at         INTEGER NOT NULL DEFAULT 0,
-		executed_result   TEXT    NOT NULL DEFAULT ''
+		executed_result   TEXT    NOT NULL DEFAULT '',
+		source_event_id   TEXT,
+		content_version   INTEGER NOT NULL DEFAULT 0,
+		revoked_rev       INTEGER NOT NULL DEFAULT 0
 	)`,
 
 	`CREATE TABLE IF NOT EXISTS govern_votes(
 		proposal_id INTEGER NOT NULL,
 		voter_id    TEXT    NOT NULL,
 		created_at  INTEGER NOT NULL,
+		source_event_id TEXT,
 		PRIMARY KEY(proposal_id, voter_id)
 	)`,
 
@@ -229,6 +234,16 @@ var groupColumnMigrations = []struct{ column, ddl string }{
 	{"roster_rev", `ALTER TABLE groups ADD COLUMN roster_rev INTEGER NOT NULL DEFAULT 0`},
 	{"encrypted", `ALTER TABLE groups ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 1`},
 	{"key_envelopes", `ALTER TABLE groups ADD COLUMN key_envelopes TEXT NOT NULL DEFAULT '[]'`},
+}
+
+// governColumnMigrations 是 govern_* 两表的**后加列**（#33 册子 §4.4）。
+// 两表由本册降级为「本地物化视图」：事件是权威来源，投影列只供既有读接口与兼容期回读。
+// 与 events / items / groups 同因：schemaStatements 全是 CREATE TABLE IF NOT EXISTS，对既有表不补列。
+var governColumnMigrations = []struct{ table, column, ddl string }{
+	{"govern_proposals", "source_event_id", `ALTER TABLE govern_proposals ADD COLUMN source_event_id TEXT`},
+	{"govern_proposals", "content_version", `ALTER TABLE govern_proposals ADD COLUMN content_version INTEGER NOT NULL DEFAULT 0`},
+	{"govern_proposals", "revoked_rev", `ALTER TABLE govern_proposals ADD COLUMN revoked_rev INTEGER NOT NULL DEFAULT 0`},
+	{"govern_votes", "source_event_id", `ALTER TABLE govern_votes ADD COLUMN source_event_id TEXT`},
 }
 
 // migrate 执行 schemaStatements 之后的幂等迁移。
@@ -277,6 +292,19 @@ func migrate(db *sql.DB) error {
 		}
 		if _, err := db.Exec(m.ddl); err != nil {
 			return fmt.Errorf("store: migrate groups.%s: %w", m.column, err)
+		}
+	}
+	// govern_* 两表的后加列（#33 §4.4）：按表分别取列集合再逐条补。
+	for _, m := range governColumnMigrations {
+		cols, err := tableColumns(db, m.table)
+		if err != nil {
+			return err
+		}
+		if cols[m.column] {
+			continue
+		}
+		if _, err := db.Exec(m.ddl); err != nil {
+			return fmt.Errorf("store: migrate %s.%s: %w", m.table, m.column, err)
 		}
 	}
 	return nil

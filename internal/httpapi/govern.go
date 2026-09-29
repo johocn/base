@@ -278,6 +278,8 @@ type proposalsResponse struct {
 // 不分页、不支持过滤（量级假设见册子 §9 风险 6）；空列表返回 []（不是 null）。
 func (s *Server) handleProposalList(w http.ResponseWriter, r *http.Request) {
 	roster, _ := s.governRoster() // 派生失败按空名册降级（册子 §6.2）
+	// 票权按提案**快照水位**判定（册子 §4.3，取代 #27 的实时复判）：名册作为当前基线，
+	// 内部再按提案行上的 content_version / revoked_rev 加回水位后退役的作者（AC 12）。
 	views, err := s.st.ListProposalViews(roster)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())

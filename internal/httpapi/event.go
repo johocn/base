@@ -26,6 +26,7 @@ var eventTypeRegistry = map[string]struct{}{
 	"comment.v1": {},
 	"group.v1":   {},
 	"dm.v1":      {},
+	"govern.v1":  {},
 }
 
 type eventReq struct {
@@ -67,6 +68,9 @@ func (s *Server) handleEventPost(w http.ResponseWriter, r *http.Request) {
 		return
 	case "dm.v1":
 		s.handleDMEvent(w, actor, req, createdAt)
+		return
+	case "govern.v1":
+		s.handleGovernEvent(w, actor, req, createdAt)
 		return
 	}
 	s.putBareEvent(w, actor, req, createdAt)
