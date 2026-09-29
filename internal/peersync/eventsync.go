@@ -235,28 +235,53 @@ func parseEventProjection(typ, bodyJSON string) commentProjection {
 // applySyncedGroupEvent 把对端来的 roster 事件落进本地名单投影（册子 §4.4 的延伸）。
 // 用 ForceGroupRoster：**不校验 owner**——对端数据在信任域内，且本地可能只收到 epoch>1 的名单；
 // 只接受更大的 epoch，旧值静默忽略。发言事件不改变投影，直接返回。
+// v2 事件另带 roster_rev / encrypted / key_envelopes（#33 §3.8），一并无损搬运。
 func applySyncedGroupEvent(st *store.Store, it eventSyncItem) (bool, error) {
 	if it.Type != "group.v1" {
 		return false, nil
 	}
 	var m struct {
-		GroupID   string   `json:"group_id"`
-		Action    string   `json:"action"`
-		Epoch     int64    `json:"epoch"`
-		MemberIDs []string `json:"member_ids"`
+		GroupID   string            `json:"group_id"`
+		Action    string            `json:"action"`
+		Sub       string            `json:"sub"`
+		Epoch     int64             `json:"epoch"`
+		RosterRev int64             `json:"roster_rev"`
+		Encrypted *int64            `json:"encrypted"`
+		MemberIDs []string          `json:"member_ids"`
+		Envelopes []json.RawMessage `json:"envelopes"`
 	}
 	if err := json.Unmarshal([]byte(it.BodyJSON), &m); err != nil || m.GroupID == "" {
 		return false, nil
 	}
-	if m.Action != "roster" || m.Epoch < 1 || len(m.MemberIDs) == 0 {
+	// 空名单只放行解散（sub=dissolve）。若空名单一律丢弃，解散事件会消失，对端永远保留旧名单，
+	// 已解散/被移出的成员在对端仍能读封闭圈；v1 键集没有 sub，故不会误放垃圾事件。
+	if m.Action != "roster" || m.Epoch < 1 || (len(m.MemberIDs) == 0 && m.Sub != "dissolve") {
 		return false, nil
 	}
 	membersJSON, err := json.Marshal(m.MemberIDs)
 	if err != nil {
 		return false, err
 	}
+	// encrypted 缺省必须显式给 1（封闭）：v1 老事件没有该键，用 int64 时零值 0 会把老事件
+	// 误判成开放圈（匿名可读，安全漏洞），故用指针区分「缺键」与「显式 0」。
+	enc := int64(1)
+	if m.Encrypted != nil {
+		enc = *m.Encrypted
+	}
+	// 信封列必须与写路径同形态：包装对象 {"envelopes":[...]}。读接口按
+	// struct{Envelopes []json.RawMessage `json:"envelopes"`} 解包，裸数组会 Unmarshal 失败
+	// 并被静默忽略，对端信封恒为空 ⇒ 成员无法从缓存节点解密。
+	envelopesJSON := "[]"
+	if len(m.Envelopes) > 0 {
+		raw, err := json.Marshal(map[string]any{"envelopes": m.Envelopes})
+		if err != nil {
+			return false, err
+		}
+		envelopesJSON = string(raw)
+	}
 	return st.ForceGroupRoster(store.GroupRoster{
-		GroupID: m.GroupID, CreatorID: it.ID, Epoch: m.Epoch,
-		MemberIDsJSON: string(membersJSON), EventID: it.EventID,
+		GroupID: m.GroupID, CreatorID: it.ID, Epoch: m.Epoch, RosterRev: m.RosterRev,
+		Encrypted: enc, MemberIDsJSON: string(membersJSON), KeyEnvelopesJSON: envelopesJSON,
+		EventID: it.EventID,
 	})
 }

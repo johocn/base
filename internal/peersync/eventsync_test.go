@@ -250,3 +250,121 @@ func TestDMEventProjectionRestoredOnPeer(t *testing.T) {
 		t.Fatalf("块归属不符: %+v ok=%v", ref, ok)
 	}
 }
+
+// v2 三列跨节点还原（AC 10 的前置）：roster_rev / encrypted / key_envelopes 必须无损搬进本地投影。
+// 信封尤其要按**包装对象**落库——读接口用 struct{Envelopes []json.RawMessage} 解包，
+// 裸数组会 Unmarshal 失败并被静默忽略，对端信封恒空、成员无法从缓存节点解密。
+func TestApplySyncedGroupEventV2(t *testing.T) {
+	st := openTemp(t)
+	body := `{"action":"roster","encrypted":1,"envelopes":[{"cipher":"zzz","from_epoch":1}],` +
+		`"epoch":2,"group_id":"g1","member_ids":["a1"],"name":"读书","roster_rev":2,` +
+		`"sigs":[{"id":"a1","sig":"ff"}],"sub":"rotate"}`
+	written, err := applySyncedGroupEvent(st, eventSyncItem{
+		EventID: eventIDHex(1), ID: "a1", Type: "group.v1", BodyJSON: body, CreatedAt: 1,
+	})
+	if err != nil || !written {
+		t.Fatalf("written=%v err=%v", written, err)
+	}
+	g, ok, err := st.GetGroup("g1")
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if g.RosterRev != 2 || g.Encrypted != 1 {
+		t.Fatalf("v2 三列未还原: %+v", g)
+	}
+	// 用读接口同一形态解包，且逐字段核对——只判「非空字符串」会漏掉裸数组这个坑。
+	var wrap struct {
+		Envelopes []json.RawMessage `json:"envelopes"`
+	}
+	if err := json.Unmarshal([]byte(g.KeyEnvelopesJSON), &wrap); err != nil {
+		t.Fatalf("key_envelopes 不是包装对象: %q err=%v", g.KeyEnvelopesJSON, err)
+	}
+	if len(wrap.Envelopes) != 1 {
+		t.Fatalf("信封应恰好 1 条: %q", g.KeyEnvelopesJSON)
+	}
+	var env struct {
+		Cipher    string `json:"cipher"`
+		FromEpoch int64  `json:"from_epoch"`
+	}
+	if err := json.Unmarshal(wrap.Envelopes[0], &env); err != nil || env.Cipher != "zzz" || env.FromEpoch != 1 {
+		t.Fatalf("信封字段未无损还原: %s err=%v", wrap.Envelopes[0], err)
+	}
+}
+
+// v1 老事件（无 encrypted 键）必须按封闭圈落库（encrypted=1）——用 int64 时零值 0 会把老事件
+// 误判成开放圈（匿名可读，安全漏洞）。roster_rev 缺省 0、信封缺省 []。
+func TestApplySyncedGroupEventLegacyDefaultsEncrypted(t *testing.T) {
+	st := openTemp(t)
+	body := `{"group_id":"g2","action":"roster","epoch":1,"member_ids":["a1"]}`
+	written, err := applySyncedGroupEvent(st, eventSyncItem{
+		EventID: eventIDHex(2), ID: "a1", Type: "group.v1", BodyJSON: body, CreatedAt: 1,
+	})
+	if err != nil || !written {
+		t.Fatalf("written=%v err=%v", written, err)
+	}
+	g, ok, err := st.GetGroup("g2")
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if g.Encrypted != 1 {
+		t.Fatalf("老事件缺省应封闭 encrypted=1，实得 %d", g.Encrypted)
+	}
+	if g.RosterRev != 0 || g.KeyEnvelopesJSON != "[]" {
+		t.Fatalf("老事件缺省列不符: %+v", g)
+	}
+}
+
+// 解散事件把名单写成 []（补充 11）：空名单必须放行落库，否则对端永远保留旧名单，
+// 已解散/被移出的成员仍能读封闭圈。
+func TestApplySyncedGroupEventDissolveClearsRoster(t *testing.T) {
+	st := openTemp(t)
+	seed := `{"action":"roster","epoch":1,"group_id":"g3","member_ids":["a1"],"encrypted":1}`
+	if written, err := applySyncedGroupEvent(st, eventSyncItem{
+		EventID: eventIDHex(3), ID: "a1", Type: "group.v1", BodyJSON: seed, CreatedAt: 1,
+	}); err != nil || !written {
+		t.Fatalf("前置条件：正常名单应先落库 written=%v err=%v", written, err)
+	}
+	dis := `{"action":"roster","sub":"dissolve","epoch":2,"roster_rev":2,"group_id":"g3",` +
+		`"member_ids":[],"encrypted":1,"sigs":[{"id":"a1","sig":"ff"}]}`
+	written, err := applySyncedGroupEvent(st, eventSyncItem{
+		EventID: eventIDHex(4), ID: "a1", Type: "group.v1", BodyJSON: dis, CreatedAt: 2,
+	})
+	if err != nil || !written {
+		t.Fatalf("解散事件应落库 written=%v err=%v", written, err)
+	}
+	g, ok, err := st.GetGroup("g3")
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if g.MemberIDsJSON != "[]" || g.Epoch != 2 {
+		t.Fatalf("解散未清空名单: %+v", g)
+	}
+}
+
+// 负向：非 roster 事件、以及空名单但非解散（sub=remove）一律静默忽略（written=false，不报错），
+// 且不得改动既有投影。
+func TestApplySyncedGroupEventIgnoresNonRosterAndEmptyRemove(t *testing.T) {
+	st := openTemp(t)
+	seed := `{"action":"roster","epoch":1,"group_id":"g4","member_ids":["a1"],"encrypted":1}`
+	if written, err := applySyncedGroupEvent(st, eventSyncItem{
+		EventID: eventIDHex(5), ID: "a1", Type: "group.v1", BodyJSON: seed, CreatedAt: 1,
+	}); err != nil || !written {
+		t.Fatalf("前置条件：正常名单应先落库 written=%v err=%v", written, err)
+	}
+	cases := []string{
+		`{"action":"msg","epoch":5,"group_id":"g4","payload_cid":"x"}`,
+		`{"action":"roster","sub":"remove","epoch":9,"roster_rev":9,"group_id":"g4","member_ids":[],"encrypted":1}`,
+	}
+	for i, body := range cases {
+		written, err := applySyncedGroupEvent(st, eventSyncItem{
+			EventID: eventIDHex(100 + i), ID: "a1", Type: "group.v1", BodyJSON: body, CreatedAt: 1,
+		})
+		if err != nil || written {
+			t.Fatalf("case %d 应静默忽略 written=%v err=%v", i, written, err)
+		}
+	}
+	g, ok, err := st.GetGroup("g4")
+	if err != nil || !ok || g.Epoch != 1 || g.MemberIDsJSON != `["a1"]` {
+		t.Fatalf("投影不应被改动: %+v ok=%v err=%v", g, ok, err)
+	}
+}
