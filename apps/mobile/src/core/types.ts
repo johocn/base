@@ -112,3 +112,31 @@ export interface MySubmissionRow {
   /** 送达时刻 ISO8601；未送达为空串 */
   sentAt: string;
 }
+
+/** 我参与的小组（本地 `groups` 表，本册 §5.1）。名单是**快照**，以节点读回为准。 */
+export interface GroupRow {
+  /** 16 hex，与节点侧同一 id */
+  groupId: string;
+  /** 组名，可空串 */
+  name: string;
+  /** 创建者身份 id（32 hex）；轮换与续期码的签名权威 */
+  creatorId: string;
+  /** 当前生效 epoch（与 `group_keys.epoch` 的最大值一致） */
+  epoch: number;
+  /** 完整名单快照（JSON 数组文本，元素为 32 hex 身份 id） */
+  memberIdsJson: string;
+  /** 入组时刻 ISO8601 */
+  joinedAt: string;
+}
+
+/**
+ * 历次 epoch 的组密钥（本地 `group_keys` 表，本册 §5.1）。
+ * `keyCipher` 是 `nonce:ct` 形态的列级密文（#4 定案：`kek_source='device'`，复用 `deviceKek()`）。
+ * 保留历史 epoch 是为了解加入前的消息；**无前向安全**（册子 §7.1 风险 3）。
+ */
+export interface GroupKeyRow {
+  groupId: string;
+  epoch: number;
+  keyCipher: string;
+  createdAt: string;
+}

@@ -2,7 +2,7 @@
 import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReader, SqliteConnection, StorageAdapter } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
 import type { LocalRepo, PackApply } from './repo';
 
 export class MemoryFs implements FsAdapter {
@@ -199,6 +199,27 @@ export class MemoryRepo implements LocalRepo {
   }
   async removeCommentOut(eventId: string): Promise<void> {
     this.commentOut.delete(eventId);
+  }
+
+  groups = new Map<string, GroupRow>(); // groupId -> row
+  groupKeys = new Map<string, GroupKeyRow>(); // `${groupId}:${epoch}` -> row
+
+  async saveGroup(row: GroupRow): Promise<void> {
+    const cur = this.groups.get(row.groupId);
+    // joined_at 保留首次值（与 SqlRepo 的 UPDATE 列表一致）
+    this.groups.set(row.groupId, cur ? { ...row, joinedAt: cur.joinedAt } : { ...row });
+  }
+  async listGroups(): Promise<GroupRow[]> {
+    return [...this.groups.values()].sort((a, b) => (a.joinedAt < b.joinedAt ? -1 : a.joinedAt > b.joinedAt ? 1 : 0));
+  }
+  async getGroup(groupId: string): Promise<GroupRow | null> {
+    return this.groups.get(groupId) ?? null;
+  }
+  async putGroupKey(row: GroupKeyRow): Promise<void> {
+    this.groupKeys.set(`${row.groupId}:${row.epoch}`, { ...row });
+  }
+  async listGroupKeys(groupId: string): Promise<GroupKeyRow[]> {
+    return [...this.groupKeys.values()].filter((k) => k.groupId === groupId).sort((a, b) => a.epoch - b.epoch);
   }
 
   submissions = new Map<string, MySubmissionRow>(); // itemId -> row

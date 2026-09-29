@@ -1,7 +1,7 @@
 import type { LocalDb } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { SEARCH_SQL, searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, FavoriteRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
 
 export interface PackApply {
   version: number;
@@ -56,6 +56,16 @@ export interface LocalRepo {
   markCommentOutFailed(eventId: string, reason: string): Promise<void>;
   /** 删一条：用户对失败项点「删除」，或补发成功后清行。 */
   removeCommentOut(eventId: string): Promise<void>;
+  /** 写/更新一个小组成员行（入组、续期、读回写都走它）。 */
+  saveGroup(row: GroupRow): Promise<void>;
+  /** 全部小组，按 `joined_at ASC`。 */
+  listGroups(): Promise<GroupRow[]>;
+  /** 读一组；不存在返回 null。 */
+  getGroup(groupId: string): Promise<GroupRow | null>;
+  /** 写一把 epoch 组密钥（同 `(group_id, epoch)` 覆盖）。epoch 大小的裁决在 `core/group.ts`，不在仓储层。 */
+  putGroupKey(row: GroupKeyRow): Promise<void>;
+  /** 某组的全部 epoch 密钥，按 `epoch ASC`（会话页一次取出建内存 map）。 */
+  listGroupKeys(groupId: string): Promise<GroupKeyRow[]>;
   /**
    * 写一行投稿台账（同 `item_id` 即更新）。台账是「我的条目」的列表本体，
    * 状态由本册 §9.3 的流转规则驱动，不由本方法决定。
@@ -105,6 +115,12 @@ export const SCHEMA_SQL: string[] = [
      question_json TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, created INTEGER NOT NULL,
      queued_at TEXT NOT NULL, sent_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS idx_my_submissions_queued ON my_submissions(queued_at)`,
+  `CREATE TABLE IF NOT EXISTS groups(
+     group_id TEXT PRIMARY KEY, name TEXT NOT NULL, creator_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+     member_ids_json TEXT NOT NULL, joined_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS group_keys(
+     group_id TEXT NOT NULL, epoch INTEGER NOT NULL, key_cipher TEXT NOT NULL, created_at TEXT NOT NULL,
+     PRIMARY KEY(group_id, epoch))`,
 ];
 
 /** SqlRepo 把 LocalRepo 语义落到 SQLite 上（Task 19 注入 plus.sqlite 连接）。 */
@@ -360,6 +376,38 @@ export class SqlRepo implements LocalRepo {
     await this.db.execute(`DELETE FROM comment_out WHERE event_id=?`, [eventId]);
   }
 
+  async saveGroup(row: GroupRow): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO groups(group_id,name,creator_id,epoch,member_ids_json,joined_at) VALUES(?,?,?,?,?,?)
+       ON CONFLICT(group_id) DO UPDATE SET name=excluded.name,creator_id=excluded.creator_id,
+         epoch=excluded.epoch,member_ids_json=excluded.member_ids_json`,
+      [row.groupId, row.name, row.creatorId, row.epoch, row.memberIdsJson, row.joinedAt],
+    );
+  }
+
+  async listGroups(): Promise<GroupRow[]> {
+    const rows = await this.db.select(`SELECT group_id,name,creator_id,epoch,member_ids_json,joined_at FROM groups ORDER BY joined_at ASC`);
+    return rows.map(toGroupRow);
+  }
+
+  async getGroup(groupId: string): Promise<GroupRow | null> {
+    const rows = await this.db.select(`SELECT group_id,name,creator_id,epoch,member_ids_json,joined_at FROM groups WHERE group_id=?`, [groupId]);
+    return rows.length > 0 ? toGroupRow(rows[0]) : null;
+  }
+
+  async putGroupKey(row: GroupKeyRow): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO group_keys(group_id,epoch,key_cipher,created_at) VALUES(?,?,?,?)
+       ON CONFLICT(group_id,epoch) DO UPDATE SET key_cipher=excluded.key_cipher`,
+      [row.groupId, row.epoch, row.keyCipher, row.createdAt],
+    );
+  }
+
+  async listGroupKeys(groupId: string): Promise<GroupKeyRow[]> {
+    const rows = await this.db.select(`SELECT group_id,epoch,key_cipher,created_at FROM group_keys WHERE group_id=? ORDER BY epoch ASC`, [groupId]);
+    return rows.map(toGroupKeyRow);
+  }
+
   async saveSubmission(row: MySubmissionRow): Promise<void> {
     await this.db.execute(
       `INSERT INTO my_submissions(item_id,type,title,body_md,question_json,state,reason,created,queued_at,sent_at)
@@ -454,6 +502,26 @@ function toCommentOutRow(r: Record<string, unknown>): CommentOutRow {
     state: String(r.state) === 'failed' ? 'failed' : 'pending',
     reason: toNullableString(r.reason),
     queuedAt: String(r.queued_at),
+  };
+}
+
+function toGroupRow(r: Record<string, unknown>): GroupRow {
+  return {
+    groupId: String(r.group_id),
+    name: String(r.name ?? ''),
+    creatorId: String(r.creator_id ?? ''),
+    epoch: Number(r.epoch ?? 1),
+    memberIdsJson: String(r.member_ids_json ?? '[]'),
+    joinedAt: String(r.joined_at ?? ''),
+  };
+}
+
+function toGroupKeyRow(r: Record<string, unknown>): GroupKeyRow {
+  return {
+    groupId: String(r.group_id),
+    epoch: Number(r.epoch),
+    keyCipher: String(r.key_cipher ?? ''),
+    createdAt: String(r.created_at ?? ''),
   };
 }
 
