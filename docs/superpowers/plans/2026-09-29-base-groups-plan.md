@@ -2180,20 +2180,31 @@ git push
 
 （执行时在此追加：与计划的偏差、实测发现、口径更正。每条写清「计划怎么写的 / 实际怎么做的 / 为什么」。）
 
+- **更正 1（Task 2，缺陷级）**：`parseGroupRoster` 的成员校验原写 `isHexN(id, 32)`。`isHexN(s, n)` 的第二参是**字节数**（实现是 `len(s) != n*2`，见 `internal/httpapi/identity.go:48`），身份 id 是 **32 个 hex 字符**（`protocol.IdentityID` = `SHA256Hex(pub)[:32]`）→ 实际应写 `isHexN(s, 16)`。不改则**任何合法名单都被 400 `event_param_invalid` 拒掉**，AC 5 / AC 6 / AC 9 全部不可达（Task 5 写测试时暴露）。已改 `internal/httpapi/group.go:129`。
+- **更正 2（Task 2，编译级）**：计划给出的 `internal/httpapi/group.go` 骨架有两处对不上仓库现状——① import 块漏 `errors`（`putGroupRoster` 要用 `errors.Is` 映射两个错误码）；② `BodyJSON: bodyJSON` 编译不过（`store.Event.BodyJSON` 是 `string`，而 `protocol.Canonicalize` 返回 `[]byte`）→ 应写 `string(bodyJSON)`（与 `handleCommentEvent` 同写法）。
+- **更正 3（Task 1，行号级）**：计划 Step 4 说 `internal/peersync/scrub.go:78` 直呼 `CommentBlobIndex`。实测该行是 `ownershipIndex(st)`，scrub 是**经 `ownershipIndex` 间接**使用（全仓唯一直接调用点在 `peersync/sync.go:40`）→ `scrub.go` 无需改动，改名后语义自动生效。
+- **更正 4（Task 3）**：`group_not_found` 原计划写 `writeError`。`writeError` 的响应体**只有 `error`、没有 `code`**，而客户端分流只读 `code` → 改用 `writeAuthErr`（响应体带 `code`）。`authErrText` 里无该码时回落到 code 文本，与既有错误码体例一致。
+- **更正 5（Task 4）**：`peersync.parseCommentProjection` 在加 `group.v1` 分支时随语义改名 `parseEventProjection`（私有函数，唯一调用点同步改）；接收侧落投影抽成 `applySyncedGroupEvent`（`action=roster` 才写，走 `ForceGroupRoster`）。
+- **更正 6（Task 5）**：节点侧单测比计划多两条口径——① AC 6 补「更小 epoch」一例（计划只写相等）；② 分页用例的 `limit` 要按**事件行数**（roster 行也占 limit 但不进 `events`）设计，否则末页永远满页、拿不到 `null` 游标。另：新文件统一补了文件末尾换行（与仓库既有文件一致）。
+- **更正 7（Task 8，计划内部矛盾）**：Step 6 的 AC 10 用例先把 `/v1/event` 全局打成 403 再调 `createGroup`（注释写「roster 也被 403」），期望建组仍返回 `{ group }`。但本计划 Step 8 自己给的 `submitWire` 只在 `CommentError('network')` 时入队、**其余错误一律 `throw e`**（`core/group.ts:284`）⇒ 建组的 roster 吃 403 会让 `createGroup` 直接抛 `CommentError('rejected')`，断言在用例第 5 行即失败。**两处互相矛盾，非实现缺陷**；册子 §5.4 与 AC 10 原文是「节点返回任何 4xx / 5xx 一律**原地报错**不入队」，故**保持实现不变、改测试**：先用 200 桩走通建组，再把 `/v1/event` 翻成 403 去断言发言路径（`comment_out` 行数不变）。
+- **更正 8（Task 8，体例）**：Step 1 import 了 `describe`，但 Step 2–8 给的用例全是**顶层 `it`**（照抄则 `describe` 未使用）。实际把 7 个用例包进 `describe('group', …)`——与仓库其它 `*.test.ts` 体例一致，也用上了该 import。
+- **更正 9（Task 9）**：Step 3 说「`feed.nextCursor` 支持 `onReachBottom` 续页」，但 Step 10 给出的 `fetchGroupMessages(o, groupId)` **不接受游标**，内部 `fetchGroup` 也不传 `cursor` ⇒ 永远只取首页（节点 limit=30）；带解密的续页还需该模块**未导出**的 `openText`。册子 §5.5 对会话页只要求「消息流 / 发言输入框 / 待发区 / 成员列表」，**未要求翻页** ⇒ 不新增导出、不改 `core/`：保留 `onReachBottom` 接线与 `nextCursor`，游标非空时**原位提示**「更早的消息本版暂不支持翻页」（不静默显示「没有更多了」，也不混入未解密的原始事件）。另两点落地口径：① 创建者判定用零网络的 `peekLocalIdentity` 与本机 id 比对 `feed.group.creatorId`（计划未指定函数）；② 补发复用 `core/comment` 的 `flushPending`（`core/group.ts` 未导出补发函数）——与计划「补发编排零改动」一致。
+- **更正 10（Task 6/7/8 + Task 10 探活，缺陷级）**：计划把 `group_id` 写成「16 hex」（Step 给的是 `randomBytes(8)`、`decodeInvite` 校验 16 字符），但**节点契约是 32 hex（16 字节）**——`isHexN(s, n)` 的第二参是**字节数**（`len(s) == n*2`，`internal/httpapi/identity.go:48`），而 `event_id` 实为 `randomBytes(16)`（`core/comment.ts:181`）/ 节点侧 `isHexN(req.EventID, 16)`（`internal/httpapi/event.go:52`）⇒ 册子「与 `event_id` 同形」的**同形值是 32 hex**。不改则：建组 roster 与每条发言都会被节点判 **400 `event_param_invalid`**（AC 5/AC 6/AC 9 与 AC 10 的联网路径全部不可达）。**发现方式**：Task 10 部署后探活 `GET /v1/group/0000000000000000`（16 hex）得 **400** 而非期望的 404，用 32 hex 重探才得到 `404 group_not_found`。已改客户端三处（`core/group.ts` 的 `createGroup` → `randomBytes(16)`、`decodeInvite` → 校验 32 hex；`types.ts` 注释）+ 测试三处期望（`group.test.ts` 的 `groupId` 正则、`reply_to` 两例、`group_not_found` 用 32 hex 组 id），另把册子 §3.1/§3.3/§3.4 的「16 hex」口径回填为「16 字节（32 hex）」并记入册子 §0.2。
+
 ## 执行实况（实施后回填）
 
 | Task | 内容 | commit | 实测结论 |
 |---|---|---|---|
-| 1 | | | |
-| 2 | | | |
-| 3 | | | |
-| 4 | | | |
-| 5 | | | |
-| 6 | | | |
-| 7 | | | |
-| 8 | | | |
-| 9 | | | |
-| 10 | | | |
+| 1 | `groups` 表 + `sqlExec` 抽壳 + 事件分页/块归属索引 | `4575dd3` | `go build` / `go vet` / `go test ./...` 全包 ok；scrub 经 `ownershipIndex` 间接生效，无需改动（更正 3） |
+| 2 | `group.v1` 注册与 `msg`/`roster` 分流 | `4575dd3` | 同上；`isHexN` 第二参是字节数、`BodyJSON` 要 `string(...)`（更正 1、2） |
+| 3 | 匿名读 `GET /v1/group/{group_id}` | `e9fbc05` | 404 走 `writeAuthErr` 才能带 `code`（更正 4） |
+| 4 | 反熵接收侧投影还原 + roster 落表 | `e9fbc05` | `parseEventProjection` + `applySyncedGroupEvent`（更正 5） |
+| 5 | 节点侧单测（AC 5/6 + 分页 + 归属） | `e9fbc05` | 分页 `limit` 按**事件行数**设计，否则拿不到 `null` 游标（更正 6） |
+| 6 | 手机端 `groups` / `group_keys` 两表 + 仓储五方法 | `e98a2af` | 含本册新测在内 vitest 17 文件全绿 |
+| 7 | `core/group.ts` + `ensureLocalIdentity` | `be19dc2` | `tsc --noEmit` 干净；签名域 9 键与册子 §3.3 逐字一致 |
+| 8 | `core/group.test.ts`（AC 1/2/8/9/10） | `b784317` | AC 10 用例前提修正（更正 7）、7 个用例包 `describe`（更正 8） |
+| 9 | 圈子改小组列表页 + 小组会话页 + 路由 | `c00075a` | `pages.json` 只加 1 条路由、tabBar 未动；不翻页时**原位提示**（更正 9） |
+| 10 | `0.9.0`/`10` + 全量自测 + 节点部署探活 + 文档回填 | `见下一条提交` | mobile **17 文件 / 149 项全绿** + `tsc` 干净 + `build:h5` 通过；`go build`/`go vet`/`go test ./...` 全包 ok；两节点交叉编译部署后探活：`GET /v1/group/{32hex}` → **404 `group_not_found`**、`GET /v1/comment` → **200**；**`group_id` 长度缺陷即在此步暴露**（更正 10） |
 
 ### 待人工验收（真机）
 
@@ -2204,3 +2215,5 @@ git push
 - 邀请码 / 续期码的复制与粘贴（`uni.setClipboardData` 与 `showModal` 的 `editable`）
 - 圈子 tab 小组列表 → 会话页跳转；待发区**不显示密文**、只显示状态与删除
 - 断网发言入队 → 联网自动补发仅一条（含 roster 的断网建组场景）
+
+**说明（AC 3/AC 4 为何只能真机验）**：本机（Windows）起 `based serve` 做端到端替代验证**不可行**——监听回环地址后客户端连接被 Windows Defender 防火墙静默丢弃（三个 Profile 均 `Enabled=True`、`DefaultInboundAction=NotConfigured`，非管理员无法为新二进制加放行规则），`curl` 与 Node `fetch` 均 `ETIMEDOUT`。对生产节点写测试数据会留下不可删除的 `identity` / `groups` / `event` / blob 行，故不做；AC 3/AC 4 维持真机定位，探活仅做**只读**验证（已在 Task 10 完成）。

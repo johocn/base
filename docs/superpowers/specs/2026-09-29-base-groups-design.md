@@ -42,6 +42,10 @@
 
 * ② 类「节点不可读、不可审」红线（总纲 §12 第 9 条）
 
+### 0.2 2026-09-29 执行期更正（计划 #31 落地时回填）
+
+* **`group_id` 长度口径更正（`group_id` / `reply_to`）**：初版 §3.1 把 `group_id` 写成「**16 hex 随机**（与 `event_id` 同形）」，两半自相矛盾且前半错——`event_id` 实为 **32 hex（16 字节）**（`core/comment.ts` 用 `randomBytes(16)`；节点 `event.go` 校验 `isHexN(req.EventID, 16)`，而 `isHexN(s,n)` 的第二参是**字节数**、实现为 `len(s) == n*2`，见 `internal/httpapi/identity.go`）。实施时先按 16 hex 生成，部署后探活 `GET /v1/group/{16hex}` 得 **400 `event_param_invalid`**（而非 404），据此定为客户端缺陷。已改客户端两处（`createGroup` 用 `randomBytes(16)`、`decodeInvite` 校验 32 hex）并同步本册子 §3.1 / §3.3 / §3.4 的示例。**`reply_to` 同理**指向 `event_id`，也是 32 hex。
+
 ## 1. 目标与判定
 
 | # | 目标 | 判定 |
@@ -72,7 +76,7 @@
 
 | 项 | 定案 | 理由 |
 |---|---|---|
-| `group_id` | 客户端生成 **16 hex 随机**（与 `event_id` 同形） | 与「`event_id` 由客户端自带、节点只登记不签发」一致（总纲 §9）。**不得由组密钥派生**——轮换会让密钥变化，id 若绑定密钥则轮换即换组 |
+| `group_id` | 客户端生成 **16 字节（32 hex）随机**（与 `event_id` 同形） | 与「`event_id` 由客户端自带、节点只登记不签发」一致（总纲 §9）。**不得由组密钥派生**——轮换会让密钥变化，id 若绑定密钥则轮换即换组 |
 | `target_id` | `group/<group_id>` | 沿用总纲 §6.0 的路径式命名空间（与 `article/<aid>` 同族），节点侧 `validTargetID` 直接可用 |
 | `creator_id` | 创建者身份 id（公钥派生） | 名单事件的唯一签名权威（§4.2） |
 | `epoch` | 整数，自 `1` 起单调递增 | 与组密钥一一对应；名单事件与消息事件均携带 |
@@ -91,8 +95,8 @@
 ```json
 {
   "v": 1,
-  "group_id": "<16 hex>",
-  "target_id": "group/<16 hex>",
+  "group_id": "<32 hex>",
+  "target_id": "group/<32 hex>",
   "name": "<组名，可选>",
   "epoch": 1,
   "group_key": "<64 hex，32 字节>",
@@ -118,11 +122,11 @@
 
 ```json
 {
-  "group_id": "<16 hex>",
+  "group_id": "<32 hex>",
   "action": "msg",
   "epoch": 3,
   "text_cipher": "<base64，密文 = sealWithNonce(当前 epoch 组密钥, nonce12, utf8(正文))>",
-  "reply_to": "<16 hex，可选，指向同组某条 event_id>"
+  "reply_to": "<32 hex，可选，指向同组某条 event_id>"
 }
 ```
 
@@ -133,7 +137,7 @@
 
 ```json
 {
-  "group_id": "<16 hex>",
+  "group_id": "<32 hex>",
   "action": "roster",
   "epoch": 2,
   "member_ids": ["<id>", "<id>", "..."],
