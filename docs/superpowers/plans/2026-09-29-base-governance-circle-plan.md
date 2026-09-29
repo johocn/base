@@ -3095,6 +3095,8 @@ git push origin master
 | M8 | 0.9.3 老客户端用**老邀请码**仍能入组（读回 `encrypted = 1`）；老客户端不会因新字段报错 | AC 13 |
 | M9 | 节点 `data/base.db`（含 wal）与 `data/blobs/*` 里搜不到封闭圈明文 | AC 9 |
 | M10 | 成员从**缓存节点**（非源节点）读到并解密成功 | AC 10 |
+| M11 | **0.13.1 补丁**：手机端发起提案并投票，票满门槛后卡片状态变「已生效」，且受审动作**真的发生**（`remove` → 该条目在课程页消失；`edit` → 标题/正文已改） | AC 11（事件路径生效闭环） |
+| M12 | **0.13.1 补丁**：治理卡片显示「水位 vN / revM」（不再恒 0；`content_version`/`revoked_rev` 由 `/v1/proposal` 下发） | 更正 45 ⑧ |
 
 ---
 
@@ -3111,6 +3113,7 @@ git push origin master
 | 7 | 0.11.0 发布四步 + 节点二进制部署 | `63e8ddc` | 版本落 `0.11.0`/`15`；门禁 `npx vitest run` 18 文件 / 176 用例全绿（169 为 Phase 1 Task 1–6 基线，+7 来自并行 #36 课程分类线的 `course-tree.test.ts`，已随 `6e4cc37` 进 HEAD）、`npx tsc --noEmit` 无输出、`npm run build:h5` `DONE Build complete`、`.value` 扫描无匹配、Go `build`/`vet`/`test ./... -count=1` 全包 ok；节点二进制交叉编译（21625006 字节 / sha256 `90f3c898…b21f`）上传后**远端 `sha256sum /opt/base/based` 与本地逐字一致**、两 service `active`、探活 `/v1/group/{32hex}` → 404 + `{"code":"group_not_found"}`、`/v1/comment` → 200、`/v1/dm/{32hex}` → 200；`docs/README.md` 第 33/35 行与 §5 已回填。**Step 4 于更正 44 定案作废**（0.11.0 不单独发，客户端改动合并到 Phase 2 的发布；见更正 44） |
 | 8 | `govern.v1` 注册 + 投影 + 水位 + 老路径只写投影 | `7071775` | 8 文件（+884/−9）；`go build`/`vet` 无输出；`go test ./... -count=1` 全包 ok；8 文件 `gofmt -l` 无输出；TDD：先红（编译失败，见更正 43 ⑤）→ 实现后 `TestGovernEvent*` 4 条全 PASS；老路径 `handleProposalPost`/`handleVotePost` **一行未改**（补充 14）；**零签名域改动**（更正 41，复用 `verifyEventSig`） |
 | 9 | 客户端写路径事件化 + `0.13.0` 发布四步 + 文档回填 | `f0a3a30` | 5 文件（+216/−86）：`core/govern.ts`（写路径改走 `POST /v1/event` 的 `govern.v1` 事件，移除旧 `signedPost`/`signRequestHeaders`；新增 `snapshotWatermark`）、`govern.test.ts`（7 → 9 用例）、`governance.vue`、`manifest.json`（`0.13.0`/`17`）、`docs/README.md`；**主代理独立复跑**：`npx vitest run` 18 文件 / 178 用例全绿、`npx tsc --noEmit` 无输出、`npm run build:h5` `DONE Build complete`、Go `build`/`vet`/`test ./... -count=1` 全包 ok（`cmd/based` … `tools/migrate` 9 包 ok）；节点二进制 21679512 字节 / sha256 `2071335046…c7f6`，远端 `sha256sum /opt/base/based` **独立复验逐字一致**、两 service `active`；发布四步全部完成：APK **27418563 字节 / sha256 `5649bc55…e385`**（与节点 `release.json` 的 `apk_sha256` 一致）、`/opt/appdl/base-0.13.0.apk` 就位、落地页 `0.13.0（versionCode 17）`、公网 `GET /v1/release` → `version_name=0.13.0` / `min_version_name=0.8.0` / `issuer=base-node-1`；`docs/README.md` 第 33/35 行已按更正 44 回填。**两处审查发现的未收口缺口见更正 45 ⑦⑧** |
+| 10 | **补丁**：审查缺口修复——事件路径生效闭环 + 提案水位可见 | `d0472d9` | 11 文件（+326/−27）：`store/govern_projection.go`（新增 `SettleGovernProposal`）、`store/govern.go`（抽纯函数 `filterRosterAtWatermarkSet`）、`httpapi/govern_event.go`（投影后 settle）、`httpapi/govern.go`（`proposalDTO` 补 `content_version`/`revoked_rev`）、`peersync/eventsync.go`（两支均 settle）、`httpapi/govern_event_test.go`（+3 用例、AC 11 补 `status` 断言、AC 12 改走事件路径、镜像补 settle）、mobile 4 文件（删 `conflictNote` 与重复门槛/状态文案、`0.13.1`/`18`）；**主代理独立复跑**：`vitest` 18 文件 / 178 用例、`tsc` clean、`build:h5` DONE、Go `build`/`vet`/`test ./... -count=1` 全包 ok、6 个改动 Go 文件的 LF 副本 `gofmt -l` 无输出；节点二进制 21685510 字节，**远端 `/opt/base/based` 与子代理本地产物 `%TEMP%\based-0.13.1-linux-amd64` 的 sha256 `ea1aca50…7902` 逐字一致**（`go version -m` 读得 `vcs.revision=55b56b0619c9`、`vcs.modified=true`）、备份链自洽（`based.bak-0.13.1` = 0.13.0 那版 `2071335046…`）、两 service `active`、`/v1/comment` `/v1/proposal` 200；发布四步全部完成：APK **27418505 字节 / sha256 `3091c4e8…1c50`**（与节点 `release.json` 的 `apk_sha256` 一致）、`/opt/appdl/base-0.13.1.apk` 就位、落地页改指、公网 `GET /v1/release` → `version_name=0.13.1` / `min_version_name=0.8.0`、`HEAD /dl/base-0.13.1.apk` → 200（27418505）。**TDD 红灯证据**：去掉 settle 调用时 `TestGovernEventQuorumSettlesAction` 精确复现 `vote_count:3 threshold:3 status:pending`（即更正 45 ⑦ 的现象）|
 
 ---
 
@@ -3212,3 +3215,23 @@ git push origin master
 **⑨ 审查发现的冗余三（未修）**：`governance.vue` 新增的水位行把卡片上**已有**的「门槛 N 票」与状态文案又写了一遍（同卡片已有 `#id · STATUS_LABEL · 时间` 与 `voteCount / threshold 票` 两行）。若按 ⑧ 让水位行真正可见，应同时删去重复的门槛 / 状态片段。
 
 **验尸（本机门禁的伪信号，供后续 Task 参考）**：`gofmt -l .` 在**本机 Windows 工作区无区分度**——`git config core.autocrlf=true` 使全部 `.go` 工作区副本为 CRLF，`gofmt -l .` 会把**未改动**的文件（实测 `internal/protocol/sign.go` 等 9 个 protocol 包文件）一并列出，`gofmt -d` 显示差异纯为行尾。故该命令只能对「本次新增且为 LF 的文件」（如 `internal/store/govern_projection.go`）判定；对存量文件的判定须忽略其输出。
+
+**更正 46（补丁 Task 10 执行期 + 主代理审查）九条。**
+
+① **为什么新增 `SettleGovernProposal` 而不是改 `ProjectGovernVote` 签名**。生效判定需要「当前名册 ∪ 水位加回集合」，而 `filterRosterAtWatermark`（`internal/store/govern.go`）→ `restoredRosterAuthors` → `s.ListArticles` / `s.ListQuizzes` / `s.ListMediaDurations` **全是 `s.db` 方法**；本库纯 Go SQLite + `SetMaxOpenConns(1)`，**在事务里调用它们必然死锁**。故两步走：**事务外**派生名册与加回集合、复算有效票（未达门槛直接返回）；**事务内**第一件事就是乐观锁重读提案行 + `governPreconditionTx` + `governApplyTx`。事务内只调用已知的 exec 版本函数。为免口径漂移，把 `filterRosterAtWatermark` 的循环抽成纯函数 `filterRosterAtWatermarkSet(ids, roster, restored)`，由 `ListProposalViews` 与 `SettleGovernProposal` 共用——**因此本 Task 多动了一个文件 `internal/store/govern.go`**（8 行，行为不变）。
+
+② **proposal 与 vote 两条分支都要 settle**。反熵不保证 `proposal` 事件先于 `vote` 事件到达（`vote` 先到时提案行尚未投影，settle 直接 `return nil`）。故 `internal/httpapi/govern_event.go` 与 `internal/peersync/eventsync.go` 都在 `switch` 之后统一 settle：proposal 事件负责「补算已有票」、vote 事件负责「补算新票」。`peersync` 侧 settle 失败只 `log.Printf` 并**仍返回 `(true, nil)`**——否则会冒泡到 `pullEvents` 让整页反熵失败（事件行才是权威来源）。
+
+③ **既有两条用例的改造是本次修复的一部分**。AC 11（`TestGovernEventConvergesViaAntiEntropy`）**补了 `status` 断言**——原断言只比 `vote_count` / `item_id`，正是它当年照不出缺陷 1 的原因之一（本用例 2 票 < `remove` 门槛 3，故断言应为 `pending`）。AC 12（`TestGovernEventVoteQuorumSnapshotWatermark`）**从老路径 `n.propose` / `n.vote` 改为走事件路径**——原版走老路径（老路径由 `addVoteTx` 写 `executed_at`），所以它验的是老路径的生效，与事件路径无关。`drainGovernFromPeer` 这个「peersync 的测试镜像」（httpapi 不能 import peersync 成环）也补了 settle，否则镜像失真、AC 11 验不到闭环。
+
+④ **`conflict_note` 决定「删」而不是「补」**。册子 §6 对 `govern_event_conflict` 的要求原文是「按 §4.3 收敛，**界面展示被选中的那一条**」——读接口天然只返回被选中的那条，**不需要**额外字段；且客户端 `createProposal` 已做 ≤3 次撞号自动重取重发，冲突在写路径就被消化。故只删客户端字段 + 页面提示行，**不**给 `proposalDTO` 加 `conflict_note`。`content_version` / `revoked_rev` 则确实补上了（`ProposalView` 内嵌 `Proposal`，两字段已随行透传）。
+
+⑤ **「sha256 逐字一致」判据的适用边界（对更正 42 ② 的重要修正）**。本次实测：同一份源码、同一工作区改动，**子代理产物** sha256 `ea1aca50…7902`（`go version -m` 读得 `vcs.revision=55b56b0619c9`、`vcs.time=2026-09-29T18:23:26Z`），**主代理事后重建** sha256 `6c744396…c468`（`vcs.revision=ed0b2221…`）——**两者不同**；而同一时刻连做两次重建，两者**sha256 完全一致**。⇒ 差异来源是 Go 的 vcs stamping（build info 里的 `vcs.revision` / `vcs.time`）随 HEAD / 时间变化，**与源码无关**。故：`sha256 逐字一致` 只在「构建与比对之间 HEAD 与工作区状态不变」时成立；**跨时刻复核必须改用**（a）与**本地留存的构建产物**比 sha256（本次即用此法闭合证据链：远端 = `%TEMP%\based-0.13.1-linux-amd64`），或（b）`go version -m <binary>` 读 vcs stamp。
+
+⑥ **公网入口事实更正**。`/v1/release` 由 **nginx `:80` → `127.0.0.1:8083`（`base-cache` 节点）** 承载，**不是** `base.service` 的 `:443`（其 data 目录 `/opt/base/data` 下**无** `release.json`，直连 `https://127.0.0.1/v1/release` 返回 404「本节点无升级信息」）。签发路径 `/opt/base-cache/data/release.json` 正确。（更正 43 / 本轮 prompt 里「公网 443 由 `base.service` 提供」的表述作废。）
+
+⑦ **已知未修：settle 与 `PutEvent` 的先后顺序两处不一致**。`handleGovernEvent` 是「settle → PutEvent」（settle 在权威事件行落地**之前**），`peersync.applySyncedGovernEvent` 是「PutEvent → settle」（正确顺序）。风险低——`PutEvent` 对同 `event_id` 是幂等覆盖，失败只可能是磁盘/DB 错；且即便 `PutEvent` 失败，`governPreconditionTx` 的 `content_hash` 乐观锁也能兜住后续重投（目标内容已变 ⇒ 新提案记 `voided_at`），不会产生错误结论。若要统一，把 settle 移到 `PutEvent` 之后即可（1 行）。**未修**。
+
+⑧ **每遇一条 `govern.v1` 事件派生一次名册**（`peersync` 侧调 `ContributorRoster()`，会扫 items + articles + quizzes + videos）。治理事件量级小（只对 `case "proposal"` / `case "vote"` 触发，评论 / 圈子事件不受影响），当前可接受；若治理放量，可提到「每页一次」。
+
+⑨ **文档行号口径**：`docs/README.md` 的「第 33 行」（表格 `#` 列 = 33 的册子行）**物理行号是第 59 行**——后续引用请按「表格 `#` 列」而非物理行号（本轮 prompt 里写「第 33 行」按物理行号读会改错行）。
