@@ -1,20 +1,27 @@
 import { describe, expect, it } from 'vitest';
 
-import { requestSignBytes, sha256Hex, utf8, verify, type RequestMeta } from '@base/protocol-ts';
+import { canonicalize, utf8, verify, type Json } from '@base/protocol-ts';
 
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { createProposal, listProposals, myIdentityId, vote, GovernError, type GovernOptions } from './govern';
 import { decodeUtf8 } from './sync';
+import type { ItemRow } from './types';
 
 const BASE = 'https://node.test';
+const HASH = 'aa'.repeat(32);
+const ITEM = 'article/aaa';
 
 function json(v: unknown) {
   return { status: 200, body: utf8(JSON.stringify(v)) };
 }
 
-function fixture() {
-  const http = new FakeHttp();
+function itemRow(itemId: string): ItemRow {
+  return { itemId, source: 'import', type: 'article', title: 'T', rev: 'r1', contentHash: HASH, state: 'active', updatedAt: '2026-01-01T00:00:00Z' };
+}
+
+function fixture(http: FakeHttp = new FakeHttp()) {
   const repo = new MemoryRepo();
+  repo.items.set(ITEM, itemRow(ITEM));
   const o: GovernOptions = { adapters: fakeAdapters(http, new MemoryFs(), new FakePackReader()), repo, nodeBaseUrl: BASE };
   return { http, repo, o };
 }
@@ -23,6 +30,19 @@ function registeredPub(http: FakeHttp): string {
   const reg = http.posted.find((p) => p.url.endsWith('/v1/identity/register'));
   if (!reg) throw new Error('未发出登记请求');
   return (JSON.parse(decodeUtf8(reg.body)) as { pubkey: string }).pubkey;
+}
+
+/** 最后一条发往 `/v1/event` 的请求。 */
+function lastEventPosted(http: FakeHttp) {
+  const ev = [...http.posted].reverse().find((p) => p.url === `${BASE}/v1/event`);
+  if (!ev) throw new Error('未发出治理事件');
+  return ev;
+}
+
+type EventEnv = { event_id: string; type: string; created_at: number; body: Json; sig: string };
+
+function parseEvent(http: FakeHttp): EventEnv {
+  return JSON.parse(decodeUtf8(lastEventPosted(http).body)) as EventEnv;
 }
 
 const ROW = {
@@ -40,10 +60,12 @@ const ROW = {
   created_at: 1790000000000,
   executed_at: 0,
   voided_at: 0,
+  content_version: 4,
+  revoked_rev: 2,
 };
 
 describe('govern', () => {
-  it('列表：字段逐个映射、votes 数组原样、按 proposal_id 升序返回后做纯展示反转', async () => {
+  it('列表：字段逐个映射（含水位）、votes 数组原样、按 proposal_id 升序返回后做纯展示反转', async () => {
     const { http, o } = fixture();
     http.routes.set(`${BASE}/v1/proposal`, json({ proposals: [{ ...ROW, proposal_id: '1' }, { ...ROW, proposal_id: '2', status: 'void' }] }));
     const items = await listProposals(o);
@@ -52,6 +74,7 @@ describe('govern', () => {
       proposalId: '1', action: 'remove', itemId: 'article/aaa', proposerId: 'p1', reason: '内容不准确',
       title: '', bodyMd: '', status: 'pending', votes: ['p1'], voteCount: 1, threshold: 3,
       createdAt: 1790000000000, executedAt: 0, voidedAt: 0,
+      contentVersion: 4, revokedRev: 2, conflictNote: '',
     });
     // 空列表返回 []
     http.routes.set(`${BASE}/v1/proposal`, json({ proposals: [] }));
@@ -67,33 +90,57 @@ describe('govern', () => {
     expect(err.message).toBe('需要联网才能查看提案');
   });
 
-  it('发起：请求体只含 action/item_id/reason，签名头可被节点按同一字节重建', async () => {
+  it('发起：走 POST /v1/event 的 govern.v1 事件，id 取当前最大 + 1，内容签名可被节点按同一字节重建', async () => {
     const { http, o } = fixture();
+    http.routes.set(`${BASE}/v1/proposal`, json({ proposals: [{ ...ROW }] })); // 最大 id = 7
     http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
-    http.postRoutes.set(`${BASE}/v1/proposal`, { status: 201, body: utf8(JSON.stringify({ proposal_id: '9' })) });
-    const res = await createProposal(o, { action: 'remove', itemId: 'article/aaa', reason: '内容不准确' });
-    expect(res.proposalId).toBe('9');
+    http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'e', received_at: 1 }));
 
-    const wire = http.posted[1]!;
-    expect(JSON.parse(decodeUtf8(wire.body))).toEqual({ action: 'remove', item_id: 'article/aaa', reason: '内容不准确' });
-    const h = wire.headers;
-    const meta: RequestMeta = {
-      method: 'POST', path: '/v1/proposal', query: '', bodySha256: sha256Hex(wire.body),
-      ts: Number(h['X-Base-Ts']), nonce: h['X-Base-Nonce']!,
-    };
-    expect(verify(registeredPub(http), requestSignBytes(meta), h['X-Base-Sig']!)).toBe(true);
+    const res = await createProposal(o, { action: 'remove', itemId: ITEM, reason: '内容不准确' });
+    expect(res.proposalId).toBe('8');
+
+    const wire = lastEventPosted(http);
+    // 事件路径只验内容签名：不带 5 个 reqsig 头（本册 §4.2）
+    expect(Object.keys(wire.headers)).toEqual(['Content-Type']);
+    const env = parseEvent(http);
+    expect(env.type).toBe('govern.v1');
+    expect(env.body).toEqual({
+      action: 'proposal', proposal_id: 8, target_item_id: ITEM, verb: 'remove',
+      content_hash: HASH, content_version: 0, revoked_rev: 0, reason: '内容不准确',
+    });
+    const pub = registeredPub(http);
+    expect(verify(pub, utf8(canonicalize({ event_id: env.event_id, type: env.type, created_at: env.created_at, body: env.body })), env.sig)).toBe(true);
   });
 
-  it('发起：edit 才带 edit 块；remove / revive 不带', async () => {
+  it('发起：edit 才带 title/body_md；空 reason 不下发（节点对已给定的 reason 走 1..200 校验）', async () => {
+    const { http, o } = fixture();
+    http.routes.set(`${BASE}/v1/proposal`, json({ proposals: [] }));
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'e', received_at: 1 }));
+
+    await createProposal(o, { action: 'edit', itemId: ITEM, reason: '改写', edit: { title: '新题', bodyMd: '新正文' } });
+    expect(parseEvent(http).body).toEqual({
+      action: 'proposal', proposal_id: 1, target_item_id: ITEM, verb: 'edit',
+      content_hash: HASH, content_version: 0, revoked_rev: 0,
+      reason: '改写', title: '新题', body_md: '新正文',
+    });
+
+    await createProposal(o, { action: 'revive', itemId: ITEM, reason: '' });
+    const body = parseEvent(http).body as Record<string, unknown>;
+    expect(body).toEqual({
+      action: 'proposal', proposal_id: 1, target_item_id: ITEM, verb: 'revive',
+      content_hash: HASH, content_version: 0, revoked_rev: 0,
+    });
+    expect('reason' in body).toBe(false);
+    expect('title' in body).toBe(false);
+  });
+
+  it('发起：本地无该条目内容哈希即拒绝（事件体必须自带 content_hash）', async () => {
     const { http, o } = fixture();
     http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
-    http.postRoutes.set(`${BASE}/v1/proposal`, { status: 201, body: utf8(JSON.stringify({ proposal_id: '1' })) });
-    await createProposal(o, { action: 'edit', itemId: 'article/aaa', reason: '改写', edit: { title: '新题', bodyMd: '新正文' } });
-    expect(JSON.parse(decodeUtf8(http.posted[1]!.body))).toEqual({
-      action: 'edit', item_id: 'article/aaa', reason: '改写', edit: { title: '新题', body_md: '新正文' },
-    });
-    await createProposal(o, { action: 'revive', itemId: 'article/aaa', reason: '复活' });
-    expect(JSON.parse(decodeUtf8(http.posted[2]!.body))).toEqual({ action: 'revive', item_id: 'article/aaa', reason: '复活' });
+    const err = (await createProposal(o, { action: 'remove', itemId: 'article/zzz', reason: 'x' }).catch((e: unknown) => e)) as GovernError;
+    expect(err).toBeInstanceOf(GovernError);
+    expect(err.code).toBe('client');
   });
 
   it('失败映射：错误码转中文；429 与 5xx 各归其类', async () => {
@@ -105,27 +152,54 @@ describe('govern', () => {
     ];
     for (const [status, code, wantCode, wantMsg] of cases) {
       const { http, o } = fixture();
+      http.routes.set(`${BASE}/v1/proposal`, json({ proposals: [] }));
       http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
-      http.postRoutes.set(`${BASE}/v1/proposal`, { status, body: utf8(JSON.stringify({ code })) });
-      const err = (await createProposal(o, { action: 'remove', itemId: 'article/a', reason: 'x' }).catch((e: unknown) => e)) as GovernError;
+      http.postRoutes.set(`${BASE}/v1/event`, { status, body: utf8(JSON.stringify({ code })) });
+      const err = (await createProposal(o, { action: 'remove', itemId: ITEM, reason: 'x' }).catch((e: unknown) => e)) as GovernError;
       expect(err.code).toBe(wantCode);
       expect(err.message).toBe(wantMsg);
     }
   });
 
-  it('投票：POST 到 /v1/proposal/{id}/vote、体为 {}、响应解析；重复投票 409 → 你已投过票', async () => {
-    const { http, o } = fixture();
+  it('发起：命中撞号（conflict）→ 重取最大 id 再发', async () => {
+    class SeqHttp extends FakeHttp {
+      getCalls = 0;
+      eventCalls = 0;
+      override async get(url: string) {
+        if (url.endsWith('/v1/proposal')) {
+          this.getCalls++;
+          // 第一次：空列表 ⇒ 取 id=1；第二次：已存在 id=5 ⇒ 取 id=6
+          return json({ proposals: this.getCalls === 1 ? [] : [{ ...ROW, proposal_id: '5' }] });
+        }
+        return super.get(url);
+      }
+      override async post(url: string, body: Uint8Array, headers?: Record<string, string>) {
+        if (url === `${BASE}/v1/event`) {
+          this.eventCalls++;
+          this.posted.push({ url, body, headers: headers ?? {} });
+          return this.eventCalls === 1 ? json({ event_id: 'e1', received_at: 1, conflict: true }) : json({ event_id: 'e2', received_at: 2 });
+        }
+        return super.post(url, body, headers);
+      }
+    }
+    const http = new SeqHttp();
     http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
-    http.postRoutes.set(`${BASE}/v1/proposal/7/vote`, json({ proposal_id: '7', vote_count: 3, threshold: 3, status: 'effective' }));
+    const { o } = fixture(http);
+    const res = await createProposal(o, { action: 'remove', itemId: ITEM, reason: 'x' });
+    expect(res.proposalId).toBe('6');
+    expect(http.eventCalls).toBe(2);
+    expect((parseEvent(http).body as Record<string, unknown>).proposal_id).toBe(6);
+  });
+
+  it('投票：POST /v1/event（body = {action:vote,proposal_id,choice:yes}），结果由重拉结果构造', async () => {
+    const { http, o } = fixture();
+    http.routes.set(`${BASE}/v1/proposal`, json({ proposals: [{ ...ROW, vote_count: 3, threshold: 3, status: 'effective' }] }));
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'e', received_at: 1 }));
+
     const res = await vote(o, '7');
     expect(res).toEqual({ proposalId: '7', voteCount: 3, threshold: 3, status: 'effective' });
-    expect(http.posted[1]!.url).toBe(`${BASE}/v1/proposal/7/vote`);
-    expect(decodeUtf8(http.posted[1]!.body)).toBe('{}');
-
-    http.postRoutes.set(`${BASE}/v1/proposal/7/vote`, { status: 409, body: utf8(JSON.stringify({ code: 'already_voted' })) });
-    const err = (await vote(o, '7').catch((e: unknown) => e)) as GovernError;
-    expect(err.code).toBe('rejected');
-    expect(err.message).toBe('你已投过票');
+    expect(parseEvent(http).body).toEqual({ action: 'vote', proposal_id: 7, choice: 'yes' });
   });
 
   it('myIdentityId：本机无身份返回空串（不生成身份）', async () => {
