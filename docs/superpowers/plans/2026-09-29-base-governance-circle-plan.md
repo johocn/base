@@ -3106,7 +3106,7 @@ git push origin master
 | 2 | `group.v1` roster v2 多签与门槛 | `0c048a6` | `go build`/`vet` 干净；`go test ./... -count=1` 8 包全 ok；`TestRosterV2*` 8 用例（含 3 子例）全 PASS |
 | 3 | 读权分支（开放匿名 / 封闭签名） | `a7a945f` | `go build`/`vet` 干净；`go test ./... -count=1` 10 包全 ok；`TestGroupRead*` 5 用例 + `TestGroupGet*` 3 用例 + `TestAuth*OutOfWindow/NonceReplay/BadSignature` 全 PASS；动过的 5 个文件 `gofmt -l` 无输出 |
 | 4 | 反熵接收侧 v2 三列 + 信封 | `539f68c` | `go build`/`vet` 干净；`go test ./... -count=1` 全包 ok；`TestApplySyncedGroupEvent*` 4 用例全 PASS（另验证：换回旧实现时 V2/Legacy/Dissolve 三条 FAIL，非空跑）；`gofmt -l` 两文件无输出 |
-| 5 | `core/group.ts` v2（双形态 / 多签码 / 信封链） | `148b745` + `c9a087f` | `npx vitest run` 18 文件 / 167 用例全绿（group 17 用例）；`npx tsc --noEmit` 无输出；动 5 文件（含 `platform/index.ts` 的存量库补列调用） |
+| 5 | `core/group.ts` v2（双形态 / 多签码 / 信封链） | `148b745` + `c9a087f` + `f2bfa5f` | `npx vitest run` 18 文件 / 169 用例全绿（group 19 用例）；`npx tsc --noEmit` 无输出；动 5 文件（含 `platform/index.ts` 的存量库补列调用） |
 | 6 | 圈子列表形态与治者面板 | — | 待填 |
 | 7 | 0.11.0 发布四步 + 节点二进制部署 | — | 待填 |
 | 8 | `govern.v1` 注册 + 投影 + 水位 + 老路径只写投影 | — | 待填 |
@@ -3157,3 +3157,7 @@ git push origin master
 **更正 33（Task 5 遗留，Task 6 必须处理）低风险档的签名者必须**全是治者**。节点 `rosterQuorumError`（`group.go:614-619`）对 `rename`/`rotate`/`leave` 判 `subsetOf(signers, governors) && countIn(signers, governors) >= 1`，`remove` 要求治者签数 ≥ `RemoveQuorum(k)`。故非治者的「自己退出」**自签必被 403**——计划 Task 6 的 `onLeave` 已给「请把请求码发给治理者」的提示，但 `multsigSubmit` 不能只交自己的回执就当作已提交成功；`rename/rotate` 也要求签名者是治者（UI 已用 `isGovernor` 门控面板）。
 
 **更正 34（Task 5）两处落地细节**。① `GCM_NONCE_BYTES` 在 `core/wire.ts` 里是**未导出**的模块内常量（=12），`group.ts` 不能 import ⇒ 在 `group.ts` 内自定同名常量，不改 `wire.ts`。② 存量设备库要补列：`CREATE TABLE IF NOT EXISTS` 对既有 `groups` 表不补列 ⇒ `repo.ts` 额外导出 `ensureGroupColumns(db)`（`PRAGMA table_info(groups)` 查列名，缺则 `ALTER`），由 `platform/index.ts` 在建表循环之后调用 ⇒ **Task 5 的实际提交范围比计划多一个文件 `apps/mobile/src/platform/index.ts`**。
+
+**更正 35（Task 5，破坏 M4 / M5）门槛镜像必须用「变更前」的名单人数**。节点 `handleGroupRosterV2`（`group.go:456-484`）先读 `cur` 行、用**变更前**名单算 `DeriveSeats` 与 `rosterQuorumError`，`dissolve` 的投票闸门同样（`group.go:639` 注释明写「用**变更前**的名单人数：解散事件本身把名单清空」）。首版实现用**草稿里**的名单（变更后）⇒ `remove` 的 k 少算一档（验收 M4：m=11 移出应提示「需 2 名签名」，实际会提示 1 名并提交 ⇒ 403）、`dissolve` 的 m=0 ⇒ votes=1（M5 实为 2）。实际做法：`submitRoster` 的 `m` 改读本地 `groups` 行的当前名单人数（无本地行才退回草稿长度），`k = governorSeats(m)`。门槛公式两边本就一致（`store/groupseats.go`：`RemoveQuorum=(2k+2)/3`、`DissolveProposerQuorum=min(2,k)`、`DissolveVoteQuorum=m/3+1 上限 30`）。
+
+**更正 36（Task 5）`localRotate` 不再覆盖 `groups.memberIdsJson`**。本地名单代表**已提交**的名单，草稿里的名单是「变更后」的提案，只有在节点确认后（读接口回写）才落本地；否则门槛镜像会拿变更后人数去算（更正 35 的根因），且本地投影会先于节点「假装」改变更已生效。副作用：`remove`/`dissolve` 在提交失败时本地名单保持不变（正确地表达「提案未生效」），成功后被节点读回覆盖。
