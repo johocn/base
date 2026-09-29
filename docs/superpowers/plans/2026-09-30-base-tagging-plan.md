@@ -3586,3 +3586,15 @@ git push origin master
 
 > 每条按 #14 / #36 计划体例写：现象 → 计划写的是什么 → 实际怎么做的 → 依据。无差异则写「无」。
 
+**更正 1（Task 2 · 直打条件排除自身旧行）**
+现象：Task 2 Step 5 的 `TestUpsertTagSubmissionDirectWrite` 幂等断言必红——同标签同目标重提交被 `ErrTagTargetTagged` 拒。
+计划写的是：`SELECT COUNT(*) FROM tag_links WHERE target_id=?`（Task 2 Step 4 代码块）。
+实际怎么做的：加 `AND tag_id<>?`，即「该目标不得被**别的标签**占用」；其余逻辑逐字不变（提交 `50c285f`）。
+依据：§3.4 的直打条件要求「每个目标当前无标签」，但同一标签的**重试/全量替换**必须幂等（§3.4 自身写明 `links` 为全量替换语义）；Task 4 的 `TestSubmitTagRejectsAlreadyTaggedTarget` 用的是**不同**标签（甲已占用 → 乙 403），与本收窄相容。
+
+**更正 2（Task 2 · `TestListTagsOf` 用例缺陷）**
+现象：原用例让两个不同标签（甲、乙）**都通过直打**写同一个 `course/c1`，与 §3.4 及 Task 4 的 403 用例直接对立，同一函数无法既放又拒。
+计划写的是：两次 `UpsertTagSubmission` 都成功，再断言 `ListTagsOf` 升序。
+实际怎么做的：第一条仍走直打，第二条改为直接造 `tag_links` 行（断言与排序覆盖不变）；改标提案生效路径落 Task 6（提交 `50c285f`）。
+依据：本用例的意图是覆盖**反查排序**，不是覆盖直打条件；跨标签共用目标的正规入口是 §3.5 提案，Task 6 落地后由它覆盖。
+
