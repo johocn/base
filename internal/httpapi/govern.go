@@ -268,6 +268,9 @@ type proposalDTO struct {
 	CreatedAt  int64    `json:"created_at"`
 	ExecutedAt int64    `json:"executed_at"`
 	VoidedAt   int64    `json:"voided_at"`
+	// 提案快照水位（册子 §4.3）：客户端据此展示「票权按此判定」，同提案行上的 content_version / revoked_rev。
+	ContentVersion int64 `json:"content_version"`
+	RevokedRev     int64 `json:"revoked_rev"`
 }
 
 type proposalsResponse struct {
@@ -302,6 +305,9 @@ func (s *Server) handleProposalList(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:  v.CreatedAt,
 			ExecutedAt: v.ExecutedAt,
 			VoidedAt:   v.VoidedAt,
+			// 快照水位直接透传提案行的两列（ProposalView 内嵌 Proposal，已带上）。
+			ContentVersion: v.ContentVersion,
+			RevokedRev:     v.RevokedRev,
 		})
 	}
 	s.writeJSON(w, http.StatusOK, resp)

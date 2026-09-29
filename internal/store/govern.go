@@ -137,13 +137,19 @@ func (s *Store) filterRosterAtWatermark(ids []string, roster map[string]bool, re
 	if err != nil {
 		return nil, err
 	}
+	return filterRosterAtWatermarkSet(ids, roster, restored), nil
+}
+
+// filterRosterAtWatermarkSet 是 filterRosterAtWatermark 的纯函数核心（roster ∪ restored）：
+// 同一口径被 ListProposalViews 与 SettleGovernProposal 共用，避免漂移。
+func filterRosterAtWatermarkSet(ids []string, roster, restored map[string]bool) []string {
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if roster[id] || restored[id] {
 			out = append(out, id)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // restoredRosterAuthors 返回「按快照水位应加回名册」的作者集合（册子 §4.3）：

@@ -30,8 +30,7 @@
         <text class="t">{{ p.itemId }}</text>
       </view>
       <text class="meta">#{{ p.proposalId }} · {{ STATUS_LABEL[p.status] }} · {{ createdText(p.createdAt) }}</text>
-      <text v-if="p.contentVersion > 0 || p.revokedRev > 0" class="meta">水位 v{{ p.contentVersion }} / rev{{ p.revokedRev }} · 门槛 {{ p.threshold }} 票 · {{ STATUS_LABEL[p.status] }}</text>
-      <text v-if="p.conflictNote" class="notice">{{ p.conflictNote }}</text>
+      <text v-if="p.contentVersion > 0 || p.revokedRev > 0" class="meta">水位 v{{ p.contentVersion }} / rev{{ p.revokedRev }}</text>
       <text class="meta">{{ p.reason }}</text>
       <text class="meta">{{ p.voteCount }} / {{ p.threshold }} 票</text>
       <text v-if="p.status === 'pending' && p.threshold > p.voteCount" class="meta">挂起中：达到 {{ p.threshold }} 票才生效</text>

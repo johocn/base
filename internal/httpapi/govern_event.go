@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -155,6 +156,13 @@ func (s *Server) handleGovernEvent(w http.ResponseWriter, actor string, req even
 	if perr != nil && !errors.Is(perr, store.ErrGovernEventConflict) {
 		s.writeError(w, http.StatusInternalServerError, perr.Error())
 		return
+	}
+	// 投影后做一次生效判定（册子 §4.3 / §4.4）：proposal 与 vote **两条分支都要 settle**——
+	// 反熵不保证 proposal 事件先于 vote 事件到达，故任一事件落地后都重新收敛一次（幂等）。
+	// settle 是派生、事件是权威：失败只记日志，**不拒事件**。
+	roster, _ := s.governRoster() // 派生失败按空名册降级（册子 §6.2），settle 会停在 pending
+	if err := s.st.SettleGovernProposal(pid, roster); err != nil {
+		log.Printf("httpapi: 治理提案 %d 生效判定失败（事件行照落）: %v", pid, err)
 	}
 	// 事件行照落：`body_json` 存**客户端原始键集**（不是减化形态）——反熵把它搬到别的节点后，
 	// 接收侧要据它重投影（Step 8），减化会丢掉 verb / content_hash / choice。

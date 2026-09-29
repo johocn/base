@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // GovernEventActionProposal / GovernEventActionVote 是 govern.v1 的两个动作（册子 §4.2，零新增枚举）。
@@ -136,4 +137,71 @@ func (s *Store) ProjectGovernVote(e GovernVoteEvent) error {
 		}
 	}
 	return nil
+}
+
+// SettleGovernProposal 对一条已投影的提案做一次生效判定并落地受审动作（册子 §4.3 / §4.4）。
+// 与老路径 addVoteTx 的判定同源同口径，区别只在**票权按提案快照水位**判定、且可由事件路径反复调用（幂等）。
+// 提案行不存在或已定案（executed_at / voided_at 非 0）时直接返回 nil。
+//
+// 名册（roster）与「水位加回集合」（restored）都在**事务外**派生：本库为纯 Go SQLite 且
+// SetMaxOpenConns(1)，在事务里调用 s.ListXxx / s.restoredRosterAuthors 必然死锁（拿不到连接）。
+// 事务内只调用已知的 exec 版本函数（governPreconditionTx / governApplyTx / proposalVotersExec）。
+func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool) error {
+	p, ok, err := s.GetProposal(proposalID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil // 提案行尚未投影（乱序：vote 先到）——由后续的 proposal 事件触发 settle
+	}
+	if p.ExecutedAt != 0 || p.VoidedAt != 0 {
+		return nil // 已定案：反熵每轮重拉同一事件，这里必须幂等
+	}
+	voters, err := proposalVotersExec(s.db, proposalID)
+	if err != nil {
+		return err
+	}
+	restored, err := s.restoredRosterAuthors(p.RevokedRev)
+	if err != nil {
+		return err
+	}
+	effective := filterRosterAtWatermarkSet(voters, roster, restored)
+	if len(effective) < GovernThreshold(p.Action) {
+		return nil // 未达门槛
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// 步 1：事务内**第一件事就重读提案行**（并发乐观锁，与 addVoteTx 同强度）：
+	// 另一路径可能已把本提案定案，此处读到非 0 即退出。
+	cur, err := scanProposal(tx.QueryRow(`SELECT `+proposalColumns+` FROM govern_proposals WHERE proposal_id=?`, proposalID))
+	if err != nil {
+		return fmt.Errorf("store: 读提案 %d: %w", proposalID, err)
+	}
+	if cur.ExecutedAt != 0 || cur.VoidedAt != 0 {
+		return tx.Commit()
+	}
+	now := time.Now().UnixMilli()
+	met, err := governPreconditionTx(tx, cur)
+	if err != nil {
+		return err
+	}
+	if !met {
+		if _, err := tx.Exec(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, now, proposalID); err != nil {
+			return fmt.Errorf("store: 记 voided_at: %w", err)
+		}
+		return tx.Commit()
+	}
+	result, err := governApplyTx(tx, s, cur)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`,
+		now, result, proposalID); err != nil {
+		return fmt.Errorf("store: 记 executed_at: %w", err)
+	}
+	return tx.Commit()
 }

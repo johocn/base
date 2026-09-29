@@ -332,7 +332,6 @@ func applySyncedGovernEvent(st *store.Store, it eventSyncItem) (bool, error) {
 		if err != nil && !errors.Is(err, store.ErrGovernEventConflict) {
 			return false, err
 		}
-		return true, nil
 	case "vote":
 		if err := st.ProjectGovernVote(store.GovernVoteEvent{
 			ProposalID: pid, Choice: m.Choice,
@@ -340,7 +339,24 @@ func applySyncedGovernEvent(st *store.Store, it eventSyncItem) (bool, error) {
 		}); err != nil {
 			return false, err
 		}
-		return true, nil
+	default:
+		return false, nil
 	}
-	return false, nil
+	// 投影后 settle（册子 §4.3 / §4.4）：proposal 与 vote **两支都要**——反熵不保证
+	// proposal 事件先于 vote 事件到达。名册派生失败按空名册降级（settle 停在 pending）；
+	// settle 失败只记日志、**不阻断整页反熵**（事件行才是权威来源，读接口可从事件重算）。
+	roster := map[string]bool{}
+	rows, err := st.ContributorRoster()
+	if err != nil {
+		log.Printf("peersync: 治理名册派生失败，按空名册降级（settle 停在 pending）: %v", err)
+	} else {
+		roster = make(map[string]bool, len(rows))
+		for _, c := range rows {
+			roster[c.ID] = true
+		}
+	}
+	if err := st.SettleGovernProposal(pid, roster); err != nil {
+		log.Printf("peersync: 治理提案 %d 生效判定失败（事件行已落，读接口可从事件重算）: %v", pid, err)
+	}
+	return true, nil
 }

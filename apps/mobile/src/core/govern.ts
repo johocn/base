@@ -50,8 +50,6 @@ export interface ProposalItem {
   /** 提案快照水位（#33 §4.3）：票权按此判定，名册中途变化不改判。 */
   contentVersion: number;
   revokedRev: number;
-  /** 非空即为「同 proposal_id 并发冲突、按确定性规则收敛」的告知（#33 §4.3 / §6）。 */
-  conflictNote: string;
 }
 
 export class GovernError extends Error {
@@ -92,7 +90,6 @@ function toProposalItem(p: Record<string, unknown>): ProposalItem {
     voidedAt: Number(p.voided_at ?? 0),
     contentVersion: Number(p.content_version ?? 0),
     revokedRev: Number(p.revoked_rev ?? 0),
-    conflictNote: String(p.conflict_note ?? ''),
   };
 }
 

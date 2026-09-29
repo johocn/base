@@ -144,9 +144,58 @@ func drainGovernFromPeer(t *testing.T, peerURL string, dst *store.Store) []map[s
 			}); err != nil {
 				t.Fatalf("ProjectGovernVote: %v", err)
 			}
+		default:
+			continue
+		}
+		// **必须与 applySyncedGovernEvent 的真实行为一致**：投影后 settle（proposal / vote 两支都要）。
+		// 镜像失真会让 AC 11 等用例验不到事件路径的生效闭环（缺陷 1 的洞）。
+		if err := dst.SettleGovernProposal(pid, testRoster(t, dst)); err != nil {
+			t.Fatalf("SettleGovernProposal: %v", err)
 		}
 	}
 	return mirrored
+}
+
+// testRoster 复刻 peersync 从 ContributorRoster 派生名册（map[string]bool）的口径。
+func testRoster(t *testing.T, st *store.Store) map[string]bool {
+	t.Helper()
+	rows, err := st.ContributorRoster()
+	if err != nil {
+		t.Fatalf("ContributorRoster: %v", err)
+	}
+	set := make(map[string]bool, len(rows))
+	for _, c := range rows {
+		set[c.ID] = true
+	}
+	return set
+}
+
+// rosterCount 读匿名名册里某个 id 的条数；不在名册返回 0（govEventNode 用）。
+func (n *govEventNode) rosterCount(t *testing.T, id string) int {
+	t.Helper()
+	code, body := getJSON(t, n.public+"/v1/contributors")
+	if code != http.StatusOK {
+		t.Fatalf("GET /v1/contributors code=%d", code)
+	}
+	list, _ := body["contributors"].([]any)
+	for _, item := range list {
+		m, _ := item.(map[string]any)
+		if m["id"] == id {
+			c, _ := m["count"].(float64)
+			return int(c)
+		}
+	}
+	return 0
+}
+
+// targetItem 读某条目的 (content_hash, state)，供事件体带上乐观锁哈希。
+func (n *govEventNode) targetItem(t *testing.T, itemID string) (hash, state string) {
+	t.Helper()
+	it, ok, err := n.st.GetItem(itemID)
+	if err != nil || !ok {
+		t.Fatalf("GetItem %s: ok=%v err=%v", itemID, ok, err)
+	}
+	return it.ContentHash, it.State
 }
 
 // proposalListRaw 拉匿名提案列表的原始 JSON（逐字比较用）。
@@ -209,24 +258,173 @@ func TestGovernEventConvergesViaAntiEntropy(t *testing.T) {
 		t.Fatalf("B 应有 1 条提案: %v", body)
 	}
 	p, _ := list[0].(map[string]any)
-	if p["vote_count"] != float64(2) || p["item_id"] != "article/x" {
+	// status 必须一并断言（原先只比 vote_count / item_id，正是这个洞当年没被照出的原因之一）：
+	// 本用例 2 票 < remove 门槛 3 ⇒ 事件路径 settle 后仍应停在 pending。
+	if p["vote_count"] != float64(2) || p["item_id"] != "article/x" || p["status"] != "pending" {
 		t.Fatalf("B 提案形状: %v", p)
 	}
 }
 
-// AC 12：提案建立后名册变化，结论**不改判**（按快照水位复算稳定）。
-func TestGovernEventVoteQuorumSnapshotWatermark(t *testing.T) {
-	n := fourGovernors(t) // 名册 A/B/C/D，目标 article/gb 归 B
-	// A 提 edit（门槛 2），C 投第 2 票 → 生效。
-	id := n.propose(t, govSeedA, "edit", "article/gb", map[string]any{
-		"edit": map[string]any{"title": "新标题", "body_md": n.longBody("乙")},
-	})
-	if _, out := n.vote(t, govSeedC, id); out["status"] != "effective" {
-		t.Fatalf("提满门槛应生效: %v", out)
+// 事件路径攒够门槛 → **生效且受审动作真的执行**（补住 AC 11 照不出的缺陷 1）。
+//
+// 用 remove（门槛 3）：名册 A/B/C/D，A 提案（自投第 1 票）+ C + D 三票达门槛，
+// 目标 article/gb 必须真的被退役（墓碑 + state=removed）。
+func TestGovernEventQuorumSettlesAction(t *testing.T) {
+	n := newGovEventNode(t)
+	for _, s := range []struct{ seed, item, title string }{
+		{govSeedA, "article/ga", "甲"}, {govSeedB, "article/gb", "乙"},
+		{govSeedC, "article/gc", "丙"}, {govSeedD, "article/gd", "丁"},
+	} {
+		n.publish(t, s.seed, s.item, s.title)
 	}
-	before := n.proposals(t)[0]
-	if before["vote_count"] != float64(2) || before["status"] != "effective" {
-		t.Fatalf("生效前形状: %v", before)
+	hash, _ := n.targetItem(t, "article/gb")
+	t1 := time.Now().UnixMilli()
+	if code, out := postGovernEvent(t, govSeedA, n.public, eventIDOf(31), t1, map[string]any{
+		"action": "proposal", "proposal_id": "1", "target_item_id": "article/gb",
+		"verb": "remove", "content_hash": hash, "content_version": 0, "revoked_rev": 0,
+	}); code != http.StatusOK {
+		t.Fatalf("提案事件 code=%d out=%v", code, out)
+	}
+	for i, seed := range []string{govSeedC, govSeedD} {
+		if code, out := postGovernEvent(t, seed, n.public, eventIDOf(32+i), t1+int64(i)+1,
+			map[string]any{"action": "vote", "proposal_id": "1", "choice": "yes"}); code != http.StatusOK {
+			t.Fatalf("投票事件 %s code=%d out=%v", seed, code, out)
+		}
+	}
+	list := proposalListOf(t, n.public)
+	if len(list) != 1 || list[0]["status"] != "effective" || list[0]["vote_count"] != float64(3) {
+		t.Fatalf("攒够门槛应生效: %v", list)
+	}
+	// 受审动作真的执行了：目标条目已被退役。
+	if _, state := n.targetItem(t, "article/gb"); state != "removed" {
+		t.Fatalf("remove 未落地: article/gb state=%q", state)
+	}
+	rev, ok := tombstoneRev(t, n.st, "article/gb")
+	if !ok || rev <= 0 {
+		t.Fatalf("remove 应写墓碑: rev=%d ok=%v", rev, ok)
+	}
+}
+
+// 反熵**乱序**：vote 事件先于 proposal 事件到达，仍能生效（proposal / vote 两支都 settle）。
+func TestGovernEventOutOfOrderSettle(t *testing.T) {
+	a := newGovEventNode(t)
+	b := newGovEventNode(t)
+	for _, n := range []*govEventNode{a, b} {
+		n.publish(t, govSeedA, "article/ga", "甲")
+		n.publish(t, govSeedB, "article/gb", "乙")
+		n.publish(t, govSeedC, "article/gc", "丙")
+	}
+	hash, _ := a.targetItem(t, "article/gb")
+	t1 := time.Now().UnixMilli()
+	// 先落 vote（C 先投），再落 proposal——乱序。
+	if code, out := postGovernEvent(t, govSeedC, a.public, eventIDOf(33), t1,
+		map[string]any{"action": "vote", "proposal_id": "1", "choice": "yes"}); code != http.StatusOK {
+		t.Fatalf("投票事件 code=%d out=%v", code, out)
+	}
+	if code, out := postGovernEvent(t, govSeedA, a.public, eventIDOf(34), t1+1, map[string]any{
+		"action": "proposal", "proposal_id": "1", "target_item_id": "article/gb",
+		"verb": "edit", "content_hash": hash, "content_version": 0, "revoked_rev": 0,
+		"title": "乱序新题", "body_md": "乱序" + repeat("文", 200),
+	}); code != http.StatusOK {
+		t.Fatalf("提案事件 code=%d out=%v", code, out)
+	}
+	if list := proposalListOf(t, a.public); len(list) != 1 || list[0]["status"] != "effective" {
+		t.Fatalf("A 乱序后应生效: %v", list)
+	}
+	// B 只靠反熵（对端镜像）收敛，同样要生效。
+	drainGovernFromPeer(t, a.peer, b.st)
+	if list := proposalListOf(t, b.public); len(list) != 1 || list[0]["status"] != "effective" {
+		t.Fatalf("B 反熵乱序后应生效: %v", list)
+	}
+}
+
+// 同一批 govern.v1 事件**重放**（第二轮 drainGovernFromPeer 全量重拉）不重复执行动作。
+func TestGovernEventReplayNoDoubleAction(t *testing.T) {
+	a := newGovEventNode(t)
+	b := newGovEventNode(t)
+	for _, n := range []*govEventNode{a, b} {
+		n.publish(t, govSeedA, "article/ga", "甲")
+		n.publish(t, govSeedB, "article/gb", "乙")
+		n.publish(t, govSeedC, "article/gc", "丙")
+	}
+	hash, _ := a.targetItem(t, "article/gb")
+	t1 := time.Now().UnixMilli()
+	if code, out := postGovernEvent(t, govSeedA, a.public, eventIDOf(35), t1, map[string]any{
+		"action": "proposal", "proposal_id": "1", "target_item_id": "article/gb",
+		"verb": "edit", "content_hash": hash, "content_version": 0, "revoked_rev": 0,
+		"title": "重放新题", "body_md": "重放" + repeat("文", 200),
+	}); code != http.StatusOK {
+		t.Fatalf("提案事件 code=%d out=%v", code, out)
+	}
+	if code, out := postGovernEvent(t, govSeedC, a.public, eventIDOf(36), t1+1,
+		map[string]any{"action": "vote", "proposal_id": "1", "choice": "yes"}); code != http.StatusOK {
+		t.Fatalf("投票事件 code=%d out=%v", code, out)
+	}
+
+	// 第一轮：B 收敛并生效（edit 改动正文 ⇒ 清归属）。
+	drainGovernFromPeer(t, a.peer, b.st)
+	first, ok, err := b.st.GetProposal(1)
+	if err != nil || !ok {
+		t.Fatalf("GetProposal: ok=%v err=%v", ok, err)
+	}
+	if first.ExecutedAt == 0 || first.ExecutedResult != "edited_author_cleared" {
+		t.Fatalf("首次应生效并记 executed: %+v", first)
+	}
+	// 第二轮：事件全量重拉（镜像不带游标）——投影幂等 + settle 幂等，动作不得重复执行。
+	drainGovernFromPeer(t, a.peer, b.st)
+	second, _, _ := b.st.GetProposal(1)
+	if second.ExecutedAt != first.ExecutedAt || second.ExecutedResult != first.ExecutedResult || second.VoidedAt != 0 {
+		t.Fatalf("重放不得重复执行: first=%+v second=%+v", first, second)
+	}
+	if list := proposalListOf(t, b.public); len(list) != 1 || list[0]["status"] != "effective" || list[0]["voided_at"] != float64(0) {
+		t.Fatalf("重放后形状: %v", list)
+	}
+}
+
+// tombstoneRev 读某条目的墓碑 revoked_rev；ok=false 表示没有墓碑。
+func tombstoneRev(t *testing.T, st *store.Store, itemID string) (int64, bool) {
+	t.Helper()
+	rows, err := st.ListTombstones()
+	if err != nil {
+		t.Fatalf("ListTombstones: %v", err)
+	}
+	for _, r := range rows {
+		if r.ItemID == itemID {
+			return int64(r.RevokedRev), true
+		}
+	}
+	return 0, false
+}
+
+// AC 12：提案建立后名册变化，结论**不改判**（按快照水位复算稳定）。
+//
+// 走**事件路径**（原版走老路径 n.propose / n.vote，恰是它当年没照出「事件路径从不写 executed_at」
+// 的原因）。语义不变：名册 A/B/C/D，A 提 edit（门槛 2）、C 投第 2 票 → 生效；随后让 C 落榜，结论不改判。
+func TestGovernEventVoteQuorumSnapshotWatermark(t *testing.T) {
+	n := newGovEventNode(t)
+	for _, s := range []struct{ seed, item, title string }{
+		{govSeedA, "article/ga", "甲"}, {govSeedB, "article/gb", "乙"},
+		{govSeedC, "article/gc", "丙"}, {govSeedD, "article/gd", "丁"},
+	} {
+		n.publish(t, s.seed, s.item, s.title)
+	}
+	hash, _ := n.targetItem(t, "article/gb")
+	t1 := time.Now().UnixMilli()
+	if code, out := postGovernEvent(t, govSeedA, n.public, eventIDOf(41), t1, map[string]any{
+		"action": "proposal", "proposal_id": "1", "target_item_id": "article/gb",
+		"verb": "edit", "content_hash": hash, "content_version": 0, "revoked_rev": 0,
+		// 正文与原 gb 逐字节相同（只改标题）⇒ 作者归属保留，后续 C 落榜的水位语义更干净。
+		"title": "新标题", "body_md": "乙" + repeat("文", 200),
+	}); code != http.StatusOK {
+		t.Fatalf("提案事件 code=%d out=%v", code, out)
+	}
+	if code, out := postGovernEvent(t, govSeedC, n.public, eventIDOf(42), t1+1,
+		map[string]any{"action": "vote", "proposal_id": "1", "choice": "yes"}); code != http.StatusOK {
+		t.Fatalf("投票事件 code=%d out=%v", code, out)
+	}
+	before := proposalListOf(t, n.public)
+	if len(before) != 1 || before[0]["vote_count"] != float64(2) || before[0]["status"] != "effective" {
+		t.Fatalf("事件路径提满门槛应生效: %v", before)
 	}
 
 	// 推高 content_version 并让 C「落榜」：退役 C 的条目（写墓碑 + state=removed）。
@@ -242,8 +440,8 @@ func TestGovernEventVoteQuorumSnapshotWatermark(t *testing.T) {
 	}
 
 	// 快照水位复算：结论不改判（C 在水位下仍在名册内，票不消失）。
-	after := n.proposals(t)[0]
-	if after["vote_count"] != float64(2) || after["status"] != "effective" {
+	after := proposalListOf(t, n.public)
+	if len(after) != 1 || after[0]["vote_count"] != float64(2) || after[0]["status"] != "effective" {
 		t.Fatalf("AC12 水位复算应不改判: %v", after)
 	}
 }

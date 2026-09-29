@@ -74,7 +74,8 @@ describe('govern', () => {
       proposalId: '1', action: 'remove', itemId: 'article/aaa', proposerId: 'p1', reason: '内容不准确',
       title: '', bodyMd: '', status: 'pending', votes: ['p1'], voteCount: 1, threshold: 3,
       createdAt: 1790000000000, executedAt: 0, voidedAt: 0,
-      contentVersion: 4, revokedRev: 2, conflictNote: '',
+      // 服务端 DTO 补了 content_version / revoked_rev 后，水位字段**真实可见**（不再恒 0）。
+      contentVersion: 4, revokedRev: 2,
     });
     // 空列表返回 []
     http.routes.set(`${BASE}/v1/proposal`, json({ proposals: [] }));
