@@ -2586,8 +2586,8 @@ git push
 | 6 | 本地 `dm_keys` 表与 `LocalRepo` 三方法 | `e6143d3` | vitest 全绿 |
 | 7 | `core/dm.ts` 好友码与建友 / 收码 | `d6f5839` | AC 1 / 2 / 8 用例通过 |
 | 8 | `core/dm.ts` 好友列表、发言、会话合并解密 | `2998c72` | AC 5 / 6 / 9 用例通过；`dm.test.ts` 9 条（更正 4） |
-| 9 | 两页 + 路由 + 「我的」入口 | `2de4f1c` | `pages.json` 只加 1 条路由；模板 `.value` 扫描无输出 |
-| 10 | `0.10.0` / `14` + 全量门禁 + 节点部署探活 + 四步发布 + 回填 | `（本次提交）` | mobile **18 文件 / 158 项全绿** + `tsc` 干净 + `build:h5` / `build:app` 通过；`go build` / `go vet` / `go test ./...` 全包 ok；两节点交叉编译部署后探活：`GET /v1/dm/{32hex}` → **200 + `{"events":[],"next_cursor":null}`**（**非** 404）、`GET /v1/dm/zz` → **400**、`GET /v1/group/{32hex}` → **404**（既有读接口未回归）；APK **27413300 字节** / sha256 `683cfed8…5fe15e`；落地页与 `/v1/release` 均改指 0.10.0、`min_version_name=0.8.0`、`HEAD /dl/base-0.10.0.apk` → **200** + 27413300 |
+| 9 | 两页 + 路由 + 「我的」入口 | `2de4f1c` | `pages.json` 末尾只加 **2** 条路由（`pages/dm/list` / `pages/dm/chat`），`tabBar` 四 tab 未动；模板 `.value` 扫描无输出 |
+| 10 | `0.10.0` / `14` + 全量门禁 + 节点部署探活 + 四步发布 + 回填 | `33f2556` | mobile **18 文件 / 158 项全绿** + `tsc` 干净 + `build:h5` / `build:app` 通过；`go build` / `go vet` / `go test ./...` 全包 ok；两节点交叉编译部署后探活：`GET /v1/dm/{32hex}` → **200 + `{"events":[],"next_cursor":null}`**（**非** 404）、`GET /v1/dm/zz` → **400**、`GET /v1/group/{32hex}` → **404**（既有读接口未回归）；APK **27413300 字节** / sha256 `683cfed8…5fe15e`；落地页与 `/v1/release` 均改指 0.10.0、`min_version_name=0.8.0`、`HEAD /dl/base-0.10.0.apk` → **200** + 27413300 |
 
 ### 待人工验收（真机）
 
