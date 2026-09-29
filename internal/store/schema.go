@@ -167,12 +167,15 @@ var schemaStatements = []string{
 	// 首个 epoch=1 的 roster 事件锁定 creator_id；后续事件必须同 actor 且 epoch 严格更大。
 	// event_id 指向最新一条 roster 事件（组名 name 在它的 body_json 里，故本表不存 name）。
 	`CREATE TABLE IF NOT EXISTS groups(
-		group_id        TEXT PRIMARY KEY,
-		creator_id      TEXT NOT NULL,
-		epoch           INTEGER NOT NULL,
-		member_ids_json TEXT NOT NULL,
-		event_id        TEXT NOT NULL,
-		updated_at      INTEGER NOT NULL
+		group_id         TEXT PRIMARY KEY,
+		creator_id       TEXT NOT NULL,
+		epoch            INTEGER NOT NULL,
+		roster_rev       INTEGER NOT NULL DEFAULT 0,
+		encrypted        INTEGER NOT NULL DEFAULT 1,
+		member_ids_json  TEXT NOT NULL,
+		key_envelopes    TEXT NOT NULL DEFAULT '[]',
+		event_id         TEXT NOT NULL,
+		updated_at       INTEGER NOT NULL
 	)`,
 
 	// govern_proposals / govern_votes：审批治理的提案与票（第 3 册 §5.1）。
@@ -219,6 +222,15 @@ var itemColumnMigrations = []struct{ column, ddl string }{
 	{"author_sig", `ALTER TABLE items ADD COLUMN author_sig TEXT NOT NULL DEFAULT ''`},
 }
 
+// groupColumnMigrations 是 groups 表的**后加列**（#33 册子 §3.8）。
+// 与 events / items 同因：schemaStatements 全是 CREATE TABLE IF NOT EXISTS，对既有表不补列。
+// 存量行 encrypted 默认 1（语义不变：「存量小组一律加密」，册子 §3.1 / AC 13）。
+var groupColumnMigrations = []struct{ column, ddl string }{
+	{"roster_rev", `ALTER TABLE groups ADD COLUMN roster_rev INTEGER NOT NULL DEFAULT 0`},
+	{"encrypted", `ALTER TABLE groups ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 1`},
+	{"key_envelopes", `ALTER TABLE groups ADD COLUMN key_envelopes TEXT NOT NULL DEFAULT '[]'`},
+}
+
 // migrate 执行 schemaStatements 之后的幂等迁移。
 func migrate(db *sql.DB) error {
 	cols, err := tableColumns(db, "events")
@@ -254,6 +266,18 @@ func migrate(db *sql.DB) error {
 	// 索引必须在补列之后建：idx_items_author 引用新列。
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_items_author ON items(author_id, state)`); err != nil {
 		return fmt.Errorf("store: migrate items index: %w", err)
+	}
+	groupCols, err := tableColumns(db, "groups")
+	if err != nil {
+		return err
+	}
+	for _, m := range groupColumnMigrations {
+		if groupCols[m.column] {
+			continue
+		}
+		if _, err := db.Exec(m.ddl); err != nil {
+			return fmt.Errorf("store: migrate groups.%s: %w", m.column, err)
+		}
 	}
 	return nil
 }

@@ -172,3 +172,42 @@ func TestListGroupEventsPaging(t *testing.T) {
 		t.Fatalf("limit 未生效 err=%v rows=%+v", err, one)
 	}
 }
+
+func TestPutGroupRosterV2MonotonicAndFormLock(t *testing.T) {
+	st := openTemp(t)
+	base := GroupRoster{GroupID: "g1", CreatorID: "c1", Epoch: 1, RosterRev: 1,
+		Encrypted: 1, MemberIDsJSON: `["c1"]`, EventID: "e1"}
+
+	// 首写（无行）→ 成立
+	if err := st.PutGroupRosterV2(base); err != nil {
+		t.Fatalf("首写: %v", err)
+	}
+	// epoch 相等 → ErrGroupEpochStale
+	if err := st.PutGroupRosterV2(GroupRoster{GroupID: "g1", Epoch: 1, RosterRev: 2,
+		Encrypted: 1, MemberIDsJSON: `["c1"]`, EventID: "e2"}); !errors.Is(err, ErrGroupEpochStale) {
+		t.Fatalf("epoch 未递增应报 stale，得 %v", err)
+	}
+	// roster_rev 未递增 → ErrGroupRosterRevStale
+	if err := st.PutGroupRosterV2(GroupRoster{GroupID: "g1", Epoch: 2, RosterRev: 1,
+		Encrypted: 1, MemberIDsJSON: `["c1"]`, EventID: "e3"}); !errors.Is(err, ErrGroupRosterRevStale) {
+		t.Fatalf("roster_rev 未递增应报 stale，得 %v", err)
+	}
+	// 形态切换 → ErrGroupFormLocked（册子 §3.1）
+	if err := st.PutGroupRosterV2(GroupRoster{GroupID: "g1", Epoch: 2, RosterRev: 2,
+		Encrypted: 0, MemberIDsJSON: `["c1"]`, EventID: "e4"}); !errors.Is(err, ErrGroupFormLocked) {
+		t.Fatalf("形态切换应被拒，得 %v", err)
+	}
+	// 正常推进
+	if err := st.PutGroupRosterV2(GroupRoster{GroupID: "g1", Epoch: 2, RosterRev: 2,
+		Encrypted: 1, MemberIDsJSON: `["c1","m2"]`, KeyEnvelopesJSON: `[{"from_epoch":1,"cipher":"x"}]`,
+		EventID: "e5"}); err != nil {
+		t.Fatalf("推进: %v", err)
+	}
+	g, ok, err := st.GetGroup("g1")
+	if err != nil || !ok {
+		t.Fatalf("GetGroup: ok=%v err=%v", ok, err)
+	}
+	if g.Epoch != 2 || g.RosterRev != 2 || g.Encrypted != 1 || g.KeyEnvelopesJSON != `[{"from_epoch":1,"cipher":"x"}]` {
+		t.Fatalf("读回错: %+v", g)
+	}
+}
