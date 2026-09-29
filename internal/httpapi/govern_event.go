@@ -157,14 +157,7 @@ func (s *Server) handleGovernEvent(w http.ResponseWriter, actor string, req even
 		s.writeError(w, http.StatusInternalServerError, perr.Error())
 		return
 	}
-	// 投影后做一次生效判定（册子 §4.3 / §4.4）：proposal 与 vote **两条分支都要 settle**——
-	// 反熵不保证 proposal 事件先于 vote 事件到达，故任一事件落地后都重新收敛一次（幂等）。
-	// settle 是派生、事件是权威：失败只记日志，**不拒事件**。
-	roster, _ := s.governRoster() // 派生失败按空名册降级（册子 §6.2），settle 会停在 pending
-	if err := s.st.SettleGovernProposal(pid, roster); err != nil {
-		log.Printf("httpapi: 治理提案 %d 生效判定失败（事件行照落）: %v", pid, err)
-	}
-	// 事件行照落：`body_json` 存**客户端原始键集**（不是减化形态）——反熵把它搬到别的节点后，
+	// 事件行先落：`body_json` 存**客户端原始键集**（不是减化形态）——反熵把它搬到别的节点后，
 	// 接收侧要据它重投影（Step 8），减化会丢掉 verb / content_hash / choice。
 	now := time.Now().UnixMilli()
 	if err := s.st.PutEvent(store.Event{
@@ -173,6 +166,13 @@ func (s *Server) handleGovernEvent(w http.ResponseWriter, actor string, req even
 	}); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// 权威事件行落地后才做生效判定（册子 §4.3 / §4.4）：proposal 与 vote **两条分支都要 settle**——
+	// 反熵不保证 proposal 事件先于 vote 事件到达，故任一事件落地后都重新收敛一次（幂等）。
+	// settle 是派生、事件是权威：失败只记日志，**不拒事件**。（顺序与 peersync.applySyncedGovernEvent 一致。）
+	roster, _ := s.governRoster() // 派生失败按空名册降级（册子 §6.2），settle 会停在 pending
+	if err := s.st.SettleGovernProposal(pid, roster); err != nil {
+		log.Printf("httpapi: 治理提案 %d 生效判定失败（事件行已落）: %v", pid, err)
 	}
 	if ev, ok, err := s.st.GetEventByID(req.EventID); err == nil && ok {
 		now = ev.ReceivedAt // 同 event_id 重发时给权威值（与 comment / group 口径一致）
