@@ -123,6 +123,13 @@ export interface GroupRow {
   creatorId: string;
   /** 当前生效 epoch（与 `group_keys.epoch` 的最大值一致） */
   epoch: number;
+  /**
+   * 形态：0 = 开放圈（明文、匿名可读、自助自加入）；1 = 封闭圈（加密、成员签名读权）。
+   * 建圈定死不可切换；存量行（老 DB 无该列）读出为 1（AC 13）。
+   */
+  encrypted: number;
+  /** 成员变更计数，与 epoch 同步 +1；老行（无该列）读出为 0，写回时补 1。 */
+  rosterRev: number;
   /** 完整名单快照（JSON 数组文本，元素为 32 hex 身份 id） */
   memberIdsJson: string;
   /** 入组时刻 ISO8601 */

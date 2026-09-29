@@ -123,6 +123,7 @@ export const SCHEMA_SQL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_my_submissions_queued ON my_submissions(queued_at)`,
   `CREATE TABLE IF NOT EXISTS groups(
      group_id TEXT PRIMARY KEY, name TEXT NOT NULL, creator_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+     encrypted INTEGER NOT NULL DEFAULT 1, roster_rev INTEGER NOT NULL DEFAULT 0,
      member_ids_json TEXT NOT NULL, joined_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS group_keys(
      group_id TEXT NOT NULL, epoch INTEGER NOT NULL, key_cipher TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -130,6 +131,20 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS dm_keys(
      peer_id TEXT PRIMARY KEY, key_cipher TEXT NOT NULL, created_at TEXT NOT NULL)`,
 ];
+
+/**
+ * 存量库幂等补列（`CREATE TABLE IF NOT EXISTS` 对既有表不补列）。
+ * 由 `platform/index.ts` 在建表之后调用；`PRAGMA table_info` 查列名，缺则 `ALTER`。
+ */
+export async function ensureGroupColumns(db: LocalDb): Promise<void> {
+  const cols = new Set((await db.select(`PRAGMA table_info(groups)`)).map((r) => String(r.name)));
+  if (!cols.has('encrypted')) {
+    await db.execute(`ALTER TABLE groups ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 1`);
+  }
+  if (!cols.has('roster_rev')) {
+    await db.execute(`ALTER TABLE groups ADD COLUMN roster_rev INTEGER NOT NULL DEFAULT 0`);
+  }
+}
 
 /** SqlRepo 把 LocalRepo 语义落到 SQLite 上（Task 19 注入 plus.sqlite 连接）。 */
 export class SqlRepo implements LocalRepo {
@@ -386,20 +401,22 @@ export class SqlRepo implements LocalRepo {
 
   async saveGroup(row: GroupRow): Promise<void> {
     await this.db.execute(
-      `INSERT INTO groups(group_id,name,creator_id,epoch,member_ids_json,joined_at) VALUES(?,?,?,?,?,?)
+      `INSERT INTO groups(group_id,name,creator_id,epoch,encrypted,roster_rev,member_ids_json,joined_at)
+       VALUES(?,?,?,?,?,?,?,?)
        ON CONFLICT(group_id) DO UPDATE SET name=excluded.name,creator_id=excluded.creator_id,
-         epoch=excluded.epoch,member_ids_json=excluded.member_ids_json`,
-      [row.groupId, row.name, row.creatorId, row.epoch, row.memberIdsJson, row.joinedAt],
+         epoch=excluded.epoch,encrypted=excluded.encrypted,roster_rev=excluded.roster_rev,
+         member_ids_json=excluded.member_ids_json`,
+      [row.groupId, row.name, row.creatorId, row.epoch, row.encrypted, row.rosterRev, row.memberIdsJson, row.joinedAt],
     );
   }
 
   async listGroups(): Promise<GroupRow[]> {
-    const rows = await this.db.select(`SELECT group_id,name,creator_id,epoch,member_ids_json,joined_at FROM groups ORDER BY joined_at ASC`);
+    const rows = await this.db.select(`SELECT group_id,name,creator_id,epoch,encrypted,roster_rev,member_ids_json,joined_at FROM groups ORDER BY joined_at ASC`);
     return rows.map(toGroupRow);
   }
 
   async getGroup(groupId: string): Promise<GroupRow | null> {
-    const rows = await this.db.select(`SELECT group_id,name,creator_id,epoch,member_ids_json,joined_at FROM groups WHERE group_id=?`, [groupId]);
+    const rows = await this.db.select(`SELECT group_id,name,creator_id,epoch,encrypted,roster_rev,member_ids_json,joined_at FROM groups WHERE group_id=?`, [groupId]);
     return rows.length > 0 ? toGroupRow(rows[0]) : null;
   }
 
@@ -537,6 +554,9 @@ function toGroupRow(r: Record<string, unknown>): GroupRow {
     name: String(r.name ?? ''),
     creatorId: String(r.creator_id ?? ''),
     epoch: Number(r.epoch ?? 1),
+    // 读时容错：老 DB 无这两列 ⇒ 缺省封闭（AC 13）、roster_rev 缺省 0
+    encrypted: r.encrypted === undefined || r.encrypted === null ? 1 : Number(r.encrypted),
+    rosterRev: r.roster_rev === undefined || r.roster_rev === null ? 0 : Number(r.roster_rev),
     memberIdsJson: String(r.member_ids_json ?? '[]'),
     joinedAt: String(r.joined_at ?? ''),
   };

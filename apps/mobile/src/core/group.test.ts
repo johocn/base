@@ -1,23 +1,44 @@
 import { describe, expect, it } from 'vitest';
 
-import { bytesToHex, hexToBytes, openWithNonce, utf8 } from '@base/protocol-ts';
+import {
+  bytesToHex,
+  canonicalize,
+  hexToBytes,
+  openWithNonce,
+  randomBytes,
+  sign,
+  utf8,
+} from '@base/protocol-ts';
 
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, MemoryStorage } from './fakes';
 import type { Adapters } from '../platform/adapter';
-import { deviceKek } from './identity';
+import { deviceKek, ensureLocalIdentity } from './identity';
 import { CommentError, flushPending } from './comment';
 import { decodeUtf8 } from './sync';
+import { sealText } from './wire';
 import {
   GROUP_KEY_STALE_NOTICE,
   GroupError,
   acceptInvite,
+  buildRosterRequest,
   createGroup,
   decodeInvite,
+  decodeRosterRequest,
   encodeInvite,
+  encodeRosterRequest,
   fetchGroupMessages,
+  governorSeats,
+  openEnvelope,
   postGroupMessage,
+  readSigReceipt,
+  resolveKeyChain,
   rotateGroup,
+  sealEnvelope,
+  signSigRequest,
+  submitRoster,
+  type GroupEnvelope,
   type GroupOptions,
+  type RosterDraft,
 } from './group';
 
 const BASE = 'https://node.test';
@@ -57,24 +78,84 @@ async function groupKeyHex(storage: MemoryStorage, cipher: string): Promise<stri
   return bytesToHex(openWithNonce(kek, hexToBytes(n!), hexToBytes(ct!)));
 }
 
+/** 节点读接口的桩响应（含 v2 的五个 group 字段）。 */
+function groupPage(
+  groupId: string,
+  creatorId: string,
+  epoch: number,
+  memberIds: string[],
+  envelopes: GroupEnvelope[] = [],
+  events: Array<Record<string, unknown>> = [],
+) {
+  return json({
+    group: {
+      group_id: groupId,
+      creator_id: creatorId,
+      epoch,
+      member_ids: memberIds,
+      name: '读书',
+      encrypted: 1,
+      roster_rev: epoch,
+      seat_count: 1,
+      governors: [creatorId],
+      envelopes: envelopes.map((e) => ({ from_epoch: e.fromEpoch, cipher: e.cipher })),
+    },
+    events,
+    next_cursor: null,
+  });
+}
+
+/** 手工构造一张 **v1 老码**（9 键签名域，无 encrypted / roster_rev / history_keys）。 */
+async function legacyInviteV1(storage: MemoryStorage, groupId: string, keyHex: string, name: string): Promise<string> {
+  const ident = await ensureLocalIdentity(storage);
+  const createdAt = Date.now();
+  const fields = {
+    v: 1,
+    group_id: groupId,
+    target_id: `group/${groupId}`,
+    name,
+    epoch: 1,
+    group_key: keyHex,
+    creator_id: ident.id,
+    creator_pub: ident.pubHex,
+    created_at: createdAt,
+  };
+  const sig = sign(ident.seedHex, utf8(canonicalize(fields)));
+  return encodeInvite({
+    v: 1,
+    groupId,
+    targetId: `group/${groupId}`,
+    name,
+    epoch: 1,
+    groupKeyHex: keyHex,
+    creatorId: ident.id,
+    creatorPubHex: ident.pubHex,
+    createdAt,
+    sig,
+  });
+}
+
 describe('group', () => {
-  it('AC 1：A 断网建组出码，B 断网粘码入组，双方 epoch 与组密钥一致', async () => {
+  it('AC 1：A 断网建圈出码，B 断网粘码入圈，双方 epoch 与组密钥一致', async () => {
     const a = fixture();
     gateOffline(a.o);
-    const created = await createGroup(a.o, { name: '夜间读书' });
+    const created = await createGroup(a.o, { name: '夜间读书', encrypted: true });
 
     expect(created.queued).toBe(true); // 断网 → roster 入队，但邀请码已可用
     expect(created.inviteCode.startsWith('base1:')).toBe(true);
     expect(created.group.groupId).toMatch(/^[0-9a-f]{32}$/); // 16 字节，与 event_id 同形
+    expect(created.group.encrypted).toBe(1);
+    expect(created.group.rosterRev).toBe(1);
 
     const b = fixture();
-    gateOffline(b.o); // 入组**全程零网络**
+    gateOffline(b.o); // 入圈**全程零网络**
     const joined = await acceptInvite(b.o, created.inviteCode);
 
     expect(joined.renewed).toBe(true);
     expect(joined.group.groupId).toBe(created.group.groupId);
     expect(joined.group.epoch).toBe(1);
     expect(joined.group.creatorId).toBe(created.group.creatorId);
+    expect(joined.group.encrypted).toBe(1);
 
     const ka = await a.repo.listGroupKeys(created.group.groupId);
     const kb = await b.repo.listGroupKeys(created.group.groupId);
@@ -83,10 +164,10 @@ describe('group', () => {
     expect(await groupKeyHex(b.storage, kb[0]!.keyCipher)).toBe(await groupKeyHex(a.storage, ka[0]!.keyCipher));
   });
 
-  it('AC 2：篡改 group_key 任一字符 → 入组被拒，文案统一', async () => {
+  it('AC 2：篡改 group_key 任一字符 → 入圈被拒，文案统一', async () => {
     const a = fixture();
     gateOffline(a.o);
-    const created = await createGroup(a.o, { name: '读书' });
+    const created = await createGroup(a.o, { name: '读书', encrypted: true });
 
     const inv = decodeInvite(created.inviteCode);
     const flipped = inv.groupKeyHex[0] === 'a' ? 'b' + inv.groupKeyHex.slice(1) : 'a' + inv.groupKeyHex.slice(1);
@@ -97,7 +178,7 @@ describe('group', () => {
     expect(() => decodeInvite(encodeInvite(forged))).toThrowError('邀请码无效或已损坏');
 
     // 非 base1: 前缀 / 坏 base64 也不放行
-    expect(() => decodeInvite('base2:xxxx')).toThrowError('邀请码无效或已损坏');
+    expect(() => decodeInvite('base3:xxxx')).toThrowError('邀请码无效或已损坏');
     expect(() => decodeInvite('base1:!!!!')).toThrowError('邀请码无效或已损坏');
 
     const b = fixture();
@@ -110,7 +191,7 @@ describe('group', () => {
   it('AC 8：断网发言入队，联网后仅补发一条；队列行含密文不含明文', async () => {
     const a = fixture();
     const gate = gateOffline(a.o);
-    const created = await createGroup(a.o, { name: '读书' });
+    const created = await createGroup(a.o, { name: '读书', encrypted: true });
     await a.repo.removeCommentOut((await a.repo.listCommentOut())[0]!.eventId); // 清掉 roster 行，只看发言
 
     const sent = await postGroupMessage(a.o, { groupId: created.group.groupId, text: '今晚九点开读' });
@@ -135,12 +216,13 @@ describe('group', () => {
     expect(a.http.posted.filter((p) => p.url.endsWith('/v1/event'))).toHaveLength(1);
   });
 
-  it('AC 9：未入组者能列出索引与 member_ids，取到的密文解不开且触发提示', async () => {
+  it('AC 9：未入圈者能列出索引与 member_ids，取到的密文解不开且触发提示', async () => {
     const a = fixture();
     a.http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
     a.http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'ignored', payload_cid: 'c'.repeat(32) }));
 
-    const { group } = await createGroup(a.o, { name: '读书' });
+    // 匿名可读只对**开放圈**成立 ⇒ 该用例用 encrypted: false 建圈
+    const { group } = await createGroup(a.o, { name: '读书', encrypted: false });
     const post = await postGroupMessage(a.o, { groupId: group.groupId, text: '九点开读' });
     const lastPost = a.http.posted[a.http.posted.length - 1]!;
     const wire = JSON.parse(decodeUtf8(lastPost.body)) as { event_id: string; body: { text_cipher: string } };
@@ -164,7 +246,7 @@ describe('group', () => {
     expect(feed.notice).toBe('');
     expect(feed.group.memberIds).toEqual([group.creatorId]);
 
-    // C（未入组、无密钥）能读索引与名单，但解不开——用的是**同一个节点**（桩都在 a.http 上）
+    // C（未入圈、无密钥）能读索引与名单，但解不开——用的是**同一个节点**（桩都在 a.http 上）
     const c = fixture();
     c.o.adapters.http = a.http;
     const stranger = await fetchGroupMessages(c.o, group.groupId);
@@ -178,7 +260,7 @@ describe('group', () => {
     a.http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
     a.http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'ignored', payload_cid: 'c'.repeat(32) }));
 
-    const { group } = await createGroup(a.o, { name: '读书' }); // 建组先走通，把 4xx 留给发言路径
+    const { group } = await createGroup(a.o, { name: '读书', encrypted: true }); // 建圈先走通，把 4xx 留给发言路径
     const before = (await a.repo.listCommentOut()).length;
     a.http.postRoutes.set(`${BASE}/v1/event`, { status: 403, body: utf8(JSON.stringify({ code: 'event_sig_invalid' })) });
     const err = await postGroupMessage(a.o, { groupId: group.groupId, text: 'x' }).catch((e: unknown) => e);
@@ -187,39 +269,181 @@ describe('group', () => {
     expect((await a.repo.listCommentOut()).length).toBe(before);
   });
 
-  it('轮换：新 epoch 用新密钥；被移出者解不开并提示；旧码不覆盖本地新 epoch', async () => {
-    const a = fixture();
-    a.http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
-    a.http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'ignored', payload_cid: 'c'.repeat(32) }));
-
-    const { group, inviteCode } = await createGroup(a.o, { name: '读书' });
-    const b = fixture();
-    const joined = await acceptInvite(b.o, inviteCode); // 入组零网络，b 不需任何桩
-
-    // 6.1 非创建者不能轮换（b 的 creatorId 是 a 的 id，b 自己的身份不是创建者）
-    const err = await rotateGroup(b.o, group.groupId, [joined.group.creatorId]).catch((e: unknown) => e);
-    expect((err as GroupError).code).toBe('not_creator');
-
-    // 6.2 创建者移出 b：新 epoch=2 + 续期码
-    const rotated = await rotateGroup(a.o, group.groupId, [group.creatorId]);
-    expect(rotated.group.epoch).toBe(2);
-    expect((await a.repo.listGroupKeys(group.groupId)).map((k) => k.epoch)).toEqual([1, 2]);
-
-    // 6.3 b 粘续期码 → epoch 跟进
-    const renewed = await acceptInvite(b.o, rotated.inviteCode);
-    expect(renewed.renewed).toBe(true);
-    expect(renewed.group.epoch).toBe(2);
-
-    // 6.4 b 再粘最初那张（epoch=1）→ 拒绝，不被拉回
-    const stale = await acceptInvite(b.o, inviteCode).catch((e: unknown) => e);
-    expect((stale as GroupError).code).toBe('key_stale');
-    expect((await b.repo.getGroup(group.groupId))!.epoch).toBe(2);
-  });
-
-  it('msg 的回复键只在提供时入体；本地没有组时拒绝发言', async () => {
+  it('AC 13：v1 老码仍可入圈，且被识别为封闭圈、roster_rev 缺省 0', async () => {
     const a = fixture();
     gateOffline(a.o);
-    const { group } = await createGroup(a.o, { name: '读书' });
+    const created = await createGroup(a.o, { name: '读书', encrypted: true });
+    const keyRow = (await a.repo.listGroupKeys(created.group.groupId))[0]!;
+    const legacy = await legacyInviteV1(
+      a.storage,
+      created.group.groupId,
+      await groupKeyHex(a.storage, keyRow.keyCipher),
+      '读书',
+    );
+
+    const b = fixture();
+    const { group } = await acceptInvite(b.o, legacy);
+    expect(group.encrypted).toBe(1); // 老码没有 encrypted 键 ⇒ 缺省封闭（存量语义）
+    expect(group.rosterRev).toBe(0);
+    expect(group.epoch).toBe(1);
+  });
+
+  it('AC 4：轮换后同伴靠信封链自动补钥，无需粘贴任何续期码', async () => {
+    const a = fixture();
+    gateOffline(a.o); // 轮换只出草稿，不发网络（重点在本地钥 + 信封）
+    const created = await createGroup(a.o, { name: '读书', encrypted: true });
+    const b = fixture();
+    await acceptInvite(b.o, created.inviteCode); // B 先持 epoch 1
+
+    const rotated = await rotateGroup(a.o, created.group.groupId, { memberIds: [created.group.creatorId] });
+    expect(rotated.requestCode.startsWith('base2:')).toBe(true);
+    expect(rotated.envelopes).toHaveLength(1);
+    expect((await a.repo.getGroup(created.group.groupId))!.epoch).toBe(2);
+    expect((await a.repo.listGroupKeys(created.group.groupId)).map((k) => k.epoch)).toEqual([1, 2]);
+
+    // 节点读接口下发 epoch 2 的信封与该 epoch 的一条消息（密文用 a 的 epoch 2 钥现造）
+    const key2Row = (await a.repo.listGroupKeys(created.group.groupId)).find((k) => k.epoch === 2)!;
+    const key2 = hexToBytes(await groupKeyHex(a.storage, key2Row.keyCipher));
+    const cipher = sealText(key2, '新钥生效');
+    b.o.adapters.http = a.http; // B 与桩共用同一个节点
+    a.http.routes.set(
+      `${BASE}/v1/group/${created.group.groupId}`,
+      groupPage(
+        created.group.groupId,
+        created.group.creatorId,
+        2,
+        [created.group.creatorId],
+        rotated.envelopes,
+        [{ event_id: 'e'.repeat(32), actor: created.group.creatorId, created_at: 1, payload_cid: 'ev2', epoch: 2, action: 'msg', reply_to: null }],
+      ),
+    );
+    a.http.routes.set(`${BASE}/v1/blob/ev2`, { status: 200, body: utf8(cipher) });
+
+    const feed = await fetchGroupMessages(b.o, created.group.groupId);
+    expect(feed.events[0]!.text).toBe('新钥生效'); // 解开了 epoch 2 的消息（没粘过任何码）
+    expect(feed.notice).toBe('');
+    expect((await b.repo.listGroupKeys(created.group.groupId)).map((k) => k.epoch).sort()).toEqual([1, 2]);
+    expect((await b.repo.getGroup(created.group.groupId))!.epoch).toBe(2);
+  });
+
+  it('AC 5：链断（拿不到上一层钥）⇒ 解密失败并原位提示原文，且不落任何错钥', async () => {
+    const a = fixture();
+    gateOffline(a.o);
+    const created = await createGroup(a.o, { name: '读书', encrypted: true });
+    const out = fixture(); // 「已落伍者」：本地只有 epoch 1 的钥
+    await acceptInvite(out.o, created.inviteCode);
+
+    // 节点已到 epoch 3，但信封只给了 2→3 这一段，缺 1→2 ⇒ 链断
+    const k1 = randomBytes(32);
+    const broken = sealEnvelope(k1, randomBytes(32), 2);
+    out.o.adapters.http = a.http;
+    a.http.routes.set(
+      `${BASE}/v1/group/${created.group.groupId}`,
+      groupPage(
+        created.group.groupId,
+        created.group.creatorId,
+        3,
+        [created.group.creatorId],
+        [broken],
+        [{ event_id: 'f'.repeat(32), actor: created.group.creatorId, created_at: 1, payload_cid: 'ev3', epoch: 3, action: 'msg', reply_to: null }],
+      ),
+    );
+    a.http.routes.set(`${BASE}/v1/blob/ev3`, { status: 200, body: utf8(sealText(randomBytes(32), 'x')) });
+
+    const feed = await fetchGroupMessages(out.o, created.group.groupId);
+    expect(feed.notice).toBe(GROUP_KEY_STALE_NOTICE); // 原文可核对（禁止静默）
+    expect(feed.events.some((e) => e.text === null)).toBe(true);
+    expect((await out.repo.listGroupKeys(created.group.groupId)).map((k) => k.epoch)).toEqual([1]); // 整链放弃
+  });
+
+  it('AC 6 / AC 7：门槛不足时 submitRoster 原地报错、不提交；凑够两签则成对入队', async () => {
+    const a = fixture();
+    gateOffline(a.o);
+    const created = await createGroup(a.o, { name: '读书', encrypted: true });
+    // m = 11 ⇒ k = 3 ⇒ 移出成员需 ceil(2*3/3) = 2 签
+    const memberIds = Array.from({ length: 11 }, (_, i) => i.toString(16).padStart(32, '0'));
+    const req = await buildRosterRequest(a.o, created.group.groupId, { sub: 'remove', memberIds });
+    const mine = await signSigRequest(a.o, req);
+    const before = (await a.repo.listCommentOut()).length;
+
+    const err = await submitRoster(a.o, req, [mine]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GroupError);
+    expect((err as GroupError).code).toBe('roster_quorum_missing');
+    expect((err as GroupError).message).toBe('需 2 名签名（移出成员），当前 1 名');
+    expect((await a.repo.listCommentOut()).length).toBe(before); // 未提交、未入队
+
+    // 第二签来自**另一个身份**（同一台机器的另一身份，或代同伴回执）
+    const other = fixture();
+    const second = await signSigRequest(other.o, req);
+    const ok = await submitRoster(a.o, req, [mine, second]);
+    expect(ok.queued).toBe(true); // 断网 ⇒ 走既有 comment_out 队列
+    expect((await a.repo.listCommentOut()).length).toBe(before + 1);
+    const rows = await a.repo.listCommentOut();
+    const row = rows[rows.length - 1]!;
+    expect(row.targetId).toBe(`group/${created.group.groupId}`);
+    const wire = JSON.parse(row.wire) as { event_id: string; body: Record<string, unknown> };
+    expect(wire.body.action).toBe('roster'); // 更正 21：v2 名单的 action 固定 'roster'，不是 'roster_v2'
+    expect(wire.body.sub).toBe('remove');
+    expect((wire.body.sigs as unknown[]).length).toBe(2);
+    expect(wire.event_id).toBe(decodeRosterRequest(req).eventId); // 信封复用草稿的 event_id
+  });
+
+  it('门槛镜像：governorSeats 与「谁是治者」无关，纯按 m 算席位', () => {
+    expect(governorSeats(1)).toBe(1);
+    expect(governorSeats(10)).toBe(1);
+    expect(governorSeats(11)).toBe(3);
+    expect(governorSeats(21)).toBe(4);
+    expect(governorSeats(101)).toBe(10);
+  });
+
+  it('base2 / base3：编解码往返稳定，篡改或换草稿即被拒', async () => {
+    const a = fixture();
+    gateOffline(a.o);
+    const created = await createGroup(a.o, { name: '读书', encrypted: true });
+    const req = await buildRosterRequest(a.o, created.group.groupId, {
+      sub: 'rename',
+      memberIds: [created.group.creatorId],
+      name: '新名',
+    });
+    const d = decodeRosterRequest(req);
+    expect(d.sub).toBe('rename');
+    expect(d.name).toBe('新名');
+    expect(d.encrypted).toBe(1);
+    expect(encodeRosterRequest(d)).toBe(req); // 往返稳定
+
+    const receipt = await signSigRequest(a.o, req);
+    expect(receipt.startsWith('base3:')).toBe(true);
+    expect(readSigReceipt(receipt, d)?.id).toBe((await ensureLocalIdentity(a.storage)).id);
+    expect(readSigReceipt(receipt, { ...d, name: '别的名' })).toBeNull(); // request_hash 不匹配 ⇒ 丢弃
+    expect(readSigReceipt(receipt, { ...d, createdAt: d.createdAt + 1 })).toBeNull();
+    expect(readSigReceipt('base2:' + receipt.slice(6), d)).toBeNull(); // 前缀不对
+
+    // 形态不合法一律 `roster_request_invalid`
+    expect(() => decodeRosterRequest('base1:xxxx')).toThrowError('这不是签名请求码（应以 base2: 开头）');
+    expect(() => decodeRosterRequest(encodeRosterRequest({ ...d, rosterRev: 0 } as RosterDraft))).toThrowError(
+      '签名请求码字段不合法',
+    );
+  });
+
+  it('resolveKeyChain：逐层解链；缺层或目标不可达 ⇒ 整链放弃', () => {
+    const k1 = randomBytes(32);
+    const k2 = randomBytes(32);
+    const k3 = randomBytes(32);
+    const e12 = sealEnvelope(k1, k2, 1);
+    const e23 = sealEnvelope(k2, k3, 2);
+    const have = new Map<number, Uint8Array>([[1, k1]]);
+
+    expect(bytesToHex(openEnvelope(k1, e12))).toBe(bytesToHex(k2)); // 信封就是「旧钥封新钥」
+    expect(bytesToHex(resolveKeyChain(have, [e12, e23], 3)!)).toBe(bytesToHex(k3));
+    expect(resolveKeyChain(have, [e23], 3)).toBeNull(); // 缺 1→2
+    expect(resolveKeyChain(have, [e12, e23], 4)).toBeNull(); // 目标不可达
+    expect(() => openEnvelope(k3, e12)).toThrow(); // 钥不对 ⇒ 抛错（由 resolveKeyChain 兜成 null）
+  });
+
+  it('msg 的回复键只在提供时入体；本地没有圈时拒绝发言', async () => {
+    const a = fixture();
+    gateOffline(a.o);
+    const { group } = await createGroup(a.o, { name: '读书', encrypted: true });
 
     await postGroupMessage(a.o, { groupId: group.groupId, text: '甲', replyTo: 'f'.repeat(32) });
     const rows = await a.repo.listCommentOut();
