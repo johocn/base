@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/johocn/base/internal/protocol"
 )
@@ -66,6 +67,7 @@ type ImportResult struct {
 //  3. content_version 以包版本号覆盖写。
 func (s *Store) ImportPack(version int64, entries []PackEntry, tombstones []protocol.Tombstone) (ImportResult, error) {
 	res := ImportResult{Version: version, Rejected: []string{}, RemovedBlobs: []string{}}
+	tagIDs := []string{} // 本包内写成功的 `tag/` 前缀条目，循环后在同一事务里回填 tag_links（册子 §3.3）
 	tx, err := s.db.Begin()
 	if err != nil {
 		return res, err
@@ -136,6 +138,9 @@ func (s *Store) ImportPack(version int64, entries []PackEntry, tombstones []prot
 					return res, fmt.Errorf("store: 入库 segments %s seq=%d: %w", e.ItemID, seg.Seq, err)
 				}
 			}
+			if strings.HasPrefix(e.ItemID, "tag/") {
+				tagIDs = append(tagIDs, e.ItemID)
+			}
 		case "articles":
 			bodyEnc, err := s.encText(e.BodyMD)
 			if err != nil {
@@ -177,6 +182,14 @@ func (s *Store) ImportPack(version int64, entries []PackEntry, tombstones []prot
 			return res, fmt.Errorf("store: 条目 %s 的 sqlite_table=%s 不支持入库", e.ItemID, e.SQLiteTable)
 		}
 		res.Entries++
+	}
+
+	// 标签条目的 segments 行已入库，据它们把本地 tag_links 幂等回填（册子 §3.3）。
+	// 回填不校验目标存在性：评论事件未必已同步，引用允许悬空。
+	for _, id := range tagIDs {
+		if err := backfillTagLinksTx(tx, id); err != nil {
+			return res, fmt.Errorf("store: 回填 tag_links %s: %w", id, err)
+		}
 	}
 
 	if _, err := tx.Exec(`INSERT INTO meta(key,value) VALUES('content_version',?)
