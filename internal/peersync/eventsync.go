@@ -217,6 +217,16 @@ func parseEventProjection(typ, bodyJSON string) commentProjection {
 			return commentProjection{}
 		}
 		return commentProjection{TargetID: "group/" + m.GroupID, PayloadCID: m.PayloadCID, ReplyTo: m.ReplyTo}
+	case "dm.v1":
+		// 私信的减化 body 是 {to, payload_cid}；target_id 由 to 拼回来（册子 §3.3）。
+		var m struct {
+			To         string `json:"to"`
+			PayloadCID string `json:"payload_cid"`
+		}
+		if err := json.Unmarshal([]byte(bodyJSON), &m); err != nil || m.To == "" {
+			return commentProjection{}
+		}
+		return commentProjection{TargetID: "dm/" + m.To, PayloadCID: m.PayloadCID}
 	default:
 		return commentProjection{}
 	}

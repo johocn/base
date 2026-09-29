@@ -61,11 +61,11 @@ func (s *Store) ListComments(targetID string, cursorTS int64, cursorID string, l
 }
 
 // EventBlobIndex 返回事件正文块 → 归属事件的映射，来源是 events.payload_cid。
-// ① 类评论正文与 ② 类小组密文都挂在这里：两者都是「块被事件引用」，
+// ① 类评论正文与 ② 类小组 / 私信密文都挂在这里：三者都是「块被事件引用」，
 // 少了归属，缓存节点永远拉不下来、scrub 还会把块当孤儿删掉（册子 §4.4）。
 func (s *Store) EventBlobIndex() (map[string]BlobRef, error) {
 	rows, err := s.db.Query(`SELECT type,event_id,payload_cid FROM events
-		WHERE type IN ('comment.v1','group.v1') AND payload_cid IS NOT NULL AND payload_cid<>''`)
+		WHERE type IN ('comment.v1','group.v1','dm.v1') AND payload_cid IS NOT NULL AND payload_cid<>''`)
 	if err != nil {
 		return nil, err
 	}
@@ -80,8 +80,11 @@ func (s *Store) EventBlobIndex() (map[string]BlobRef, error) {
 			continue
 		}
 		prefix := "comment:"
-		if typ == "group.v1" {
+		switch typ {
+		case "group.v1":
 			prefix = "group:"
+		case "dm.v1":
+			prefix = "dm:"
 		}
 		out[cid] = BlobRef{BlobID: cid, ItemID: prefix + eventID}
 	}

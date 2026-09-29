@@ -201,3 +201,52 @@ func TestGroupEventProjectionRestoredOnPeer(t *testing.T) {
 		t.Fatalf("块归属不符: %+v ok=%v", ref, ok)
 	}
 }
+
+// 验收 4：一轮反熵后缓存节点能读到私信索引与密文块归属。
+// 对端事件只有 body_json，target_id / payload_cid 必须在本地重建（F5′）；
+// 密文块归属也要认得 dm.v1（F6′），否则缓存节点拉不下块、scrub 还会当孤儿删掉。
+func TestDMEventProjectionRestoredOnPeer(t *testing.T) {
+	src, url, tr, pub := newSourceNode(t)
+
+	const (
+		peerID   = "00000000000000a1aaaaaaaaaaaaaaaa"
+		msgEvent = "00000000000000000000000000000009"
+	)
+	cipher := []byte("私信密文")
+	cid := protocol.BlobID(cipher)
+	if err := src.PutBlob(cid, cipher, "dm:"+msgEvent, 0); err != nil {
+		t.Fatalf("PutBlob: %v", err)
+	}
+	body := `{"payload_cid":"` + cid + `","to":"` + peerID + `"}`
+	if err := src.PutEvent(store.Event{
+		EventID: msgEvent, ID: commentActor, Type: "dm.v1", BodyJSON: body,
+		CreatedAt: time.Now().UnixMilli(), TargetID: "dm/" + peerID, PayloadCID: cid,
+	}); err != nil {
+		t.Fatalf("PutEvent dm: %v", err)
+	}
+
+	dst := openTemp(t)
+	cfg := Config{TransportFor: tr, IssuerPubKeys: map[string]string{srcIssuer: pub}}
+	ev, err := cfg.SyncEvents(context.Background(), dst, Peer{URL: url})
+	if err != nil || ev.Events != 1 {
+		t.Fatalf("反熵一轮应搬来 1 条事件 ev=%+v err=%v", ev, err)
+	}
+
+	// ① 索引列从 body_json 还原（否则缓存节点 GET /v1/dm/{peer} 查不到）
+	rows, err := dst.ListDMEvents(peerID, 0, "", 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("应读到 1 条 dm.v1 事件 rows=%+v err=%v", rows, err)
+	}
+	if rows[0].TargetID != "dm/"+peerID || rows[0].PayloadCID != cid {
+		t.Fatalf("私信投影列未还原: %+v", rows[0])
+	}
+
+	// ② 块归属索引认得该密文（EventBlobIndex 纳入 dm.v1 后才成立）
+	idx, err := dst.EventBlobIndex()
+	if err != nil {
+		t.Fatalf("EventBlobIndex: %v", err)
+	}
+	if ref, ok := idx[cid]; !ok || ref.ItemID != "dm:"+msgEvent {
+		t.Fatalf("块归属不符: %+v ok=%v", ref, ok)
+	}
+}
