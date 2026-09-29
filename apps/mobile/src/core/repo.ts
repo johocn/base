@@ -1,7 +1,7 @@
 import type { LocalDb } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { SEARCH_SQL, searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
 
 export interface PackApply {
   version: number;
@@ -66,6 +66,12 @@ export interface LocalRepo {
   putGroupKey(row: GroupKeyRow): Promise<void>;
   /** 某组的全部 epoch 密钥，按 `epoch ASC`（会话页一次取出建内存 map）。 */
   listGroupKeys(groupId: string): Promise<GroupKeyRow[]>;
+  /** 写/覆盖一条好友会话密钥（同 `peer_id` 覆盖密钥、保留首次 `created_at`）。幂等与冲突的裁决在 `core/dm.ts`，不在仓储层。 */
+  putDmKey(row: DmKeyRow): Promise<void>;
+  /** 读一条；不存在返回 null。 */
+  getDmKey(peerId: string): Promise<DmKeyRow | null>;
+  /** 全部行，按 `created_at ASC`（好友列表本体，私信册 §5.1）。 */
+  listDmKeys(): Promise<DmKeyRow[]>;
   /**
    * 写一行投稿台账（同 `item_id` 即更新）。台账是「我的条目」的列表本体，
    * 状态由本册 §9.3 的流转规则驱动，不由本方法决定。
@@ -121,6 +127,8 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS group_keys(
      group_id TEXT NOT NULL, epoch INTEGER NOT NULL, key_cipher TEXT NOT NULL, created_at TEXT NOT NULL,
      PRIMARY KEY(group_id, epoch))`,
+  `CREATE TABLE IF NOT EXISTS dm_keys(
+     peer_id TEXT PRIMARY KEY, key_cipher TEXT NOT NULL, created_at TEXT NOT NULL)`,
 ];
 
 /** SqlRepo 把 LocalRepo 语义落到 SQLite 上（Task 19 注入 plus.sqlite 连接）。 */
@@ -408,6 +416,24 @@ export class SqlRepo implements LocalRepo {
     return rows.map(toGroupKeyRow);
   }
 
+  async putDmKey(row: DmKeyRow): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO dm_keys(peer_id,key_cipher,created_at) VALUES(?,?,?)
+       ON CONFLICT(peer_id) DO UPDATE SET key_cipher=excluded.key_cipher`,
+      [row.peerId, row.keyCipher, row.createdAt],
+    );
+  }
+
+  async getDmKey(peerId: string): Promise<DmKeyRow | null> {
+    const rows = await this.db.select(`SELECT peer_id,key_cipher,created_at FROM dm_keys WHERE peer_id=?`, [peerId]);
+    return rows.length > 0 ? toDmKeyRow(rows[0]) : null;
+  }
+
+  async listDmKeys(): Promise<DmKeyRow[]> {
+    const rows = await this.db.select(`SELECT peer_id,key_cipher,created_at FROM dm_keys ORDER BY created_at ASC`);
+    return rows.map(toDmKeyRow);
+  }
+
   async saveSubmission(row: MySubmissionRow): Promise<void> {
     await this.db.execute(
       `INSERT INTO my_submissions(item_id,type,title,body_md,question_json,state,reason,created,queued_at,sent_at)
@@ -520,6 +546,14 @@ function toGroupKeyRow(r: Record<string, unknown>): GroupKeyRow {
   return {
     groupId: String(r.group_id),
     epoch: Number(r.epoch),
+    keyCipher: String(r.key_cipher ?? ''),
+    createdAt: String(r.created_at ?? ''),
+  };
+}
+
+function toDmKeyRow(r: Record<string, unknown>): DmKeyRow {
+  return {
+    peerId: String(r.peer_id ?? ''),
     keyCipher: String(r.key_cipher ?? ''),
     createdAt: String(r.created_at ?? ''),
   };

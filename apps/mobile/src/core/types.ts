@@ -140,3 +140,16 @@ export interface GroupKeyRow {
   keyCipher: string;
   createdAt: string;
 }
+
+/**
+ * 私信会话密钥（本地 `dm_keys` 表，私信册 §5.1）。一 peer 一把、双向共用，无 epoch、无轮换。
+ * `keyCipher` 与 `identity.ts` 的私钥密文、`group_keys.key_cipher` **同一形态**（`nonce:ct`）。
+ * 本表**不含昵称**：好友列表项只显示 id 前 8 位。
+ */
+export interface DmKeyRow {
+  /** 对方身份 id（32 hex），主键 */
+  peerId: string;
+  keyCipher: string;
+  /** 建立会话时刻 ISO8601（列表排序键） */
+  createdAt: string;
+}

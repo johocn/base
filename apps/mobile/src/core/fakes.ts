@@ -2,7 +2,7 @@
 import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReader, SqliteConnection, StorageAdapter } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
 import type { LocalRepo, PackApply } from './repo';
 
 export class MemoryFs implements FsAdapter {
@@ -220,6 +220,20 @@ export class MemoryRepo implements LocalRepo {
   }
   async listGroupKeys(groupId: string): Promise<GroupKeyRow[]> {
     return [...this.groupKeys.values()].filter((k) => k.groupId === groupId).sort((a, b) => a.epoch - b.epoch);
+  }
+
+  dmKeys = new Map<string, DmKeyRow>(); // peerId -> row
+
+  async putDmKey(row: DmKeyRow): Promise<void> {
+    const cur = this.dmKeys.get(row.peerId);
+    // created_at 保留首次值（与 SqlRepo 的 ON CONFLICT UPDATE 列表一致）
+    this.dmKeys.set(row.peerId, cur ? { ...row, createdAt: cur.createdAt } : { ...row });
+  }
+  async getDmKey(peerId: string): Promise<DmKeyRow | null> {
+    return this.dmKeys.get(peerId) ?? null;
+  }
+  async listDmKeys(): Promise<DmKeyRow[]> {
+    return [...this.dmKeys.values()].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
   }
 
   submissions = new Map<string, MySubmissionRow>(); // itemId -> row
