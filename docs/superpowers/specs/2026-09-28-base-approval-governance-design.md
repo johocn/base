@@ -63,6 +63,19 @@
 
 **更正三（错误码计数）：** §1、§6 与第 4 册接缝处原写「11 条新错误码」，而 §6 表格实为 **12 行**、实现亦为 12 条（`proposal_action_unsupported`、`proposal_reason_invalid`、`proposal_edit_invalid`、`proposal_too_large`、`item_not_found`、`item_self_owned`、`item_state_mismatch`、`proposer_not_governor`、`proposal_not_found`、`voter_not_governor`、`already_voted`、`govern_rate_limited`）。**以 §6 表格为准，四处计数已改为 12**；这是计数笔误，不涉及契约与实现。
 
+### 0.5 2026-09-29 `edit` 载体范围扩到 tag 型（统一标签 #37 立册时）
+
+**作废：** §0.3 的「**`edit` 仅对 article 载体成立**」——**放宽为**：`edit` 现在对**两类**载体成立：`articles` 型，以及 **`tag` 型**（`items.sqlite_table = 'segments'` 且 `item_id` 带 `tag/` 前缀，总纲 §0.8 已扩入该形态）。
+
+**理由：** #37 把「**已有标签的更改**」定案为治理动作（2 票），其改动对象是标签条目的**关联目标清单**。标签条目的 `title` 由三元组决定，**改名即换 `item_id`（等于新建条目，不走本册）**，故 `edit` 对 tag 载体的全量对象就是 `links[]`——仍是「全量替换，不是补丁」，与 §3.1 的口径不冲突（§0.3 排除 `segments` 的理由是「没有 `body_md` 就无从全量替换」，tag 载体有自己的全量对象）。
+
+**连带改动：**
+
+* §3.1 的 `edit` 例外句与载体限制句改为「仅对 `articles` 型与 `tag` 型两类载体成立」；`edit` 载荷按载体取一个键：`articles` 型 → `title` + `body_md`；`tag` 型 → **只带 `links[]`**。
+* §4.2 增 tag 载体的生效口径：按 `links[]` **全量覆盖** `tag_links` 中该 `tag_id` 的所有行 → 按 #14 §3.3 的容器条目口径重算 `content_hash` → **归属不动**（`author_id` / `author_sig` 保持原值：tag 条目由 #37 的治理写入路径产生，不适用「删 `body_md` 即清零原作者贡献」那条推论）。
+* §6 的 `proposal_edit_invalid` 触发句同步放宽；**不新增错误码**（仍 12 条）。
+* 其余全部不变：三个动作本身、门槛（`remove` 3 票 / `edit`·`revive` 2 票）、票权判定改用 #33 §0.2 的**名册快照水位**、两张表结构与生效事务。
+
 ## 1. 范围与不做什么
 
 **做四件事：**
@@ -171,10 +184,20 @@
 }
 ```
 
+`tag` 载体（§0.5）的同一请求体只换 `edit` 载荷的形状：
+
+```json
+{
+  "action": "edit",
+  "item_id": "tag/<名称>/<章>/<节>",
+  "edit": { "links": [ { "target_id": "course/<cid>", "kind": "course" } ] }
+}
+```
+
 - `edit` 字段**仅**在 `action = "edit"` 时有意义；其它动作携带时**一律忽略**（与第 2 册对 `content_hash` 的「携带即忽略」同口径）。
 - `reason` **可选**，缺省空串。给定时：去首尾空白后长度 1..200（rune）、不含控制字符（U+0000–U+001F、U+007F）；不通过 → `400 proposal_reason_invalid`。
 
-**`edit` 载荷是全量替换，不是补丁**：`title` 与 `body_md` 都必填，生效时整体覆盖目标条目。没有「只改其中一项」的合并语义——要只改标题，就把原正文原样再传一遍。
+**`edit` 载荷是全量替换，不是补丁**：按载体取一个键——`articles` 型必填 `title` + `body_md`，生效时整体覆盖目标条目；`tag` 型（§0.5）只带 `links[]`，生效时整体覆盖该 `tag_id` 的关联目标清单。没有「只改其中一项」的合并语义——要只改标题，就把原正文原样再传一遍。
 
 `201 Created`：
 
@@ -186,11 +209,12 @@
 
 - 提案人**只能**取自鉴权中间件解析出的身份。请求体**不得**携带 `proposer_id` / `author_id`——否则等于替他人提案。违反 → `400 author_id_forbidden`（沿用第 2 册的既有码，不新造）。
 - `action` 取 `remove` / `edit` / `revive` 三者之一；其余 → `400 proposal_action_unsupported`。
-- `item_id` 必须是本节点 `items` 表中**已存在**的条目；不存在 → `404 item_not_found`。不限定前缀（本册对 `course/...` 与 `article/...` 一视同仁——治理对象是「已存在的条目」，不是「可投稿的形态」）。**例外：`edit` 另受 §0.3 的载体限制，仅对 article 载体成立。**
+- `item_id` 必须是本节点 `items` 表中**已存在**的条目；不存在 → `404 item_not_found`。不限定前缀（本册对 `course/...` 与 `article/...` 一视同仁——治理对象是「已存在的条目」，不是「可投稿的形态」）。**例外：`edit` 另受载体限制，仅对 `articles` 型与 `tag` 型两类载体成立（§0.3 + §0.5）。**
 - 目标 `items.author_id == 提案人` → `403 item_self_owned`。
 - 动作与目标当前 `state` 不匹配（`remove`/`edit` 需 `active`；`revive` 需 `removed`）→ `400 item_state_mismatch`。
-- `edit` 载荷：`title` 校验同第 2 册（去首尾空白后 1..200 rune、不含控制字符）→ 不合规 `400 proposal_edit_invalid`；`body_md` 缺失（键不在，区别于空串）→ 同码；`title` + `body_md` 的 UTF-8 字节之和超过 `maxSubmitBytes`（32768，**复用第 2 册的既有常量**）→ `413 proposal_too_large`。
-- **`edit` 仅限 article 载体**（§0.3）：目标 `items.sqlite_table != 'articles'` → `400 proposal_edit_invalid`。`remove` / `revive` 不受此限。
+- `edit` 载荷（`articles` 型）：`title` 校验同第 2 册（去首尾空白后 1..200 rune、不含控制字符）→ 不合规 `400 proposal_edit_invalid`；`body_md` 缺失（键不在，区别于空串）→ 同码；`title` + `body_md` 的 UTF-8 字节之和超过 `maxSubmitBytes`（32768，**复用第 2 册的既有常量**）→ `413 proposal_too_large`。
+- `edit` 载荷（`tag` 型，§0.5）：`links` 缺失或不是数组 → `400 proposal_edit_invalid`；每项 `kind` 必须是 `course` / `lesson` / `article` / `comment`，`target_id` 必须是本节点已存在的条目（`comment/<event_id>` 除外）→ 同码；整个载荷的 UTF-8 字节超过 `maxSubmitBytes` → `413 proposal_too_large`。
+- **`edit` 载体限制**（§0.3 + §0.5）：目标既不是 `articles` 型、也不是 `tag` 型 → `400 proposal_edit_invalid`。`remove` / `revive` 不受此限。
 - **受理时记录目标 `content_hash` 快照**（写入提案行的 `base_content_hash`），供生效时判前置条件（§4.4）。
 - **不过期、不可改、不可撤**：提案一经提交即固定，没有修改或删除接口。
 
@@ -267,7 +291,9 @@
 
 ### 4.2 `edit`（改写）——本册最需要登记的一处后果
 
-`edit` 生效时**全量覆盖**目标的 `title` 与 `body_md`（仅 article 载体，§0.3），并按既有口径重算 `content_hash`（`hex(sha256(body_md 的 UTF-8 字节))`，第 2 册 §2.2）、`source_rev` 取 `content_hash[:16]`、`updated_at` 刷新。`state` 保持 `active`、`dist_class` 保持 `public`。
+`edit` 生效时**全量覆盖**目标的 `title` 与 `body_md`（`articles` 型载体，§0.3），并按既有口径重算 `content_hash`（`hex(sha256(body_md 的 UTF-8 字节))`，第 2 册 §2.2）、`source_rev` 取 `content_hash[:16]`、`updated_at` 刷新。`state` 保持 `active`、`dist_class` 保持 `public`。
+
+**`tag` 载体（§0.5）的生效口径与之平行、但归属后果不同**：全量覆盖 `tag_links` 中该 `tag_id` 的所有行（删旧行 → 按 `links[]` 写新行），`content_hash` 按 #14 §3.3 的**容器条目口径**重算（拼接串形状见第 2 册 §2.2 的 `tag` 行），`source_rev` / `updated_at` 同上；**`author_id` / `author_sig` 一律不动**——下表的「清除归属」推论只适用于「原作者署名被 `body_md` 绑定的 article 载体」，tag 条目由 #37 的治理写入路径产生，不受影响。
 
 **归属后果由 `content_hash` 是否变化决定，不由「改了哪个字段」决定**：
 
@@ -377,7 +403,7 @@ CREATE INDEX IF NOT EXISTS idx_govern_proposals_item ON govern_proposals(item_id
 |---|---|---|
 | `proposal_action_unsupported` | 400 | `action` 不是 `remove` / `edit` / `revive` |
 | `proposal_reason_invalid` | 400 | `reason` 给定但去首尾空白后为空、超 200 rune，或含控制字符 |
-| `proposal_edit_invalid` | 400 | `action = "edit"` 但 `title` 缺失/不合规（去首尾空白后空、超 200 rune、含控制字符），或 `body_md` 缺失，**或目标不是 article 载体（§0.3）** |
+| `proposal_edit_invalid` | 400 | `action = "edit"` 但 `title` 缺失/不合规（去首尾空白后空、超 200 rune、含控制字符），或 `body_md` 缺失，**或目标不是 `articles` / `tag` 型载体（§0.3 + §0.5），或 `tag` 型载体的 `links` 缺失/项不合规** |
 | `proposal_too_large` | 413 | `title` + `body_md` 的 UTF-8 字节之和超过 `maxSubmitBytes`（32768） |
 | `item_not_found` | 404 | 目标 `item_id` 在本节点 `items` 中不存在 |
 | `item_self_owned` | 403 | 目标 `items.author_id` == 调用者（自己改自己应走 `POST /v1/submit`） |
@@ -426,7 +452,7 @@ CREATE INDEX IF NOT EXISTS idx_govern_proposals_item ON govern_proposals(item_id
 - **实时复判**：投票人跌出前 10 后重读提案 → `vote_count` 回退、`status` 退回 `pending`；重新入榜 → 票恢复。
 - **冷启动（分档）**：名册 1 人 → 任何动作的提案都恒为 `pending`；名册 2 人 → `edit` / `revive` 可生效而 `remove` 恒为 `pending`；名册 3 人 → `remove` 可生效。
 - **状态匹配**：对 `removed` 条目提 `remove`/`edit` → `item_state_mismatch`；对 `active` 条目提 `revive` → 同码。
-- **`edit` 载体（§0.3）**：对 `quiz/<qid>` / `course/<cid>` / `video/<vid>` 提 `edit` → `proposal_edit_invalid`；对同一目标提 `remove` 则正常受理。
+- **`edit` 载体（§0.3 + §0.5）**：对 `quiz/<qid>` / `course/<cid>` / `video/<vid>` / `category/<slug>` 提 `edit` → `proposal_edit_invalid`；对同一目标提 `remove` 则正常受理。对 `tag/<...>` 提 `edit` **正常受理**（载荷走 `links[]`），生效后 `author_id` / `author_sig` 不变。
 - **归属后果（关键）**：改标题且正文原样 → `content_hash` 不变、`author_id` / `author_sig` **保留**；改正文 → `content_hash` 变、两列**清空**、该条不再计入名册。
 - **乐观锁**：受理后目标 `content_hash` 被改（模拟作者更新）→ 达到该动作门槛的那一票投出后 `status = void`、目标**未被覆盖**。
 - **幂等**：同一提案不可能执行两次；重复投同一提案 → `already_voted`。
@@ -496,5 +522,5 @@ CREATE INDEX IF NOT EXISTS idx_govern_proposals_item ON govern_proposals(item_id
 - 「提案人必须是名册内治理者、自计 1 票、**门槛按动作取值（`remove` 3 票 / `edit`·`revive` 2 票）**、票实时复判、名册人数不足门槛即挂起」的授权语义（§2.1、§2.3、§2.4）
 - 「本节点自治、提案不跨节点」的域边界（§2.5）
 - 「生效时的 `content_hash` 乐观锁」与「改正文 ⇒ 归属清零」两条判定（§4.2、§4.4）
-- 「`edit` 仅限 article 载体、`remove` / `revive` 不限载体」的受理口径（§0.3）
+- 「`edit` 仅限 `articles` 型与 `tag` 型两类载体、`remove` / `revive` 不限载体」的受理口径（§0.3 + §0.5）
 - 12 条新错误码（§6）

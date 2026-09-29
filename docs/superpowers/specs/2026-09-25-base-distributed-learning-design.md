@@ -127,13 +127,32 @@
 * **圈内贡献度排名算法**：只数已验签 `group.v1` 的 `action=msg` 事件条数；按 `event_id` 去重；同一 actor 任意滚动 24h 最多计 20 条；只统计当前成员；`count` 降序、同分按 `actor_id` hex 字典序升序；第 k 与第 k+1 同分取 id 小者；附带快照水位 `(roster_rev, event_watermark)`；事件不齐时返回「不可判定」，不猜名次。
 * **多签生效**（节点验签、**不数票**）+ **门槛三档**：低风险（改名 / 主动轮换 / 自己退出）= 任一治者 1 签；签发邀请码 = 任一在册成员（无门槛）；**移出成员 = 治者 ≥ `⌈2k/3⌉`**（k = 1 时自动 1 签）；**解散圈子 = 两段式：发起 = 治者 ≥ `min(2, k)` 名联署；通过 = 成员 ≥ `min(30, ⌊m/3⌋+1)`**（必须超过 1/3，上限 30 人）。治者签名在同一提案上可同时计入发起集合与成员投票集合。
 * **密钥「成员集合任一变更即轮换」+ 对称信封链**：加入 / 移出 / 重新加入即 bump `epoch`；加入携带当前 + 历史 epoch 密钥（上限 32 个 epoch）；移出者对后续不可读；轮换新钥用旧钥逐成员 AEAD 加密成信封，随 `action=roster` 的 `envelopes[]` 走节点，**节点不持有密钥**。
-* **L1 `govern.v1` 事件化 + 快照水位**：`action=proposal` / `action=vote`，签名域 **`base/govern-v1`**；反熵**零改动**（不按 type 过滤）；票权按提案建立时的名册水位 `(content_version, revoked_rev)` 判定；并发按 `(created_at, event_id)` 取首、票按 `(proposal_id, voter)` 取最早；门槛沿用 #27（`remove` 3 票、`edit` / `revive` 2 票）；`govern_*` 两表降级为投影，老路径 `POST /v1/proposal` 保留并双写（§6.5、§7.3、§8.1）。
+* **L1 `govern.v1` 事件化 + 快照水位**：`action=proposal` / `action=vote`，**沿用通用事件内容签名 `canonical({event_id,type,created_at,body})`，不新增签名域常量**（2026-09-29 口径收口，见治理册 #33 §0.2 第 3 条）；反熵**零改动**（不按 type 过滤）；票权按提案建立时的名册水位 `(content_version, revoked_rev)` 判定；并发按 `(created_at, event_id)` 取首、票按 `(proposal_id, voter)` 取最早；门槛沿用 #27（`remove` 3 票、`edit` / `revive` 2 票）；`govern_*` 两表降级为投影，老路径 `POST /v1/proposal` 保留、只写本地投影（**不产事件**）（§6.5、§7.3、§8.1）。
 
 **保留什么：**
 
 * **密码学零新算法**：继续 Ed25519 签名 + AES-256-GCM（`sealWithNonce` / `openWithNonce`），**不引入 X25519** 或任何非对称加密。
 * **节点永不持有组密钥、不解密 ② 类正文**（§12 第 9 条 + 本版新增第 13 条）。
 * **① 类公开内容与评论链路**、**块仍匿名可取**（§4、本版新增第 15 条）。
+
+### 0.8 2026-09-29 课程分类与统一标签（#36 / #37 两册）
+
+本版为「课程分类」与「统一标签体系」两册同步扩 §6.0 的内容模型取值集合。**总纲是唯一上游**，故先改此处（铁律 1）。
+
+**作废什么：** 无。本版**不推翻任何既有条款**，只把 §6.0 的取值集合与形态表扩两个值。
+
+**新增什么：**
+
+* **§6.0 的 `source` / `type` 取值集合各扩两个值**：`category`（课程分类容器）与 `tag`（统一标签条目）。两者都**借 `segments` 承载**（`sqlite_table = segments`），**不新增表、不新增字段**。
+* **item_id 形态新增两条**：`category/<slug>`（分类的单级扁平容器，其 `segments` 清单列出该分类下的 `course/<cid>`）与 `tag/<名称>/<章>/<节>`（标签三元组直接编码进 `item_id`，唯一性由此天然成立）。
+* **标签关联的权威落在节点侧新表 `tag_links(tag_id, target_id, kind)`**，`kind ∈ course | lesson | article | comment`。**该表不进内容包**：标签条目的 `segments` 行是同一次写入的**确定性物化**（写入时同一事务落投影行，排序口径见 #37 §3.3），导出直接走既有 `segments` 分支；手机端同步后据这些行回填本地 `tag_links` 派生表（内容包规范 v1 **零改动、不 bump `schema_version`**）。
+* **标签写入是治理动作**：全站治理人（#23 名册，`GET /v1/contributors`）与圈子治理人（#33 的治者集合）**同权**，可给全站 ① 类内容打标；已有标签的更改走 #27 提案（`edit`，2 票）。
+
+**保留什么：**
+
+* 内容包规范 v1 的 `manifest.json` 字段名与类型、`pack.sqlite` 五表 DDL 与列顺序，全部原样。
+* 层级只表达「归属与顺序」，**不表达权限**；可见性仍只有 `dist_class` 一维。
+* **课程分类只由本地导入器按 front-matter 产出，不新开节点侧管理接口**；`course/<cid>` 的 `item_id` 一律不动，归属由分类侧单向清单派生。
 
 ## 1. 目标
 
@@ -262,10 +281,12 @@ base/
 
 ### 6.0 内容模型：课程体系
 
-课程体系为三级：`course → lesson → (article | video | quiz)`。
+课程体系为 `category → course → lesson → (article | video | quiz)`；**统一标签（`tag`）与课程体系正交**（2026-09-29 §0.8 补）。
 
 | 层级 | 说明 |
 |---|---|
+| category | 课程分类：**单级扁平容器**，`segments` 清单列出该分类下的 `course/<cid>`（一课程至多属一分类，2026-09-29 §0.8 补） |
+| tag | 统一标签：`名称 / 章 / 节` 三元组构成的一位条目；与 course / lesson / article / comment 的关联由节点侧 `tag_links` 承载（权威表），并同事务物化进该条目的 `segments` 行随包传播（2026-09-29 §0.8 补） |
 | course | 课程：标题、简介、封面、课时归属 |
 | lesson | 课时：属于某个 course，承载 1..n 个载体条目 |
 | article | 图文正文（`body_md` + `segments`） |
@@ -275,6 +296,8 @@ base/
 归属关系用 **`item_id` 的路径式命名空间**表达，manifest 保持扁平，不新增表、不新增字段：
 
 ```
+category/<slug>                   # 课程分类；其 segments 清单列该分类下的 course/<cid>
+tag/<名称>/<章>/<节>               # 统一标签；三段直接编码进 item_id，唯一性天然成立
 course/<cid>
 course/<cid>/lesson/<lid>
 course/<cid>/lesson/<lid>/article/<aid>
@@ -283,7 +306,7 @@ course/<cid>/lesson/<lid>/quiz/<qid>
 article/<aid>                     # 不属于任何课程的独立文章
 ```
 
-- `manifest.entries[].source` 沿用既有取值 `course` / `lesson` / `article` / `quiz`；视频条目 `source` 记为 `lesson` + `type=video`，不新增 `video` 枚举值。
+- `manifest.entries[].source` 沿用既有取值 `course` / `lesson` / `article` / `quiz`，**2026-09-29 §0.8 扩入 `category` / `tag`**；视频条目 `source` 记为 `lesson` + `type=video`，不新增 `video` 枚举值。
 - 前缀即归属：按 `<cid>/` 前缀扫描即得该课程的全部课时与载体，无需递归查询。
 - P0 每个 lesson 只承载单个载体，**不引入排序字段**；需要课时内排序时在 A 阶段通过 `lesson` 条目的内容表达。
 - 层级只表达「归属与顺序」，**不表达权限**。权限与可见性一律由 §3 的 `dist_class` 承载。
@@ -307,8 +330,8 @@ article/<aid>                     # 不属于任何课程的独立文章
 | 字段 | 说明 |
 |---|---|
 | `item_id` | 条目 id（路径式命名空间，见 §6.0） |
-| `source` | 来源模块：`course` / `lesson` / `article` / `quiz` |
-| `type` | `article` / `video` / `quiz` / `subtitle` / `cover` |
+| `source` | 来源模块：`course` / `lesson` / `article` / `quiz` / `category` / `tag`（后两个 2026-09-29 §0.8 补） |
+| `type` | `article` / `video` / `quiz` / `subtitle` / `cover` / `category` / `tag`（后两个 2026-09-29 §0.8 补） |
 | `title` | 标题 |
 | `source_rev` | 源内容版本 |
 | `content_hash` | 条目级哈希 |
@@ -344,7 +367,7 @@ manifest 中**没有**权限标签、用户范围、过期时间。`dist_class` 
 - 内容更新 → `content_version` 递增，客户端按版本覆盖本地。
 - 内容下架/删除 → 新版本 manifest 带 `tombstone`；客户端同步时删除对应本地行与块；节点同样删除，且墓碑**只能在签名 manifest 中传播**，节点无法伪造。
 - **可见性变更（①↔②）= 新 `content_version` + 新 `item_id`**：② 类密文与 ① 类明文的 `blob_id` 必然不同，不构成原地修改。
-- **治理结论跨节点一致（2026-09-29 §0.7 补）**：他人条目的 `remove` / `edit` / `revive` 三动作事件化为 **`govern.v1`**（`action=proposal` / `action=vote`，签名域 **`base/govern-v1`**），随反熵跨节点传播 ⇒ 结论**不再依赖内容包导出 / 导入**即可收敛。**票权按提案建立时的名册快照水位 `(content_version, revoked_rev)` 判定，不按实时名册**（修正 #27 的「票实时复判」）；并发提案按 `(created_at, event_id)` 取首、票按 `(proposal_id, voter)` 取最早；门槛沿用 #27（`remove` 3 票、`edit` / `revive` 2 票）。`govern_proposals` / `govern_votes` 降级为本地物化视图（加可空 `source_event_id`），老路径 `POST /v1/proposal` 保留并双写。
+- **治理结论跨节点一致（2026-09-29 §0.7 补）**：他人条目的 `remove` / `edit` / `revive` 三动作事件化为 **`govern.v1`**（`action=proposal` / `action=vote`，**沿用通用事件内容签名 `canonical({event_id,type,created_at,body})`，不新增签名域常量**），随反熵跨节点传播 ⇒ 结论**不再依赖内容包导出 / 导入**即可收敛。**票权按提案建立时的名册快照水位 `(content_version, revoked_rev)` 判定，不按实时名册**（修正 #27 的「票实时复判」）；并发提案按 `(created_at, event_id)` 取首、票按 `(proposal_id, voter)` 取最早；门槛沿用 #27（`remove` 3 票、`edit` / `revive` 2 票）。`govern_proposals` / `govern_votes` 降级为本地物化视图（加可空 `source_event_id`），老路径 `POST /v1/proposal` 保留、只写本地投影（**不产事件**）。
 
 ## 7. 节点设计
 
@@ -397,7 +420,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 |---|---|
 | `POST /v1/identity/register` | 登记公钥（首次出现即登记，节点回执 id） |
 | `GET /v1/identity/:id` | 取公钥（用于验签他人事件与私信） |
-| `POST /v1/event` | 提交评论/进度/小组/私信事件；签名头管**准入**，事件体另带**内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`）管**归属**；节点验签后落库（2026-09-27 补）。已登记类型（`eventTypeRegistry`）：`comment.v1`、`group.v1`（2026-09-29 补——`action=msg` 密文发言落密文块、`action=roster` 名单落投影并携带 `sigs[]` / `envelopes[]`；圈内 roster 多签签名域 **`base/group-roster-v2`**，**旧单签仍按旧域接受**；② 类**不新开 blob 上传面**）、`govern.v1`（2026-09-29 §0.7 补——`action=proposal` / `action=vote`，签名域 **`base/govern-v1`**，随反熵跨节点传播） |
+| `POST /v1/event` | 提交评论/进度/小组/私信事件；签名头管**准入**，事件体另带**内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`）管**归属**；节点验签后落库（2026-09-27 补）。已登记类型（`eventTypeRegistry`）：`comment.v1`、`group.v1`（2026-09-29 补——`action=msg` 密文发言落密文块、`action=roster` 名单落投影并携带 `sigs[]` / `envelopes[]`；圈内 roster 多签签名域 **`base/group-roster-v2`**，**旧单签仍按旧域接受**；② 类**不新开 blob 上传面**）、`govern.v1`（2026-09-29 §0.7 补——`action=proposal` / `action=vote`，**沿用通用事件内容签名，不新增签名域常量**，随反熵跨节点传播） |
 | `GET /v1/identity/escrow/:username` | 取密码托管的加密私钥密文（换设备取回） |
 | `PUT /v1/identity/escrow/:username` | 写入/更新托管密文 |
 | `GET /v1/me` | 按请求签名中的 id 返回该身份已登记的事件与学习进度 |

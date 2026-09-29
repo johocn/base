@@ -30,6 +30,17 @@
 - `dist_class` 这一唯一的可见性维度：本册投稿条目一律 `public`，**不引入可见性选择**
 - 写限速复用既有 `ipLimiter`（按身份 + 按 IP 双维度）
 
+### 0.2 2026-09-29 `type` 扩入 `tag`（统一标签 #37 立册时）
+
+**作废：** 无。
+
+**补充：** §2.1 的 `type` 取值由 `article` / `quiz` 扩入 **`tag`**；§2.4 的形态表相应补一行 `tag/<名称>/<章>/<节>` → `items.source = tag` / `items.type = tag`（总纲 §6.0 已由 §0.8 扩入这两个值）。**`tag` 条目的完整设计归 #37 册子**，本册只登记「本接口接受该形态」与两处随之而来的差别：
+
+1. **资格——本接口第一次出现「验签通过但仍可能无权写」**：`article` / `quiz` 属「作者写自己的条目」，验签即授权；**`tag` 是治理动作**，节点除验签外必须再判 `author_id` 在**本节点名册**内（#23 名册 ∪ #33 治者集合），不在册 → `403 tag_not_governor`（§6 新增一条）。
+2. **载荷**：`tag` 不带 `body_md` / `question_json`，改带 `links[]`（`{target_id, kind}` 列表，**全量替换**语义，`kind ∈ course | lesson | article | comment`；`content_hash` 口径见 §2.2 新增行）。
+
+**明确不变：** `author_sig` 的待签字节定义（五键、`base/author-v1`，§2.3）**一字不改**；占用口径（§3.1）；`title` 校验；限速常量；既有 `article` / `quiz` 两个分支**零改动**。
+
 ## 1. 范围与不做什么
 
 **做三件事：**
@@ -90,8 +101,8 @@
 **硬约束：**
 
 - `author_id` **只能**取自鉴权中间件解析出的身份。请求体**不得**携带 `author_id`——否则等于替他人署名。违反 → `400 author_id_forbidden`（与 #23 §5.2 的 `profile_id_forbidden` 同一口径）。
-- `type` 取 `article` / `quiz` 两者之一；其余值 → `400 item_type_unsupported`。
-- `type` 必须与 `item_id` 前缀一致（`article/*` ↔ `article`，`quiz/*` ↔ `quiz`）；不一致 → `400 item_type_mismatch`。
+- `type` 取 `article` / `quiz` / `tag` 三者之一（`tag` 为 §0.2 补入）；其余值 → `400 item_type_unsupported`。
+- `type` 必须与 `item_id` 前缀一致（`article/*` ↔ `article`，`quiz/*` ↔ `quiz`，`tag/*` ↔ `tag`）；不一致 → `400 item_type_mismatch`。
 - `title` **必填**：去首尾空白后长度 1..200（rune），且不含控制字符（U+0000–U+001F、U+007F）。不通过 → `400 item_title_invalid`。
 - 请求体**无需携带** `content_hash`；若携带则**一律忽略**，服务端只认自己按 §2.2 算出的值（携带一个错的反而会导致验签失败，即错值无法用来绕过验签）。
 
@@ -103,6 +114,7 @@
 |---|---|
 | `article` | `hex(sha256(body_md 的 UTF-8 字节))` |
 | `quiz` | `hex(sha256(question_json 的 UTF-8 字节))` |
+| `tag`（§0.2 补） | `hex(sha256(按 seq 升序拼接的 "<kind>\t<target_id>\n" 的 UTF-8 字节))` —— 直接沿用 #14 §3.3 的**容器条目口径**，`kind` 取该目标的类型（`course` / `lesson` / `article` / `comment`） |
 
 两条推论：
 
@@ -130,9 +142,12 @@ canonical_json({
 |---|---|---|---|
 | `article/<aid>` | 接受 | `article` | `article` |
 | `quiz/<qid>` | 接受 | `quiz` | `quiz` |
+| `tag/<名称>/<章>/<节>`（§0.2 补） | 接受 | `tag` | `tag` |
+| `category/<slug>` | **拒绝**（只由导入器产出，见 #36 册子） | — | — |
 | `course/...` 任意层级 | **拒绝** | — | — |
 
 - `slug` 规则：`[a-z0-9][a-z0-9-]{0,63}`（小写字母 / 数字 / 连字符，首字符非连字符，总长 ≤ 64）。不合法 → `400 item_id_invalid`。
+- **`tag` 的三段不适用 `slug` 规则**（标签名是人工词条，不是机器 slug）：三段各自 NFC 归一化 + 去首尾空白后必须非空且 ≤ 64 rune，其中 `/`、`\`、`%` 与控制字符做百分号编码；编码规则与其余边界见 #37 册子，本册只登记「三段编码后拼成 `item_id`」。
 - 独立题库的 `items.source` 取 `quiz`（总纲 §6.0 的既有枚举，**不新增值**）；课程内题库沿用 #14 §2.1 的 `lesson`，本册不触碰。
 - 本册只表达「不属于任何课程」的独立条目，**层级前缀仍归 #14**。
 
@@ -186,8 +201,9 @@ canonical_json({
 | code | HTTP | 触发 |
 |---|---|---|
 | `item_id_invalid` | 400 | `item_id` 不符合 §2.4 的形态或 `slug` 规则，或带 `course/` 前缀 |
-| `item_type_unsupported` | 400 | `type` 不是 `article` / `quiz` |
+| `item_type_unsupported` | 400 | `type` 不是 `article` / `quiz` / `tag` |
 | `item_type_mismatch` | 400 | `type` 与 `item_id` 前缀不一致 |
+| `tag_not_governor`（§0.2 新增） | 403 | `type = "tag"` 且 `author_id` 不在本节点名册内（#23 名册 ∪ #33 治者集合） |
 | `item_title_invalid` | 400 | `title` 去首尾空白后为空、超过 200 rune，或含控制字符（U+0000–U+001F、U+007F） |
 | `item_body_too_large` | 413 | `body_md` 或 `question_json` 的 UTF-8 字节超过 `maxSubmitBytes`（文档级常量，32768） |
 | `item_question_invalid` | 400 | `question_json` 不是合法 JSON、`schema_version` 非 1，或 `questions` 缺失/为空/不是数组 |
