@@ -3110,7 +3110,7 @@ git push origin master
 | 6 | 圈子列表形态与治者面板 | `b1d71c3` + `912f76f` | `npx vitest run` 18 文件 / 169 用例全绿（未加测试）；`npx tsc --noEmit` 无输出；`npm run build:h5` `DONE Build complete`（**`.vue` 编译错误只有 build:h5 能抓到**）；动 2 文件（`912f76f` 为补「代签请求码」入口，见更正 38） |
 | 7 | 0.11.0 发布四步 + 节点二进制部署 | `63e8ddc` | 版本落 `0.11.0`/`15`；门禁 `npx vitest run` 18 文件 / 176 用例全绿（169 为 Phase 1 Task 1–6 基线，+7 来自并行 #36 课程分类线的 `course-tree.test.ts`，已随 `6e4cc37` 进 HEAD）、`npx tsc --noEmit` 无输出、`npm run build:h5` `DONE Build complete`、`.value` 扫描无匹配、Go `build`/`vet`/`test ./... -count=1` 全包 ok；节点二进制交叉编译（21625006 字节 / sha256 `90f3c898…b21f`）上传后**远端 `sha256sum /opt/base/based` 与本地逐字一致**、两 service `active`、探活 `/v1/group/{32hex}` → 404 + `{"code":"group_not_found"}`、`/v1/comment` → 200、`/v1/dm/{32hex}` → 200；`docs/README.md` 第 33/35 行与 §5 已回填。**Step 4 于更正 44 定案作废**（0.11.0 不单独发，客户端改动合并到 Phase 2 的发布；见更正 44） |
 | 8 | `govern.v1` 注册 + 投影 + 水位 + 老路径只写投影 | `7071775` | 8 文件（+884/−9）；`go build`/`vet` 无输出；`go test ./... -count=1` 全包 ok；8 文件 `gofmt -l` 无输出；TDD：先红（编译失败，见更正 43 ⑤）→ 实现后 `TestGovernEvent*` 4 条全 PASS；老路径 `handleProposalPost`/`handleVotePost` **一行未改**（补充 14）；**零签名域改动**（更正 41，复用 `verifyEventSig`） |
-| 9 | 客户端写路径事件化 + 0.12.0 发布四步 + 文档回填 | — | 待填 |
+| 9 | 客户端写路径事件化 + `0.13.0` 发布四步 + 文档回填 | `f0a3a30` | 5 文件（+216/−86）：`core/govern.ts`（写路径改走 `POST /v1/event` 的 `govern.v1` 事件，移除旧 `signedPost`/`signRequestHeaders`；新增 `snapshotWatermark`）、`govern.test.ts`（7 → 9 用例）、`governance.vue`、`manifest.json`（`0.13.0`/`17`）、`docs/README.md`；**主代理独立复跑**：`npx vitest run` 18 文件 / 178 用例全绿、`npx tsc --noEmit` 无输出、`npm run build:h5` `DONE Build complete`、Go `build`/`vet`/`test ./... -count=1` 全包 ok（`cmd/based` … `tools/migrate` 9 包 ok）；节点二进制 21679512 字节 / sha256 `2071335046…c7f6`，远端 `sha256sum /opt/base/based` **独立复验逐字一致**、两 service `active`；发布四步全部完成：APK **27418563 字节 / sha256 `5649bc55…e385`**（与节点 `release.json` 的 `apk_sha256` 一致）、`/opt/appdl/base-0.13.0.apk` 就位、落地页 `0.13.0（versionCode 17）`、公网 `GET /v1/release` → `version_name=0.13.0` / `min_version_name=0.8.0` / `issuer=base-node-1`；`docs/README.md` 第 33/35 行已按更正 44 回填。**两处审查发现的未收口缺口见更正 45 ⑦⑧** |
 
 ---
 
@@ -3190,3 +3190,25 @@ git push origin master
 ① **撞号事实**：并行 #36（课程分类）会话已把 `apps/mobile/src/manifest.json` 升到 **`0.12.0` / `16`** 并提交（`ff62779`，仅改版本号 + 册子回填 + `docs/README.md` 一行），与本计划 Task 9 原定的 `0.12.0` / `16` **正面相撞**。按更正 40 的判据「**谁已经在跑谁赢**」（#36 已落版本号且正在发布线上），**Phase 2（Task 9）改指 `0.13.0` / `17`**；#36 的 `0.12.0` / `16` **不动**（本线不改、不回退、不代为发布）。
 ② **Task 7 Step 4 的 `0.11.0` 发布整条作废**。定案：`0.11.0` / `15` 只作为「Phase 1 版本号 + 节点二进制部署」的留痕（这部分已全部完成），**不单独打包发布**——客户端圈子自治改动（双形态 / 治者面板 / 多签 / 信封链）**随 Phase 2 的发布一次性触达用户**。理由有二：(a) Task 7 的云打包受 DCloud 免费队列阻塞（更正 42 ①），CLI 已无法在会话内完成；(b) 当前源码版本号已被 #36 升到 `0.12.0`，从工作区源码**已不可能产出 `0.11.0` 包**（要单独发只能按 `63e8ddc` 检出/复制工作区，成本与风险都不划算）。代价：Phase 1 的客户端改动会与 Phase 2 + #36 的同批上线，**「Phase 1 单独可回滚」这条退路消失**——知情接受（节点侧二进制已先行部署且探活通过，服务端不存在混合态）。
 ③ **落地要求（Task 9 一律以本条为准）**：Task 9 Step 4 版本号写 **`0.13.0` / `17`**；Step 5 的发布四步全按 `0.13.0` 执行（`cli pack` → 上传 `/opt/appdl/base-0.13.0.apk` → 落地页整页重写改指 → `based release -version-name 0.13.0 -min-version-name 0.8.0 -out /opt/base-cache/data/release.json`）；Step 6 的 `docs/README.md` 回填写「Phase 1 + Phase 2 均已执行，随 `0.13.0` 发布」。若云打包再次被队列阻塞，**按更正 42 ① 的口径直接转人工，不在会话内空等**。
+
+**更正 45（Task 9 执行期 + 主代理审查）六处偏差、三处缺口。**
+
+① **计划 Step 1 的 body 键集与节点契约正面冲突（最要紧的一条）**。计划写 `{proposal_id, action, item_id, reason}` + `edit:{title, body_md}`，但 Task 8 已按册子 §4.2 实现的 `parseGovernBody` 要求**严格键集**：提案 `{action:'proposal', proposal_id, target_item_id, verb, content_hash, content_version, revoked_rev, reason?, title?, body_md?}`、投票 `{action:'vote', proposal_id, choice}`，多一个未知键即 `event_param_invalid`(400)。实际做法：客户端按**节点契约**组装（`verb` 承载动作、`item_id` → `target_item_id`、`edit` 块摊平成 `title`/`body_md`），并补计划漏掉的一步——**先取本地 `repo.getItem(itemId).contentHash`**（事件体必须自带 `content_hash`，本地缺则原地拒 `client`，不投递）。
+
+② **`createProposal` 的撞号处理从「人工重试」升级为自动**。计划只写「撞号由节点兜底，人工重试即重取」；实际按 200 体的 `conflict:true` 做 **≤3 次**「重拉列表 → 取最大 id+1 → 重投」，耗尽才报「提案编号冲突，请重试」。另：册子 §6 列的 `govern_event_conflict` 在实现里**不是错误码**，而是 **200 + `{"conflict":true}`**（该行只作「查询口径冲突告知」，节点不拒事件——任务报告曾把这条当作偏差登记，实与 Task 8 实现一致）。
+
+③ **计划 Step 3 模板引用的 `statusText()` 不存在**。页面上只有 `STATUS_LABEL` 常量映射；实际改用 `STATUS_LABEL[p.status]`。同时给水位行补 `v-if="p.contentVersion > 0 || p.revokedRev > 0"`（避免服务端未回水位时展示「水位 v0 / rev0」）。
+
+④ **计划 Step 6 要求的 #9 / #27 册子加注未做**。Step 6 让「若册子 §10 要求的加注尚未做，在本 Task 一并补上」，但本 Task 的范围（Task 9 开头 Files 清单）**只含 4 个文件**、且全程口径是「不改其它册子」⇒ 两处加注**留空**（#9 册子 §4.3 的「不做成员准入读控制」加注、#27 册子 §0 的「票实时复判被快照水位取代」加注）。Step 7 的 `git add` 清单也含这两个册子文件，实际未改、未 add。
+
+⑤ **云打包本次反而成功**。更正 42 ① 记录 Task 7 被 DCloud 免费队列阻塞（第 80 位）；本 Task 重试一次即通过（云端 02:04:17 完成）。故 ① 的「转人工」口径**本次未触发**，发布四步全部在会话内跑完。
+
+⑥ **`.value` 硬检查口径沿用更正 42 ③**。PowerShell 5.1 下参数内双引号会被剥掉造成假阳性；本次用「模式文件 + `git grep -f`」跑，无匹配。
+
+**⑦ 审查发现的缺口一：`govern.v1` 投票事件不触发生效（功能性，未修）**。`ProjectGovernVote` 只往 `govern_votes` 插/更好一行；而 `ProposalStatus` 完全由 `govern_proposals.executed_at` / `voided_at` 派生（`internal/store/govern.go`），事件路径**从不写这两列**⇒ 新客户端（唯一走事件路径的客户端）把票投满门槛后，结论**永远停在 `pending`**，`RetireItem` / `editItemTx` 也不会被执行（受审动作实际未发生）。**这是计划级遗漏，不是 Task 8 执行偏差**：Task 8 Step 5 的投影代码本身只写票；AC 11 的断言未含 `status`（且用例是 `remove`/门槛 3、只投 2 票，恒 `pending`）；AC 12 的用例走的是**老路径** `n.propose` / `n.vote`（老路径由 `addVoteTx` 写 `executed_at`），故 4 条测试全绿也照不出这个洞。修法方向：投影投票后在**同一事务**里复算有效票并对达门槛的提案执行受审动作（复用 `governPreconditionTx` / `governApplyTx`），或把 `status` 改为读时派生 + 落地动作。**待定案**。
+
+**⑧ 审查发现的缺口二：客户端水位 / 冲突字段无服务端来源（未修）**。`proposalDTO`（`internal/httpapi/govern.go`）只回 `proposal_id/action/item_id/proposer_id/reason/title/body_md/status/votes/vote_count/threshold/created_at/executed_at/voided_at`，**不含** `content_version` / `revoked_rev` / `conflict_note` ⇒ `core/govern.ts` 新增的三个字段现值恒为 `0`/`0`/`''`，`governance.vue` 的水位行（因 ③ 的 `v-if`）与冲突提示行**当前都不会显示**——属**前向兼容预留**，不是坏掉的代码，但也没带来任何可见效果。修法方向：DTO 补三字段（`conflict_note` 由节点按 §4.3 收敛结果生成）。**待定案**。
+
+**⑨ 审查发现的冗余三（未修）**：`governance.vue` 新增的水位行把卡片上**已有**的「门槛 N 票」与状态文案又写了一遍（同卡片已有 `#id · STATUS_LABEL · 时间` 与 `voteCount / threshold 票` 两行）。若按 ⑧ 让水位行真正可见，应同时删去重复的门槛 / 状态片段。
+
+**验尸（本机门禁的伪信号，供后续 Task 参考）**：`gofmt -l .` 在**本机 Windows 工作区无区分度**——`git config core.autocrlf=true` 使全部 `.go` 工作区副本为 CRLF，`gofmt -l .` 会把**未改动**的文件（实测 `internal/protocol/sign.go` 等 9 个 protocol 包文件）一并列出，`gofmt -d` 显示差异纯为行尾。故该命令只能对「本次新增且为 LF 的文件」（如 `internal/store/govern_projection.go`）判定；对存量文件的判定须忽略其输出。
