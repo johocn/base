@@ -29,6 +29,7 @@ var (
 
 // PutGroupRoster 写/更新名单投影（册子 §4.2）：首个 roster 事件锁定 creator_id，
 // 后续必须同 actor 且 epoch 严格大于当前值。校验失败**不写任何行**。
+// encrypted 由 httpapi 从 body 解析（缺省 1）；形态在建圈时定死，UPDATE 分支不动 encrypted。
 func (s *Store) PutGroupRoster(r GroupRoster) error {
 	if r.UpdatedAt == 0 {
 		r.UpdatedAt = time.Now().UnixMilli()
@@ -41,7 +42,7 @@ func (s *Store) PutGroupRoster(r GroupRoster) error {
 	case errors.Is(err, sql.ErrNoRows):
 		_, err = s.db.Exec(`INSERT INTO groups(group_id,creator_id,epoch,roster_rev,encrypted,member_ids_json,key_envelopes,event_id,updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?)`,
-			r.GroupID, r.CreatorID, r.Epoch, 1, 1, r.MemberIDsJSON, "[]", r.EventID, r.UpdatedAt)
+			r.GroupID, r.CreatorID, r.Epoch, 1, r.Encrypted, r.MemberIDsJSON, "[]", r.EventID, r.UpdatedAt)
 		return err
 	case err != nil:
 		return err

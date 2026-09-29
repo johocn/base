@@ -22,6 +22,44 @@ const (
 	groupMaxLimit     = 100
 )
 
+// roster v2 的六个子类型（册子 §3.4 / §3.6）。
+const (
+	subRename   = "rename"
+	subRotate   = "rotate"
+	subLeave    = "leave"
+	subJoin     = "join"
+	subRemove   = "remove"
+	subDissolve = "dissolve"
+)
+
+// rosterApprovalDomain 是多签的签名域（册子 §3.4；补充 4）。
+const rosterApprovalDomain = "base/group-roster-v2"
+
+// maxRosterSigs 是单条 roster 事件的签名条数上限（防一条事件塞进超大数组）。
+const maxRosterSigs = 256
+
+// maxRosterEnvelopes 是信封条数上限，与 historialKeys 的 32 epoch 上限同量级。
+const maxRosterEnvelopes = 32
+
+// groupApproval 是 sigs[] 的一项。
+type groupApproval struct {
+	ID  string
+	Sig string
+}
+
+// groupRosterV2 是 v2 名单体（册子 §3.4）。
+type groupRosterV2 struct {
+	GroupID   string
+	Sub       string
+	Epoch     int64
+	RosterRev int64
+	Encrypted int64
+	MemberIDs []string
+	Name      string
+	Sigs      []groupApproval
+	Envelopes string // 存 {"envelopes":[...]} 的 canonical 文本，节点不解释
+}
+
 type groupMsg struct {
 	GroupID    string
 	Epoch      int64
@@ -34,6 +72,8 @@ type groupRoster struct {
 	Epoch     int64
 	MemberIDs []string
 	Name      string
+	// Encrypted 是圈子形态（0 开放 / 1 封闭）；body 缺该键时缺省 1（补充 16）。
+	Encrypted int64
 }
 
 // parseGroupBody 校验 group.v1 的 body（册子 §3.4）。返回的 map 保留**客户端原始键集**——
@@ -64,9 +104,24 @@ func parseGroupBody(raw json.RawMessage) (map[string]any, string, bool) {
 			return nil, "", false
 		}
 	case "roster":
+		// v2 与 v1 的分流判据 = body 里有没有 `sigs` 键（补充 1）：带 ⇒ 多签路径，不带 ⇒ owner 锁路径。
+		if _, isV2 := m["sigs"]; isV2 {
+			for k := range m {
+				switch k {
+				case "group_id", "action", "sub", "epoch", "roster_rev", "member_ids",
+					"name", "encrypted", "sigs", "envelopes":
+				default:
+					return nil, "", false
+				}
+			}
+			if _, ok := parseGroupRosterV2(m); !ok {
+				return nil, "", false
+			}
+			return m, "roster_v2", true
+		}
 		for k := range m {
 			switch k {
-			case "group_id", "action", "epoch", "member_ids", "name":
+			case "group_id", "action", "epoch", "member_ids", "name", "encrypted":
 			default:
 				return nil, "", false
 			}
@@ -107,6 +162,7 @@ func parseGroupMsg(m map[string]any) (groupMsg, bool) {
 }
 
 // parseGroupRoster 解析 roster 分支（册子 §3.4 B）：完整快照，成员 1..maxGroupMembers 个。
+// `encrypted` 可选，缺省 1（补充 16）；形态在建圈时定死。
 func parseGroupRoster(m map[string]any) (groupRoster, bool) {
 	var r groupRoster
 	r.GroupID, _ = m["group_id"].(string)
@@ -137,6 +193,110 @@ func parseGroupRoster(m map[string]any) (groupRoster, bool) {
 			return r, false
 		}
 		r.Name = s
+	}
+	r.Encrypted = 1 // 缺省封闭（老客户端语义不变，AC 13）
+	if v, present := m["encrypted"]; present {
+		enc, ok := jsonInt(v)
+		if !ok || (enc != 0 && enc != 1) {
+			return r, false
+		}
+		r.Encrypted = enc
+	}
+	return r, true
+}
+
+// parseGroupRosterV2 解析 v2 名单体（册子 §3.4）。键集严格；`sub` 必须在六值枚举内；
+// `sigs` 1..maxRosterSigs 条且每条 id 为 32 hex、sig 为 64 hex。
+// `member_ids` 常态 1..maxGroupMembers；只有 `sub=dissolve` 允许空数组（补充 11 把名单清空）。
+func parseGroupRosterV2(m map[string]any) (groupRosterV2, bool) {
+	var r groupRosterV2
+	r.GroupID, _ = m["group_id"].(string)
+	if !isHexN(r.GroupID, 16) {
+		return r, false
+	}
+	r.Sub, _ = m["sub"].(string)
+	switch r.Sub {
+	case subRename, subRotate, subLeave, subJoin, subRemove, subDissolve:
+	default:
+		return r, false
+	}
+	epoch, ok := jsonInt(m["epoch"])
+	if !ok || epoch < 1 {
+		return r, false
+	}
+	r.Epoch = epoch
+	rev, ok := jsonInt(m["roster_rev"])
+	if !ok || rev < 1 {
+		return r, false
+	}
+	r.RosterRev = rev
+	enc, ok := jsonInt(m["encrypted"])
+	if !ok || (enc != 0 && enc != 1) {
+		return r, false
+	}
+	r.Encrypted = enc
+	items, ok := m["member_ids"].([]any)
+	if !ok || len(items) > maxGroupMembers {
+		return r, false
+	}
+	if len(items) == 0 && r.Sub != subDissolve {
+		return r, false
+	}
+	r.MemberIDs = make([]string, 0, len(items))
+	for _, it := range items {
+		s, isStr := it.(string)
+		if !isStr || !isHexN(s, 16) {
+			return r, false
+		}
+		r.MemberIDs = append(r.MemberIDs, s)
+	}
+	if v, present := m["name"]; present {
+		s, isStr := v.(string)
+		if !isStr || len(s) > 64 {
+			return r, false
+		}
+		r.Name = s
+	}
+	sigs, ok := m["sigs"].([]any)
+	if !ok || len(sigs) == 0 || len(sigs) > maxRosterSigs {
+		return r, false
+	}
+	r.Sigs = make([]groupApproval, 0, len(sigs))
+	for _, it := range sigs {
+		obj, isObj := it.(map[string]any)
+		if !isObj {
+			return r, false
+		}
+		id, idOK := obj["id"].(string)
+		sig, sigOK := obj["sig"].(string)
+		if !idOK || !sigOK || !isHexN(id, 16) || !isHexN(sig, 64) || len(obj) != 2 {
+			return r, false
+		}
+		r.Sigs = append(r.Sigs, groupApproval{ID: id, Sig: sig})
+	}
+	if v, present := m["envelopes"]; present {
+		arr, isArr := v.([]any)
+		if !isArr || len(arr) > maxRosterEnvelopes {
+			return r, false
+		}
+		for _, it := range arr {
+			obj, isObj := it.(map[string]any)
+			if !isObj || len(obj) != 2 {
+				return r, false
+			}
+			if _, ok := obj["from_epoch"]; !ok {
+				return r, false
+			}
+			cipher, ok := obj["cipher"].(string)
+			if !ok || len(cipher) == 0 || len(cipher) > maxGroupCipherBytes {
+				return r, false
+			}
+		}
+		raw, err := protocol.Canonicalize(map[string]any{"envelopes": arr})
+		if err != nil {
+			return r, false
+		}
+		r.Envelopes = string(raw) // 读接口 Task 3 就这么解 key_envelopes 列，别改成裸数组
 	}
 	return r, true
 }
@@ -173,6 +333,8 @@ func (s *Server) handleGroupEvent(w http.ResponseWriter, actor string, req event
 		s.putGroupMessage(w, actor, req, rawBody, createdAt)
 	case "roster":
 		s.putGroupRoster(w, actor, req, rawBody, createdAt)
+	case "roster_v2":
+		s.handleGroupRosterV2(w, actor, req, rawBody, createdAt)
 	}
 }
 
@@ -235,7 +397,7 @@ func (s *Server) putGroupRoster(w http.ResponseWriter, actor string, req eventRe
 	}
 	if err := s.st.PutGroupRoster(store.GroupRoster{
 		GroupID: r.GroupID, CreatorID: actor, Epoch: r.Epoch,
-		MemberIDsJSON: string(membersJSON), EventID: req.EventID,
+		Encrypted: r.Encrypted, MemberIDsJSON: string(membersJSON), EventID: req.EventID,
 	}); err != nil {
 		switch {
 		case errors.Is(err, store.ErrGroupOwnerMismatch):
@@ -264,6 +426,222 @@ func (s *Server) putGroupRoster(w http.ResponseWriter, actor string, req eventRe
 		now = ev.ReceivedAt
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"event_id": req.EventID, "received_at": now})
+}
+
+// handleGroupRosterV2 是 v2 名单事件的入口（册子 §3.4）。
+// 次序：解析 → 验内容签名（发起者自己）→ 重建多签载荷 → 逐条验签去重 → 门槛判定 → 写库 → 落事件行。
+func (s *Server) handleGroupRosterV2(w http.ResponseWriter, actor string, req eventReq, raw map[string]any, createdAt int64) {
+	r, _ := parseGroupRosterV2(raw)
+	if r.Sub == subJoin {
+		// 封闭圈不接受自加入（补充 9）：先看本地形态，再决定放行或拒绝。
+		cur, found, err := s.st.GetGroup(r.GroupID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if (found && cur.Encrypted == 1) || (!found && r.Encrypted == 1) {
+			s.writeAuthErr(w, http.StatusForbidden, "group_invite_required")
+			return
+		}
+	}
+	payload, err := rosterApprovalPayload(r, req.EventID, createdAt)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "event_param_invalid")
+		return
+	}
+	signers, ok := s.verifyRosterApprovals(w, r.Sigs, payload)
+	if !ok {
+		return
+	}
+	cur, found, err := s.st.GetGroup(r.GroupID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if found && r.Epoch <= cur.Epoch {
+		s.writeAuthErr(w, http.StatusConflict, "group_roster_epoch_stale")
+		return
+	}
+	creatorID := actor
+	var memberIDs []string
+	var rosterRev int64
+	if found {
+		if err := json.Unmarshal([]byte(cur.MemberIDsJSON), &memberIDs); err != nil {
+			memberIDs = []string{}
+		}
+		creatorID = cur.CreatorID
+		rosterRev = cur.RosterRev
+	}
+	events, err := s.st.ListGroupMsgEvents(r.GroupID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	seats := store.DeriveSeats(memberIDs, creatorID, rosterRev, r.Epoch, events)
+	if code := rosterQuorumError(actor, r, signers, ciSet(memberIDs), govSet(seats.Governors), seats); code != "" {
+		s.writeAuthErr(w, http.StatusForbidden, code)
+		return
+	}
+	membersJSON, err := json.Marshal(r.MemberIDs)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.st.PutGroupRosterV2(store.GroupRoster{
+		GroupID: r.GroupID, CreatorID: creatorID, Epoch: r.Epoch, RosterRev: r.RosterRev,
+		Encrypted: r.Encrypted, MemberIDsJSON: string(membersJSON),
+		KeyEnvelopesJSON: r.Envelopes, EventID: req.EventID,
+	}); err != nil {
+		switch {
+		case errors.Is(err, store.ErrGroupEpochStale):
+			s.writeAuthErr(w, http.StatusConflict, "group_roster_epoch_stale")
+		case errors.Is(err, store.ErrGroupRosterRevStale):
+			s.writeAuthErr(w, http.StatusConflict, "group_roster_epoch_stale")
+		case errors.Is(err, store.ErrGroupFormLocked):
+			s.writeAuthErr(w, http.StatusBadRequest, "event_param_invalid")
+		default:
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	bodyJSON, err := protocol.Canonicalize(raw)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	now := time.Now().UnixMilli()
+	if err := s.st.PutEvent(store.Event{
+		EventID: req.EventID, ID: actor, Type: req.Type, BodyJSON: string(bodyJSON),
+		CreatedAt: createdAt, ReceivedAt: now, TargetID: "group/" + r.GroupID,
+	}); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if ev, ok, err := s.st.GetEventByID(req.EventID); err == nil && ok {
+		now = ev.ReceivedAt
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"event_id": req.EventID, "received_at": now})
+}
+
+// rosterApprovalPayload 重建多签待签载荷（补充 4）：**不信客户端给的字节**，由节点自己拼。
+func rosterApprovalPayload(r groupRosterV2, eventID string, createdAt int64) ([]byte, error) {
+	f := map[string]any{
+		"domain":     rosterApprovalDomain,
+		"event_id":   eventID,
+		"group_id":   r.GroupID,
+		"action":     "roster",
+		"sub":        r.Sub,
+		"epoch":      r.Epoch,
+		"roster_rev": r.RosterRev,
+		"member_ids": r.MemberIDs,
+		"encrypted":  r.Encrypted,
+		"created_at": createdAt,
+	}
+	if r.Name != "" {
+		f["name"] = r.Name
+	}
+	return protocol.Canonicalize(f)
+}
+
+// verifyRosterApprovals 逐条验签并按 id 去重（保留首条）。任一条坏即整条拒收（补充 5）。
+func (s *Server) verifyRosterApprovals(w http.ResponseWriter, sigs []groupApproval, payload []byte) (map[string]bool, bool) {
+	out := make(map[string]bool, len(sigs))
+	for _, a := range sigs {
+		if out[a.ID] {
+			continue
+		}
+		it, found, err := s.st.LookupIdentity(a.ID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return nil, false
+		}
+		if !found {
+			s.writeAuthErr(w, http.StatusForbidden, "identity_unregistered")
+			return nil, false
+		}
+		valid, err := protocol.Verify(it.PubKey, payload, a.Sig)
+		if err != nil || !valid {
+			s.writeAuthErr(w, http.StatusForbidden, "event_sig_invalid")
+			return nil, false
+		}
+		out[a.ID] = true
+	}
+	return out, true
+}
+
+// ciSet / govSet 把名单切片摊成集合。
+func ciSet(ids []string) map[string]bool {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+func govSet(ids []string) map[string]bool { return ciSet(ids) }
+
+// countIn 数签名者里落在集合内的个数。
+func countIn(signers, set map[string]bool) int {
+	n := 0
+	for id := range signers {
+		if set[id] {
+			n++
+		}
+	}
+	return n
+}
+
+// subsetOf 判 signers 是否全部属于 set。
+func subsetOf(signers, set map[string]bool) bool {
+	for id := range signers {
+		if !set[id] {
+			return false
+		}
+	}
+	return true
+}
+
+// rosterQuorumError 按 sub 判定门槛，返回要回的错误码；"" 表示通过（册子 §3.4）。
+// actor 是本次事件的发起者（join 档要求签名者集合恒等于 {actor}，补充 9）。
+func rosterQuorumError(actor string, r groupRosterV2, signers, members, governors map[string]bool, seats store.SeatSnapshot) string {
+	k := seats.SeatCount
+	switch r.Sub {
+	case subJoin:
+		// 开放圈自加入：签名者集合恒等于 {自己}（补充 9）。
+		if len(signers) != 1 || !signers[actor] || r.Encrypted != 0 {
+			return "group_roster_quorum_missing"
+		}
+		return ""
+	case subRename, subRotate, subLeave:
+		// 低风险（直权）：任一治者 1 签；签名者必须全是治者。
+		if !subsetOf(signers, governors) || countIn(signers, governors) < 1 {
+			return "group_roster_quorum_missing"
+		}
+		return ""
+	case subRemove:
+		if !seats.Decidable {
+			return "group_roster_quorum_missing" // 不可判定 ⇒ 拒写重大动作（补充 6）
+		}
+		if !subsetOf(signers, governors) || countIn(signers, governors) < store.RemoveQuorum(k) {
+			return "group_roster_quorum_missing"
+		}
+		return ""
+	case subDissolve:
+		if !seats.Decidable {
+			return "group_roster_quorum_missing"
+		}
+		if !subsetOf(signers, members) {
+			return "group_roster_quorum_missing"
+		}
+		if countIn(signers, governors) < store.DissolveProposerQuorum(k) {
+			return "group_proposal_proposer_missing" // 发起段不足（册子 §6）
+		}
+		// 投票段用**变更前**的名单人数：解散事件本身把名单清空（补充 11）。
+		if countIn(signers, members) < store.DissolveVoteQuorum(len(members)) {
+			return "group_roster_quorum_missing"
+		}
+		return ""
+	}
+	return "group_roster_quorum_missing"
 }
 
 type groupDTO struct {

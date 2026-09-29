@@ -60,6 +60,13 @@ var authErrText = map[string]string{
 	"voter_not_governor":          "投票人不在本节点名册内",
 	"already_voted":               "已对本提案投过票",
 	"govern_rate_limited":         "治理操作过于频繁",
+
+	"group_read_denied":               "圈子不存在或不可见",
+	"group_invite_required":           "该圈子仅接受邀请码加入",
+	"group_roster_quorum_missing":     "签名数不足门槛",
+	"group_proposal_proposer_missing": "解散圈子需治理者发起",
+	"group_roster_epoch_stale":        "密钥已轮换，请先同步圈内状态",
+	"govern_event_conflict":           "同一提案存在并发冲突，已按确定性规则收敛",
 }
 
 // writeAuthErr 按契约 3.3 输出 {"error": "<人读消息>", "code": "<机器码>"}。
