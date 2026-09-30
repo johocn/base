@@ -25,6 +25,10 @@
       "style": { "navigationBarTitleText": "编辑课程" }
     },
     {
+      "path": "pages/lesson/edit",
+      "style": { "navigationBarTitleText": "编辑课时" }
+    },
+    {
       "path": "pages/article/article",
       "style": { "navigationBarTitleText": "文章" }
     },
