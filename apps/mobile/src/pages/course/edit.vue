@@ -57,7 +57,10 @@
     <view class="section">
       <view class="shead">
         <text class="label">课时清单</text>
-        <text class="add" @click="addLesson">+ 加一课</text>
+        <view class="acts">
+          <text class="act" @click="openPicker">+ 选已有课时</text>
+          <text class="add" @click="addLesson">+ 加一课</text>
+        </view>
       </view>
       <text v-if="form.children.length === 0" class="hint">还没有课时；保存后本课程为空课时列表</text>
       <view v-for="(c, i) in form.children" :key="c.itemId" class="row">
@@ -68,6 +71,16 @@
         <text class="act" @click="move(i, -1)">上移</text>
         <text class="act" @click="move(i, 1)">下移</text>
         <text class="del" @click="removeChild(i)">删除</text>
+      </view>
+      <view v-if="pickOpen" class="card">
+        <text class="label">选择课时</text>
+        <input v-model="pickKeyword" class="input" placeholder="搜索标题或 item_id" @input="refresh" />
+        <text v-if="candidates.length === 0" class="hint">本机还没有可选的条目，先同步内容包</text>
+        <view v-for="c in candidates" :key="c.itemId" class="row" @click="chooseLesson(c)">
+          <text class="val">{{ c.title }}</text>
+          <text class="hint">{{ c.kind }} · {{ c.itemId }}</text>
+        </view>
+        <text class="add" @click="pickOpen = false">收起</text>
       </view>
       <text class="hint">顺序即「第 N 讲」；空课时也会占位，不要靠删行来隐藏</text>
     </view>
@@ -86,8 +99,10 @@ import { computed, ref } from 'vue';
 
 import { DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO } from '../../core/attrs';
 import { uploadBlob } from '../../core/blob';
+import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
 import { loadContainerForm, saveContainer, startNewCourse, type ChildRow, type ContainerForm } from '../../core/course-edit';
 import { recordEditFailure } from '../../core/editlog';
+import type { LocalRepo } from '../../core/repo';
 import { UNKNOWN_FLAGS, canPickFile, pickBlockedReason, type CapabilityFlags } from '../../core/selfcheck';
 import { newLessonID } from '../../core/submit';
 import { bootstrap, type AppContext } from '../../platform';
@@ -100,6 +115,13 @@ const lessonTitles = ref<Record<string, string>>({});
 const busy = ref(false);
 const error = ref('');
 const notice = ref('');
+
+/** 课时选择面板：关键词 + 候选列表（kind 固定 lesson，无需 kind 过滤） */
+const pickOpen = ref(false);
+const pickKeyword = ref('');
+const candidates = ref<CarrierCandidate[]>([]);
+/** 本机仓库（候选查询用），bootstrap 后才有值 */
+let pickRepo: LocalRepo | null = null;
 
 /** 能力标志：启动时只有 cryptoOk / pickOk 有值，其余 unknown（unknown 不降级，照常尝试） */
 const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
@@ -114,6 +136,7 @@ onLoad(async (query) => {
   try {
     ctx = await bootstrap();
     caps.value = ctx.capabilities;
+    pickRepo = ctx.repo;
     if (courseId !== '') {
       isEdit.value = true;
       form.value = await loadContainerForm(ctx.repo, courseId, 'course');
@@ -216,6 +239,28 @@ function openLesson(c: ChildRow) {
   });
 }
 
+/** 按关键词刷新课时候选（kind 固定 lesson）；repo 未就绪时置空（不报错）。 */
+async function refresh() {
+  if (!pickRepo) {
+    candidates.value = [];
+    return;
+  }
+  candidates.value = await listCarrierCandidates(pickRepo, ['lesson'], pickKeyword.value);
+}
+
+async function openPicker() {
+  pickOpen.value = true;
+  await refresh();
+}
+
+/** 点选候选：同 item_id 已在清单里则只关面板（去重），否则带入后关面板（不跳转，用户可再点行内进入）。 */
+function chooseLesson(c: CarrierCandidate) {
+  if (!form.value.children.some((x) => x.itemId === c.itemId)) {
+    form.value.children.push({ kind: 'lesson', itemId: c.itemId });
+  }
+  pickOpen.value = false;
+}
+
 function lessonTitle(itemId: string): string {
   return lessonTitles.value[itemId] ?? '（新课时，未保存）';
 }
@@ -272,6 +317,7 @@ async function submit() {
 .field { margin-bottom: 14px; }
 .section { margin-top: 18px; padding-top: 12px; border-top: 1px solid #eeeeee; }
 .shead { display: flex; justify-content: space-between; align-items: center; }
+.acts { display: flex; align-items: center; }
 .label { display: block; font-size: 14px; color: #666666; margin-bottom: 6px; }
 .hint { display: block; font-size: 12px; color: #999999; margin-top: 4px; }
 .sub { display: block; font-size: 11px; color: #aaaaaa; }
@@ -280,6 +326,7 @@ async function submit() {
 .chips { display: flex; flex-wrap: wrap; }
 .chip { padding: 4px 14px; border: 1px solid #dddddd; border-radius: 14px; margin: 0 10px 6px 0; color: #666666; font-size: 13px; }
 .chip-on { border-color: #2b6cb0; color: #2b6cb0; }
+.card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 12px; }
 .row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f5f5f5; }
 .row-main { flex: 1; }
 .val { flex: 1; font-size: 14px; color: #333333; }
