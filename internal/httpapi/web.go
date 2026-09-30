@@ -5,9 +5,12 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/johocn/base/internal/markdown"
+	"github.com/johocn/base/internal/protocol"
 	"github.com/johocn/base/internal/store"
 	"github.com/johocn/base/web"
 )
@@ -82,6 +85,8 @@ type pageArticle struct {
 	Tags        []string
 	Body        template.HTML
 	CoverBlobID string
+	Badges      []string
+	TitleColor  string
 }
 
 // handleIndex 渲染公开内容目录，只列 active + public 的 article 条目。
@@ -127,6 +132,12 @@ func (s *Server) handleArticlePage(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "文章正文不存在")
 		return
 	}
+	// 图章与标题色（册子 #53 §2.5）：读失败不阻塞渲染，按空处理。
+	segs, err := s.st.ListSegments(itemID)
+	if err != nil {
+		segs = nil
+	}
+	badges, titleColor := articleMarks(segs)
 	data := pageData{Title: art.Title, Issuer: s.opt.Issuer, PairingCode: s.opt.PairingCode, Fingerprint: s.opt.FingerprintHex, Article: &pageArticle{
 		ItemID:      art.ItemID,
 		Title:       art.Title,
@@ -135,8 +146,42 @@ func (s *Server) handleArticlePage(w http.ResponseWriter, r *http.Request) {
 		Tags:        decodeTags(art.TagsJSON),
 		Body:        markdown.Render(art.BodyMD),
 		CoverBlobID: s.coverBlobID(itemID),
+		Badges:      badges,
+		TitleColor:  titleColor,
 	}}
 	s.renderPage(w, articleTmpl, data)
+}
+
+// articleMarks 从属性行派生门户展示用的图章与标题色：
+// 取值域封闭（图章 7 词、标题色 6 名），域外值静默丢弃；色名只产固定类名，故不进消毒管线（册子 #53 §2.4）。
+// 图章按码位升序（sort.Strings）返回，与写入端的规范序一致，避免门户与 App 顺序不一致。
+func articleMarks(segs []store.Segment) ([]string, string) {
+	badgeWords := map[string]bool{"活动": true, "悬赏": true, "推荐": true, "热门": true, "精华": true, "置顶": true, "辩论": true}
+	titleColors := map[string]bool{"red": true, "orange": true, "green": true, "blue": true, "purple": true, "gray": true}
+	var badges []string
+	titleColor := ""
+	seen := map[string]bool{}
+	for _, s := range segs {
+		if s.Seq >= 0 {
+			continue
+		}
+		switch s.Kind {
+		case protocol.AttrKeyBadge:
+			for _, w := range strings.Split(s.Text, ",") {
+				w = strings.TrimSpace(w)
+				if badgeWords[w] && !seen[w] {
+					seen[w] = true
+					badges = append(badges, w)
+				}
+			}
+		case protocol.AttrKeyTitleColor:
+			if titleColors[s.Text] {
+				titleColor = s.Text
+			}
+		}
+	}
+	sort.Strings(badges)
+	return badges, titleColor
 }
 
 // coverBlobID 按约定 <item_id>/cover 找文章封面块；缺失返回空串，不阻塞渲染。

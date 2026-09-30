@@ -28,31 +28,46 @@
         </text>
         <block v-if="!collapsed[g.slug]">
           <view v-for="it in g.courses" :key="it.itemId" class="item" @click="openCourse(it.itemId)">
-            <text class="item-title">{{ it.title }}</text>
+            <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
+            <view v-if="badgesOf(it.itemId).length > 0" class="chips">
+              <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
+            </view>
             <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
           </view>
         </block>
       </block>
       <text v-if="unclassified.length > 0" class="group">未归类课程</text>
       <view v-for="it in unclassified" :key="it.itemId" class="item" @click="openCourse(it.itemId)">
-        <text class="item-title">{{ it.title }}</text>
+        <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
+        <view v-if="badgesOf(it.itemId).length > 0" class="chips">
+          <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
+        </view>
         <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
       </view>
       <text v-if="standalone.length > 0" class="group">独立内容</text>
       <view v-for="it in standalone" :key="it.itemId" class="item" @click="openStandalone(it)">
-        <text class="item-title">{{ it.title }}</text>
+        <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
+        <view v-if="badgesOf(it.itemId).length > 0" class="chips">
+          <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
+        </view>
         <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
       </view>
     </block>
     <block v-else>
       <text v-if="courses.length > 0" class="group">课程</text>
       <view v-for="it in courses" :key="it.itemId" class="item" @click="openCourse(it.itemId)">
-        <text class="item-title">{{ it.title }}</text>
+        <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
+        <view v-if="badgesOf(it.itemId).length > 0" class="chips">
+          <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
+        </view>
         <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
       </view>
       <text v-if="standalone.length > 0" class="group">未归类</text>
       <view v-for="it in standalone" :key="it.itemId" class="item" @click="openStandalone(it)">
-        <text class="item-title">{{ it.title }}</text>
+        <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
+        <view v-if="badgesOf(it.itemId).length > 0" class="chips">
+          <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
+        </view>
         <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
       </view>
     </block>
@@ -65,6 +80,7 @@ import { onShow } from '@dcloudio/uni-app';
 
 import { syncOnce } from '../../core/sync';
 import { groupCoursesByCategory, splitCourses } from '../../core/course-tree';
+import { attrsOf } from '../../core/container-view';
 import { buildMyCreatedView, type MyCreatedRow, type MyCreatedType } from '../../core/my-created';
 import type { ItemRow, SegmentRow } from '../../core/types';
 import { bootstrap } from '../../platform';
@@ -82,6 +98,8 @@ const unclassified = ref<ItemRow[]>([]);
 const standalone = ref<ItemRow[]>([]);
 const collapsed = ref<Record<string, boolean>>({});
 const myCreated = ref<MyCreatedRow[]>([]);
+// 图章与标题色（册子 #53 §2.5）：只读派生映射，仅供展示；无属性行则空数组 / 空串
+const marksByItemId = ref(new Map<string, { badge: string[]; titleColor: string }>());
 const total = computed(
   () => courses.value.length + groups.value.reduce((n, g) => n + g.courses.length, 0) + standalone.value.length,
 );
@@ -111,6 +129,14 @@ async function load() {
     groups.value = built;
     unclassified.value = orphan;
 
+    // 图章与标题色（册子 #53 §2.5）：只读派生，仅供展示；无属性行则空数组 / 空串
+    const marks = new Map<string, { badge: string[]; titleColor: string }>();
+    for (const [id, segs] of segsByItemId) {
+      const a = attrsOf(segs);
+      marks.set(id, { badge: a.badge, titleColor: a.titleColor });
+    }
+    marksByItemId.value = marks;
+
     // 独立内容 = 独立文章 article/<aid> ∪ 独立题库 quiz/<qid>（册子 §5.2）
     standalone.value = [
       ...tree.ungrouped,
@@ -126,6 +152,14 @@ async function load() {
   } catch (e) {
     error.value = (e as Error).message;
   }
+}
+
+function badgesOf(itemId: string): string[] {
+  return marksByItemId.value.get(itemId)?.badge ?? [];
+}
+
+function titleColorOf(itemId: string): string {
+  return marksByItemId.value.get(itemId)?.titleColor ?? '';
 }
 
 function toggle(itemId: string) {
@@ -233,4 +267,12 @@ onShow(() => {
 .reason { display: block; color: #c53030; font-size: 13px; }
 .group { display: block; margin: 16px 0 4px; color: #888888; font-size: 13px; }
 .group-cat { color: #2b6cb0; }
+.chips { display: flex; flex-wrap: wrap; margin-top: 4px; }
+.badge { display: inline-block; font-size: 12px; color: #666666; border: 1px solid #dddddd; border-radius: 10px; padding: 0 8px; margin-right: 6px; }
+.c-red { color: #C53030; }
+.c-orange { color: #B7791F; }
+.c-green { color: #2F855A; }
+.c-blue { color: #2B6CB0; }
+.c-purple { color: #6B46C1; }
+.c-gray { color: #718096; }
 </style>

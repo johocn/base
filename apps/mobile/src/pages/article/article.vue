@@ -4,7 +4,10 @@
     <text v-if="error" class="error">{{ error }}</text>
     <block v-else>
       <image v-if="coverPath" :src="coverPath" mode="widthFix" class="cover" />
-      <text class="title">{{ article?.title }}</text>
+      <text class="title" :class="titleColor ? 'c-' + titleColor : ''">{{ article?.title }}</text>
+      <view v-if="badge.length > 0" class="chips">
+        <text v-for="b in badge" :key="b" class="badge">{{ b }}</text>
+      </view>
       <text class="meta">{{ article?.publishedAt }}</text>
       <view class="tags">
         <text v-for="t in articleTags" :key="t.tagId" class="tag" @click="openTag(t.tagId)">{{ tagLabel(t.tagId) }}</text>
@@ -48,6 +51,7 @@ import {
   type ReaderTheme,
 } from '../../core/state';
 import { childrenOf, lessonOfCarrier } from '../../core/course-tree';
+import { attrsOf } from '../../core/container-view';
 import { setPendingTarget } from '../../core/comment';
 import { canGovern, tagsOf, untaggedTargets } from '../../core/tags';
 import { renderMarkdown } from '../../core/markdown';
@@ -73,6 +77,9 @@ const untagged = ref<Set<string>>(new Set());
 const governor = ref(false);
 const pendingTag = computed(() => governor.value && untagged.value.has(itemId.value));
 const itemId = ref('');
+// 图章与标题色（册子 #53 §2.5）：文章不产属性行，无载体行时自然为空（设计册登记的事实）
+const badge = ref<string[]>([]);
+const titleColor = ref('');
 /** 可滚动高度 = 正文实际高度 − 视口高度；为 0 表示还没量到，此时不显示进度条 */
 const scrollable = ref(0);
 const scrolled = ref(0);
@@ -120,6 +127,9 @@ onLoad(async (query) => {
     article.value = row;
     itemId.value = row.itemId;
     bodyHtml.value = renderMarkdown(row.bodyMd);
+    const a = attrsOf(await repo.listSegments(raw));
+    badge.value = a.badge;
+    titleColor.value = a.titleColor;
 
     const path = await repo.findBlobPathByItem(`${row.itemId}/cover`);
     coverPath.value = path ? (path.startsWith('file://') ? path : `file://${path}`) : '';
@@ -270,6 +280,8 @@ function decodedId(raw: string): string {
 .tag { padding: 2px 8px; margin: 0 8px 6px 0; background: #ebf8ff; color: #2b6cb0; border-radius: 10px; font-size: 12px; }
 .tag-pending { padding: 2px 8px; margin: 0 8px 6px 0; background: #fffaf0; color: #b7791f; border-radius: 10px; font-size: 12px; }
 .tag-note { margin: 0 0 6px; color: #888888; font-size: 12px; }
+.chips { display: flex; flex-wrap: wrap; margin-top: 4px; }
+.badge { display: inline-block; font-size: 12px; color: #666666; border: 1px solid #dddddd; border-radius: 10px; padding: 0 8px; margin-right: 6px; }
 
 /* 护眼：米黄纸底 + 暖褐字，介于浅色与深色之间 */
 .wrap.sepia { background: #f4ecd8; color: #4a4034; }

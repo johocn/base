@@ -3,6 +3,7 @@ package httpapi
 import (
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -246,5 +247,62 @@ func TestGovernanceBoardEmptyState(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("空态缺少 %q\n%s", want, body)
 		}
+	}
+}
+
+// TestArticleMarks 覆盖册子 #53 §2.4 的服务端白名单派生：域外值静默丢弃，
+// 图章按码位升序（与写入端规范序一致），子项行 / 简介行不参与。
+func TestArticleMarks(t *testing.T) {
+	cases := []struct {
+		name       string
+		segs       []store.Segment
+		wantBadges []string
+		wantColor  string
+	}{
+		{
+			name: "域内值按码位升序",
+			segs: []store.Segment{
+				{Seq: -1, Kind: protocol.AttrKeyBadge, Text: "活动,悬赏"},
+				{Seq: -2, Kind: protocol.AttrKeyTitleColor, Text: "red"},
+			},
+			wantBadges: []string{"悬赏", "活动"},
+			wantColor:  "red",
+		},
+		{
+			name: "域外值全部丢弃",
+			segs: []store.Segment{
+				{Seq: -1, Kind: protocol.AttrKeyBadge, Text: "自定义词"},
+				{Seq: -2, Kind: protocol.AttrKeyTitleColor, Text: "c-mark"},
+				{Seq: -3, Kind: protocol.AttrKeyTitleColor, Text: "yellow"},
+			},
+			wantBadges: nil,
+			wantColor:  "",
+		},
+		{
+			name:       "空 segments",
+			segs:       nil,
+			wantBadges: nil,
+			wantColor:  "",
+		},
+		{
+			name: "子项行与简介行不参与",
+			segs: []store.Segment{
+				{Seq: 0, Kind: "digest", Text: "活动"},
+				{Seq: 1, Kind: protocol.AttrKeyBadge, Text: "悬赏"},
+			},
+			wantBadges: nil,
+			wantColor:  "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			badges, color := articleMarks(tc.segs)
+			if !reflect.DeepEqual(badges, tc.wantBadges) {
+				t.Fatalf("badges = %v, want %v", badges, tc.wantBadges)
+			}
+			if color != tc.wantColor {
+				t.Fatalf("titleColor = %q, want %q", color, tc.wantColor)
+			}
+		})
 	}
 }

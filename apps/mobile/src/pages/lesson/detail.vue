@@ -5,7 +5,10 @@
       <text v-if="!loaded" class="hint">加载中…</text>
       <block v-else>
         <image v-if="coverPath" :src="coverPath" mode="widthFix" class="cover" />
-        <text class="title">{{ lessonLabel }}</text>
+        <text class="title" :class="titleColor ? 'c-' + titleColor : ''">{{ lessonLabel }}</text>
+        <view v-if="badge.length > 0" class="chips">
+          <text v-for="b in badge" :key="b" class="badge">{{ b }}</text>
+        </view>
         <text class="meta">{{ metaLine }}</text>
         <view class="tags">
           <text v-for="t in selfTags" :key="t.tagId" class="tag" @click="openTag(t.tagId)">{{ tagLabel(t.tagId) }}</text>
@@ -72,6 +75,9 @@ const governor = ref(false);
 const loaded = ref(false);
 const canEdit = ref(false);
 const error = ref('');
+// 图章与标题色（册子 #53 §2.5）：仅正常（包表）分支派生；台账分支保持 F7 裁剪口径，不渲染
+const badge = ref<string[]>([]);
+const titleColor = ref('');
 
 onLoad(async (query) => {
   const q = (query as Record<string, string> | undefined) ?? {};
@@ -109,6 +115,8 @@ onLoad(async (query) => {
     const row = await repo.getItem(lid);
     const segs = await repo.listSegments(lid);
     const attrs = attrsOf(segs);
+    badge.value = attrs.badge;
+    titleColor.value = attrs.titleColor;
 
     // 课程 id：优先取传参；没有就从 `course/<cid>/lesson/<lid>` 剥出来（保证课时页条目自洽）
     const mid = lid.indexOf('/lesson/');
@@ -261,6 +269,8 @@ async function openAttachment(a: AttachmentVM) {
 .tag { padding: 2px 8px; margin: 0 8px 6px 0; background: #ebf8ff; color: #2b6cb0; border-radius: 10px; font-size: 12px; }
 .tag-pending { padding: 2px 8px; margin: 0 8px 6px 0; background: #fffaf0; color: #b7791f; border-radius: 10px; font-size: 12px; }
 .tag-note { margin: 0 0 6px; color: #888888; font-size: 12px; }
+.chips { display: flex; flex-wrap: wrap; margin-top: 4px; }
+.badge { display: inline-block; font-size: 12px; color: #666666; border: 1px solid #dddddd; border-radius: 10px; padding: 0 8px; margin-right: 6px; }
 
 /* 护眼：米黄纸底 + 暖褐字，介于浅色与深色之间 */
 .wrap.sepia { background: #f4ecd8; color: #4a4034; }
