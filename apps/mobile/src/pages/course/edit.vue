@@ -177,8 +177,8 @@ async function pickCover() {
     const up = await uploadOne();
     if (up) form.value.cover = up.blobId;
   } catch (e) {
+    // 日志已由 uploadOne 按 pick / upload 阶段落盘，此处只出人读文案（避免同一失败写两行）
     error.value = (e as Error).message;
-    await logFail('pick', e);
   }
 }
 
@@ -193,8 +193,8 @@ async function addAttachment() {
     // 内容寻址：同 blob 只留一行（重复上传同一文件不该出现两条附件行）
     if (up && !form.value.attachments.some((a) => a.blobId === up.blobId)) form.value.attachments.push(up);
   } catch (e) {
+    // 同 pickCover：日志只在 uploadOne 一处落，这里只出文案
     error.value = (e as Error).message;
-    await logFail('pick', e);
   }
 }
 
