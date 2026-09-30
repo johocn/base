@@ -117,6 +117,8 @@ func (s *Server) publicMux() *http.ServeMux {
 	mux.Handle("POST /v1/event", s.requireAuth(s.handleEventPost))
 	mux.Handle("POST /v1/profile", s.requireAuth(s.handleProfilePut))
 	mux.Handle("POST /v1/submit", s.requireAuth(s.handleSubmitPost))
+	// 块上传（本册 §2.4）：multipart 单块，体上限 = 8 MiB + 4 KiB（multipart 边界开销）。
+	mux.Handle("POST /v1/blob", s.requireAuthLimit(maxBlobBytes+(4<<10))(s.handleBlobPost))
 
 	// 审批治理（册子 §3）：提案与投票走签名写路径，列表是匿名公开读。
 	mux.Handle("POST /v1/proposal", s.requireAuth(s.handleProposalPost))

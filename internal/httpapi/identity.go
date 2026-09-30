@@ -17,6 +17,8 @@ import (
 )
 
 // maxJSONBody 限制请求体：身份与托管请求都很小，超过即视为异常。
+// 这是**签名/JSON 路由的默认体上限**（64 KiB），由 requireAuth / optionalAuth 与 decodeJSON 使用；
+// 需要更大体的写路径（如 POST /v1/blob 的块上传）改用 requireAuthLimit 显式指定自己的上限。
 const maxJSONBody = 64 << 10
 
 type ctxKey int

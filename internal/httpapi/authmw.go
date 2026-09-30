@@ -26,7 +26,9 @@ var authErrText = map[string]string{
 	"auth_nonce_replay":        "nonce 在 10 分钟内已使用过",
 	"auth_bad_signature":       "签名验证失败",
 	"auth_body_read_failed":    "请求体读取失败",
-	"auth_body_too_large":      "请求体超过 64 KiB",
+	"auth_body_too_large":      "请求体超过本接口上限",
+	"blob_too_large":           "上传块超过 8 MiB",
+	"bad_multipart":            "请求必须是 multipart/form-data，且含字段 file",
 	"auth_sign_meta_invalid":   "待签字节构造失败",
 	"identity_id_invalid":      "身份 id 必须是 32 位 hex",
 	"identity_alg_unsupported": "算法不受支持",
@@ -90,15 +92,22 @@ func (s *Server) PruneNonces() (int64, error) {
 	return s.st.PruneNonces(time.Now().UnixMilli() - nonceWindowMs)
 }
 
-// requireAuth 包装需要签名头的处理器：严格按契约 3.2 的 1→7 顺序，先验后读体。
+// requireAuth 包装需要签名头的处理器：体上限取默认的 maxJSONBody（64 KiB）。
 func (s *Server) requireAuth(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := s.authenticate(w, r)
-		if !ok {
-			return
-		}
-		next(w, withIdentity(r, id))
-	})
+	return s.requireAuthLimit(maxJSONBody)(next)
+}
+
+// requireAuthLimit 同 requireAuth，但显式指定体上限（POST /v1/blob 需要 8 MiB 量级的体）。
+func (s *Server) requireAuthLimit(maxBody int64) func(http.HandlerFunc) http.Handler {
+	return func(next http.HandlerFunc) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id, ok := s.authenticate(w, r, maxBody)
+			if !ok {
+				return
+			}
+			next(w, withIdentity(r, id))
+		})
+	}
 }
 
 // optionalAuth 供按形态分支的读接口用：5 个签名头**全缺**即按匿名放行；
@@ -109,7 +118,7 @@ func (s *Server) optionalAuth(next http.HandlerFunc) http.Handler {
 			next(w, r)
 			return
 		}
-		id, ok := s.authenticate(w, r)
+		id, ok := s.authenticate(w, r, maxJSONBody)
 		if !ok {
 			return
 		}
@@ -127,10 +136,11 @@ func hasAnyAuthHeader(r *http.Request) bool {
 	return false
 }
 
-// authenticate 执行契约 3.2 的 1..7 步；返回已验签身份 id 与是否放行（失败时响应已写好）。
+// authenticate 执行契约 3.2 的 1..7 步；maxBody 是本请求的体上限（超出回 413 auth_body_too_large）。
+// 返回已验签身份 id 与是否放行（失败时响应已写好）。
 // 结果具名（且**不用 ok**，避免与第 3 步的局部 ok 相撞），使 1..6 步的裸 return 原样保留：
 // 裸 return 交回零值，即「不放行」。
-func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (actorID string, authed bool) {
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, maxBody int64) (actorID string, authed bool) {
 	// 1. 缺任一头
 	id := r.Header.Get("X-Base-Id")
 	alg := r.Header.Get("X-Base-Alg")
@@ -191,13 +201,13 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (actorID s
 		return
 	}
 	// 6. 读体 → 算 body_sha256 → 组待签字节 → 验签
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxJSONBody+1))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	if err != nil {
 		s.writeAuthErr(w, http.StatusBadRequest, "auth_body_read_failed")
 		return
 	}
 	_ = r.Body.Close()
-	if int64(len(body)) > maxJSONBody {
+	if int64(len(body)) > maxBody {
 		s.writeAuthErr(w, http.StatusRequestEntityTooLarge, "auth_body_too_large")
 		return
 	}
