@@ -138,6 +138,8 @@
 4. **存结构化字段，而不是 `comment_out` 那样的 `wire` 整串请求体**：评论入队后不可编辑，存整串最省；投稿台账要支持「改完再发」与重投更新，存 `title` / `body_md` / `question_json` 才能在发送时重建请求体。
 5. **与 #20 的 `comment_out` 并列存在，不合并、不抽通用队列**：两者语义不同——评论队列成功即删行，投稿台账成功要留行（「我的条目」的列表本体就是它）；抽象成通用队列只会把两套不同的生命周期塞进一个壳。
 
+**（2026-09-30 上游回填，`#51` 立册）** 台账新增**第三个只读消费点**：课程页「我创建的」可见性区（`specs/2026-09-30-base-governance-visibility-design.md`），只读 `listSubmissions()`（含 `pending` / `sent` / `failed`）、点开用台账行集（`segments_json` / `body_md` / `question_json`）就地渲染。**本册的 DDL、`LocalRepo` 六方法、状态流转规则（§9.3）与「我的条目」三区口径一字不改**——「我创建的」区只是同一台账的另一个只读视图，不改存储形态、不加列。
+
 ### 4.2 纯逻辑模块划分
 
 统一落 `apps/mobile/src/core/`（纯 TS，不 import `uni`/`plus`，配 vitest），页面只做渲染与跳转：
