@@ -5,7 +5,7 @@
 	<div class="meta">{{.PublishedAt}}{{range .Tags}}<span class="tag">{{.}}</span>{{end}}</div>
 	{{if .CoverBlobID}}<div class="cover"><img src="/v1/blob/{{.CoverBlobID}}" alt="{{.Title}}"></div>{{end}}
 	{{if .Digest}}<p class="meta">{{.Digest}}</p>{{end}}
-	{{range .Paragraphs}}<p>{{.}}</p>{{end}}
+	{{.Body}}
 </article>
 {{end}}
 {{end}}

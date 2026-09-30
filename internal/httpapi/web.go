@@ -5,9 +5,9 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/johocn/base/internal/markdown"
 	"github.com/johocn/base/internal/store"
 	"github.com/johocn/base/web"
 )
@@ -80,7 +80,7 @@ type pageArticle struct {
 	Digest      string
 	PublishedAt string
 	Tags        []string
-	Paragraphs  []string
+	Body        template.HTML
 	CoverBlobID string
 }
 
@@ -106,7 +106,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	s.renderPage(w, indexTmpl, data)
 }
 
-// handleArticlePage 渲染文章正文。正文经 html/template 自动转义，杜绝注入。
+// handleArticlePage 渲染文章正文。正文经 markdown.Render 消毒后直出（全仓唯一一处显式绕过模板转义）。
 func (s *Server) handleArticlePage(w http.ResponseWriter, r *http.Request) {
 	itemID := r.PathValue("item_id")
 	it, ok, err := s.st.GetItem(itemID)
@@ -133,7 +133,7 @@ func (s *Server) handleArticlePage(w http.ResponseWriter, r *http.Request) {
 		Digest:      art.Digest,
 		PublishedAt: art.PublishedAt,
 		Tags:        decodeTags(art.TagsJSON),
-		Paragraphs:  splitParagraphs(art.BodyMD),
+		Body:        markdown.Render(art.BodyMD),
 		CoverBlobID: s.coverBlobID(itemID),
 	}}
 	s.renderPage(w, articleTmpl, data)
@@ -168,18 +168,6 @@ func decodeTags(tagsJSON string) []string {
 		return nil
 	}
 	return tags
-}
-
-// splitParagraphs 按空行切段；P0 不做 Markdown 渲染，原样纯文本展示。
-func splitParagraphs(body string) []string {
-	var out []string
-	normalized := strings.ReplaceAll(body, "\r\n", "\n")
-	for _, p := range strings.Split(normalized, "\n\n") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // governActionLabel 是动作徽章的中文（看板不显示英文码）。
