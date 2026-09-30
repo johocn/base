@@ -90,6 +90,7 @@
     </view>
 
     <text v-if="error" class="error">{{ error }}</text>
+    <text v-if="pickBlocked" class="hint">{{ pickBlocked }}</text>
     <text v-if="notice" class="notice">{{ notice }}</text>
 
     <button class="submit" :disabled="busy" @click="submit">{{ busy ? '提交中…' : '保存' }}</button>
@@ -98,13 +99,15 @@
 
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 
 import { DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO } from '../../core/attrs';
 import { uploadBlob } from '../../core/blob';
 import { loadContainerForm, saveContainer, startNewLesson, type ChildRow, type ContainerForm } from '../../core/course-edit';
-import { bootstrap } from '../../platform';
-import { pickLocalFile } from '../../platform/uni';
+import { recordEditFailure } from '../../core/editlog';
+import { UNKNOWN_FLAGS, canPickFile, pickBlockedReason, type CapabilityFlags } from '../../core/selfcheck';
+import { bootstrap, type AppContext } from '../../platform';
+import { pickLocalFile, type PickedFile } from '../../platform/uni';
 
 /** 课时可挂的载体类型（本册 §2.4；audio 登记在册但播放能力待后续版本） */
 const CARRIER_KINDS = ['article', 'quiz', 'video', 'audio'];
@@ -116,12 +119,22 @@ const busy = ref(false);
 const error = ref('');
 const notice = ref('');
 
+/** 能力标志：启动时只有 cryptoOk / pickOk 有值，其余 unknown（unknown 不降级，照常尝试） */
+const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
+const pickBlocked = computed(() => pickBlockedReason(caps.value));
+const canPick = computed(() => canPickFile(caps.value));
+
+/** bootstrap 上下文：日志出口要拿 `adapters.fs` 与 `opts.workDir`，故在此持有 */
+let ctx: AppContext | null = null;
+
 onLoad(async (query) => {
   const q = (query as Record<string, string> | undefined) ?? {};
   courseId.value = String(q.courseId ?? '');
   const lessonId = String(q.lessonId ?? '');
   try {
-    const { repo } = await bootstrap();
+    ctx = await bootstrap();
+    caps.value = ctx.capabilities;
+    const repo = ctx.repo;
     if (lessonId !== '') {
       form.value = await loadContainerForm(repo, lessonId, 'lesson');
       durationMin.value = form.value.durationSec > 0 ? String(Math.round(form.value.durationSec / 60)) : '';
@@ -145,34 +158,63 @@ function toggleDifficulty(d: string) {
   form.value.difficulty = form.value.difficulty === d ? '' : d;
 }
 
+/** 失败落本地日志（`workDir/edit-surface.log`）；取消不落，日志写失败静默不影响主流程。 */
+async function logFail(stage: 'pick' | 'upload', e: unknown) {
+  if (!ctx) return;
+  await recordEditFailure(ctx.adapters.fs, ctx.opts.workDir, stage, String((e as Error)?.message ?? e));
+}
+
+/** 选文件 → 上传拿 blob_id；取消返回 null。封面与附件共用一条上传路径。 */
 async function uploadOne(): Promise<{ blobId: string; name: string } | null> {
-  const picked = await pickLocalFile();
+  let picked: PickedFile | null;
+  try {
+    picked = await pickLocalFile();
+  } catch (e) {
+    await logFail('pick', e);
+    throw e;
+  }
   if (!picked) return null;
   const { opts, repo } = await bootstrap();
-  const blobId = await uploadBlob(
-    { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl },
-    picked.bytes,
-    picked.name,
-  );
+  let blobId: string;
+  try {
+    blobId = await uploadBlob(
+      { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl },
+      picked.bytes,
+      picked.name,
+    );
+  } catch (e) {
+    await logFail('upload', e);
+    throw e;
+  }
   return { blobId, name: picked.name };
 }
 
 async function pickCover() {
+  if (!canPick.value) {
+    error.value = pickBlocked.value;
+    return;
+  }
   error.value = '';
   try {
     const up = await uploadOne();
     if (up) form.value.cover = up.blobId;
   } catch (e) {
+    // 日志已由 uploadOne 按 pick / upload 阶段落盘，此处只出人读文案（避免同一失败写两行）
     error.value = (e as Error).message;
   }
 }
 
 async function addAttachment() {
+  if (!canPick.value) {
+    error.value = pickBlocked.value;
+    return;
+  }
   error.value = '';
   try {
     const up = await uploadOne();
     if (up && !form.value.attachments.some((a) => a.blobId === up.blobId)) form.value.attachments.push(up);
   } catch (e) {
+    // 同 pickCover：日志只在 uploadOne 一处落，这里只出文案
     error.value = (e as Error).message;
   }
 }
