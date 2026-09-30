@@ -52,6 +52,68 @@
         {"seq": -3, "kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"},
         {"seq": -4, "kind": "attr.instructor", "text": "李老师"}
       ]
+    },
+    {
+      "name": "含图章（其后续既有属性行整体下移）",
+      "lines": [
+        {"kind": "attr.instructor", "text": "李老师"},
+        {"kind": "attr.badge", "text": "活动,悬赏"},
+        {"kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"}
+      ],
+      "slots": [
+        {"seq": -1, "kind": "attr.badge", "text": "活动,悬赏"},
+        {"seq": -2, "kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"},
+        {"seq": -3, "kind": "attr.instructor", "text": "李老师"}
+      ]
+    },
+    {
+      "name": "含标题色（追加最低 seq，既有行不动）",
+      "lines": [
+        {"kind": "attr.instructor", "text": "李老师"},
+        {"kind": "attr.title_color", "text": "red"},
+        {"kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"}
+      ],
+      "slots": [
+        {"seq": -1, "kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"},
+        {"seq": -2, "kind": "attr.instructor", "text": "李老师"},
+        {"seq": -3, "kind": "attr.title_color", "text": "red"}
+      ]
+    },
+    {
+      "name": "老条目无新行不破排布（回归）",
+      "lines": [
+        {"kind": "attr.instructor", "text": "李老师"},
+        {"kind": "attr.duration", "text": "3600"}
+      ],
+      "slots": [
+        {"seq": -1, "kind": "attr.duration", "text": "3600"},
+        {"seq": -2, "kind": "attr.instructor", "text": "李老师"}
+      ]
+    },
+    {
+      "name": "九属性全给",
+      "lines": [
+        {"kind": "attr.attachment", "text": "00000000000000000000000000000000\t讲义.pdf"},
+        {"kind": "attr.badge", "text": "悬赏,推荐,活动,热门,精华,置顶,辩论"},
+        {"kind": "attr.body_md", "text": "# 正文\n\n段落\n"},
+        {"kind": "attr.category", "text": "math"},
+        {"kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"},
+        {"kind": "attr.difficulty", "text": "basic"},
+        {"kind": "attr.duration", "text": "3600"},
+        {"kind": "attr.instructor", "text": "李老师"},
+        {"kind": "attr.title_color", "text": "red"}
+      ],
+      "slots": [
+        {"seq": -1, "kind": "attr.attachment", "text": "00000000000000000000000000000000\t讲义.pdf"},
+        {"seq": -2, "kind": "attr.badge", "text": "悬赏,推荐,活动,热门,精华,置顶,辩论"},
+        {"seq": -3, "kind": "attr.body_md", "text": "# 正文\n\n段落\n"},
+        {"seq": -4, "kind": "attr.category", "text": "math"},
+        {"seq": -5, "kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"},
+        {"seq": -6, "kind": "attr.difficulty", "text": "basic"},
+        {"seq": -7, "kind": "attr.duration", "text": "3600"},
+        {"seq": -8, "kind": "attr.instructor", "text": "李老师"},
+        {"seq": -9, "kind": "attr.title_color", "text": "red"}
+      ]
     }
   ]
 }

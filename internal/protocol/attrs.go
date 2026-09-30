@@ -7,12 +7,14 @@ const (
 	AttrKindPrefix = "attr."
 
 	AttrKeyAttachment = "attr.attachment"
+	AttrKeyBadge      = "attr.badge"
 	AttrKeyBodyMD     = "attr.body_md"
 	AttrKeyCategory   = "attr.category"
 	AttrKeyCover      = "attr.cover"
 	AttrKeyDifficulty = "attr.difficulty"
 	AttrKeyDuration   = "attr.duration"
 	AttrKeyInstructor = "attr.instructor"
+	AttrKeyTitleColor = "attr.title_color"
 
 	// 难度枚举（本册 §2.1）。
 	DifficultyIntro    = "intro"
@@ -26,12 +28,14 @@ const (
 // AttrKindSet 是属性行的合法 kind 集合；只有落在这里的 kind 才算属性行。
 var AttrKindSet = map[string]bool{
 	AttrKeyAttachment: true,
+	AttrKeyBadge:      true,
 	AttrKeyBodyMD:     true,
 	AttrKeyCategory:   true,
 	AttrKeyCover:      true,
 	AttrKeyDifficulty: true,
 	AttrKeyDuration:   true,
 	AttrKeyInstructor: true,
+	AttrKeyTitleColor: true,
 }
 
 // IsAttrKind 判定 kind 是否为合法属性行（本册 §2.1 铁律 1）。

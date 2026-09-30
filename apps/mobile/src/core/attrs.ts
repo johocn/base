@@ -12,12 +12,14 @@ import type { SegmentRow } from './types';
 export const ATTR_KIND_PREFIX = 'attr.';
 
 export const ATTR_ATTACHMENT = 'attr.attachment';
+export const ATTR_BADGE = 'attr.badge';
 export const ATTR_BODY_MD = 'attr.body_md';
 export const ATTR_CATEGORY = 'attr.category';
 export const ATTR_COVER = 'attr.cover';
 export const ATTR_DIFFICULTY = 'attr.difficulty';
 export const ATTR_DURATION = 'attr.duration';
 export const ATTR_INSTRUCTOR = 'attr.instructor';
+export const ATTR_TITLE_COLOR = 'attr.title_color';
 
 export const DIFFICULTY_INTRO = 'intro';
 export const DIFFICULTY_BASIC = 'basic';
@@ -31,12 +33,14 @@ export const DIFFICULTY_CHOICES = [DIFFICULTY_INTRO, DIFFICULTY_BASIC, DIFFICULT
 
 const ATTR_KIND_SET: Record<string, true> = {
   [ATTR_ATTACHMENT]: true,
+  [ATTR_BADGE]: true,
   [ATTR_BODY_MD]: true,
   [ATTR_CATEGORY]: true,
   [ATTR_COVER]: true,
   [ATTR_DIFFICULTY]: true,
   [ATTR_DURATION]: true,
   [ATTR_INSTRUCTOR]: true,
+  [ATTR_TITLE_COLOR]: true,
 };
 
 /** 判定 kind 是否为合法属性行（本册 §2.1 铁律 1）。 */

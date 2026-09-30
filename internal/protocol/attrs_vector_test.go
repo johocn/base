@@ -102,6 +102,11 @@ func TestIsAttrKind(t *testing.T) {
 	if !IsAttrKind(AttrKeyCover) || !IsAttrKind(AttrKeyBodyMD) {
 		t.Fatal("六种属性 kind 均应通过")
 	}
+	for _, k := range []string{AttrKeyBadge, AttrKeyTitleColor} {
+		if !IsAttrKind(k) {
+			t.Fatalf("新增 kind 应通过: %q", k)
+		}
+	}
 	for _, k := range []string{"", "attr.", "attr.unknown", "digest", "lesson", "article"} {
 		if IsAttrKind(k) {
 			t.Fatalf("应非法: %q", k)
