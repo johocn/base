@@ -5,7 +5,7 @@ import { SCHEMA_SQL, SqlRepo, ensureGroupColumns, ensureSubmissionColumns, type 
 import { UNKNOWN_FLAGS, type CapabilityFlags, type SelfCheckReport } from '../core/selfcheck';
 import type { SyncOptions } from '../core/sync';
 import type { Adapters, LocalDb } from './adapter';
-import { PlusFs, PlusHttp, PlusLocalDb, PlusPackReader, PlusStorage, assertAppRuntime } from './uni';
+import { PlusFs, PlusHttp, PlusLocalDb, PlusPackReader, PlusStorage, assertAppRuntime, pickHandle } from './uni';
 
 export interface AppContext {
   opts: SyncOptions;
@@ -44,6 +44,10 @@ export async function bootstrap(): Promise<AppContext> {
     // 预填失败不阻断启动：评论页据此直接禁用发表并给出原因，不再等用户点一次才报错
     capabilities.cryptoOk = 'fail';
   }
+
+  // 选择文件能力：同步 typeof 探测（零 IO），有无任一选择 API 即 ok
+  const pick = pickHandle();
+  capabilities.pickOk = typeof pick.chooseFile === 'function' || typeof pick.chooseImage === 'function' ? 'ok' : 'fail';
 
   const repo = new SqlRepo(db);
   const adapters: Adapters = {

@@ -94,6 +94,13 @@ interface UniGlobal {
     success: (res: { tempFilePaths?: string[]; tempFiles?: Array<{ path?: string; name?: string }> }) => void;
     fail: (e: unknown) => void;
   }): void;
+  /** 相册 / 拍照选图（App 端老内核无 chooseFile 时的备选）；只取 tempFilePaths[0] */
+  chooseImage?(o: {
+    count: number;
+    sourceType: string[];
+    success: (res: { tempFilePaths?: string[] }) => void;
+    fail: (e: unknown) => void;
+  }): void;
   request(o: {
     url: string;
     method: 'GET' | 'POST';
@@ -463,13 +470,46 @@ export interface PickedFile {
 
 /**
  * 选一个本地文件并读成字节（封面 / 附件上传，本册 §6）。
+ * 运行时探测：App 端有 `uni.chooseImage` 走相册 / 拍照，否则退回 `uni.chooseFile`（保持原逻辑）。
  * 读字节复用本层的 `PlusFs.readFile`（与附件下载落盘同一实现）。
  * **用户主动取消返回 null**——取消不是错误，页面据此静默返回。
  */
 export async function pickLocalFile(): Promise<PickedFile | null> {
   const uni = uniGlobal();
+  const app = plusRuntime() !== undefined && typeof uni.chooseImage === 'function';
+  const hit = app ? await pickByAlbum(uni) : await pickByChooseFile(uni);
+  if (hit === null) return null;
+  const bytes = await new PlusFs(assertAppRuntime()).readFile(hit.path);
+  return { name: hit.name, bytes };
+}
+
+/** 相册 / 拍照支：uni.chooseImage，取消 → null，其余失败 → 抛错 */
+async function pickByAlbum(uni: UniGlobal): Promise<{ path: string; name: string } | null> {
+  return new Promise<{ path: string; name: string } | null>((resolve, reject) => {
+    uni.chooseImage!({
+      count: 1,
+      sourceType: ['album', 'camera'],
+      success: (res) => {
+        const path = res.tempFilePaths?.[0] ?? '';
+        if (path === '') {
+          resolve(null);
+          return;
+        }
+        resolve({ path, name: path.split('/').pop() ?? 'file' });
+      },
+      fail: (e) => {
+        const msg = JSON.stringify(e ?? '');
+        if (msg.includes('cancel')) resolve(null);
+        else reject(new Error(`选择文件失败：${msg}`));
+      },
+    });
+  });
+}
+
+/** chooseFile 支：保持既有逻辑（App 端 3.4.0+ 的 chooseFile） */
+async function pickByChooseFile(uni: UniGlobal): Promise<{ path: string; name: string } | null> {
   if (!uni.chooseFile) throw new Error('当前运行时不支持选择文件');
-  const picked = await new Promise<{ path: string; name: string } | null>((resolve, reject) => {
+  return new Promise<{ path: string; name: string } | null>((resolve, reject) => {
     uni.chooseFile!({
       count: 1,
       success: (res) => {
@@ -489,9 +529,6 @@ export async function pickLocalFile(): Promise<PickedFile | null> {
       },
     });
   });
-  if (!picked) return null;
-  const bytes = await new PlusFs(assertAppRuntime()).readFile(picked.path);
-  return { name: picked.name, bytes };
 }
 
 export function toUint8(data: unknown): Uint8Array {
