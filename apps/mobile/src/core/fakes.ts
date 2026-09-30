@@ -2,7 +2,7 @@
 import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReader, SqliteConnection, StorageAdapter } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TagLinkRow, TombstoneRow } from './types';
 import type { LocalRepo, PackApply } from './repo';
 
 export class MemoryFs implements FsAdapter {
@@ -46,6 +46,7 @@ export class MemoryRepo implements LocalRepo {
   blobs = new Map<string, { itemId: string; path: string; size: number; verifiedAt: string }>();
   tombstones = new Map<string, TombstoneRow>();
   segments = new Map<string, SegmentRow[]>();
+  tagLinks = new Map<string, TagLinkRow>(); // `${tagId}\t${targetId}` -> row
 
   async getConfig(key: string): Promise<string | null> {
     return this.config.get(key) ?? null;
@@ -60,6 +61,9 @@ export class MemoryRepo implements LocalRepo {
       this.articles.delete(t.itemId);
       this.quizzes.delete(t.itemId);
       this.segments.delete(t.itemId);
+      for (const [k, r] of [...this.tagLinks]) {
+        if (r.tagId === t.itemId) this.tagLinks.delete(k);
+      }
       for (const [id, b] of [...this.blobs]) {
         if (b.itemId === t.itemId) this.blobs.delete(id);
       }
@@ -71,6 +75,14 @@ export class MemoryRepo implements LocalRepo {
     for (const id of segItems) this.segments.set(id, []);
     for (const s of p.segments) this.segments.set(s.itemId, [...(this.segments.get(s.itemId) ?? []), s]);
     for (const [id, list] of this.segments) this.segments.set(id, [...list].sort((a, b) => a.seq - b.seq));
+    const tagIds = new Set(p.segments.filter((s) => s.itemId.startsWith('tag/')).map((s) => s.itemId));
+    for (const [k, r] of [...this.tagLinks]) {
+      if (tagIds.has(r.tagId)) this.tagLinks.delete(k);
+    }
+    for (const s of p.segments) {
+      if (!s.itemId.startsWith('tag/')) continue;
+      this.tagLinks.set(`${s.itemId}\t${s.text}`, { tagId: s.itemId, targetId: s.text, kind: s.kind });
+    }
     this.config.set('content_version', String(p.version));
     this.config.set('pack_id', p.packId);
   }
@@ -85,6 +97,13 @@ export class MemoryRepo implements LocalRepo {
   }
   async listSegments(itemId: string): Promise<SegmentRow[]> {
     return [...(this.segments.get(itemId) ?? [])].sort((a, b) => a.seq - b.seq);
+  }
+  async listTagLinks(): Promise<TagLinkRow[]> {
+    return [...this.tagLinks.values()].sort(cmpTagLink);
+  }
+  async listTagLinksOfTargets(targetIds: string[]): Promise<TagLinkRow[]> {
+    const want = new Set(targetIds);
+    return [...this.tagLinks.values()].filter((r) => want.has(r.targetId)).sort(cmpTagLink);
   }
   async listLocalItemIds(): Promise<string[]> {
     return [...this.items.keys()];
@@ -301,6 +320,13 @@ function sameQuery(a: string, b: string): boolean {
     return parts.sort().join('&');
   };
   return norm(a) === norm(b);
+}
+
+function cmpTagLink(a: TagLinkRow, b: TagLinkRow): number {
+  if (a.tagId !== b.tagId) return a.tagId < b.tagId ? -1 : 1;
+  if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
+  if (a.targetId !== b.targetId) return a.targetId < b.targetId ? -1 : 1;
+  return 0;
 }
 
 /**

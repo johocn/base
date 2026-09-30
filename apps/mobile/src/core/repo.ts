@@ -1,7 +1,7 @@
 import type { LocalDb } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { SEARCH_SQL, searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TombstoneRow } from './types';
+import type { ArticleRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TagLinkRow, TombstoneRow } from './types';
 
 export interface PackApply {
   version: number;
@@ -25,6 +25,13 @@ export interface LocalRepo {
   getArticle(itemId: string): Promise<ArticleRow | null>;
   /** 某容器条目的 segments 行，按 seq 升序 */
   listSegments(itemId: string): Promise<SegmentRow[]>;
+  /**
+   * 全部标签关联行，按 `tag_id ASC, kind ASC, target_id ASC`。
+   * 标签列表页与「待补标签」反查都用它（本地数据量在 1e3 量级，不做分页）。
+   */
+  listTagLinks(): Promise<TagLinkRow[]>;
+  /** 给定目标集合的关联行（顺序同上）；空数组直接返回 `[]`，不拼 SQL。 */
+  listTagLinksOfTargets(targetIds: string[]): Promise<TagLinkRow[]>;
   /** 本地全部条目 id（id 平移要先看全量集合） */
   listLocalItemIds(): Promise<string[]>;
   /** 把以旧 id 为键的用户数据（user_state / quiz_attempt）改指到新 id；目标已有行则保留目标 */
@@ -130,6 +137,10 @@ export const SCHEMA_SQL: string[] = [
      PRIMARY KEY(group_id, epoch))`,
   `CREATE TABLE IF NOT EXISTS dm_keys(
      peer_id TEXT PRIMARY KEY, key_cipher TEXT NOT NULL, created_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS tag_links(
+     tag_id TEXT NOT NULL, target_id TEXT NOT NULL, kind TEXT NOT NULL,
+     PRIMARY KEY(tag_id, target_id))`,
+  `CREATE INDEX IF NOT EXISTS idx_tag_links_target ON tag_links(target_id)`,
 ];
 
 /**
@@ -170,6 +181,7 @@ export class SqlRepo implements LocalRepo {
       stmts.push({ sql: `DELETE FROM articles WHERE item_id=?`, params: [t.itemId] });
       stmts.push({ sql: `DELETE FROM quizzes WHERE item_id=?`, params: [t.itemId] });
       stmts.push({ sql: `DELETE FROM segments WHERE item_id=?`, params: [t.itemId] });
+      stmts.push({ sql: `DELETE FROM tag_links WHERE tag_id=?`, params: [t.itemId] });
       stmts.push({ sql: `DELETE FROM items WHERE item_id=?`, params: [t.itemId] });
     }
     for (const it of p.items) {
@@ -209,6 +221,19 @@ export class SqlRepo implements LocalRepo {
         params: [s.itemId, s.seq, s.kind, s.text, s.contentHash],
       });
     }
+    // 标签派生表：包里的 tag/* 条目的 segments 行 = (kind, target_id)。与 segments 同一取舍：先删后插。
+    const incomingTagIds = new Set(p.segments.filter((s) => s.itemId.startsWith('tag/')).map((s) => s.itemId));
+    for (const id of incomingTagIds) {
+      stmts.push({ sql: `DELETE FROM tag_links WHERE tag_id=?`, params: [id] });
+    }
+    for (const s of p.segments) {
+      if (!s.itemId.startsWith('tag/')) continue;
+      stmts.push({
+        sql: `INSERT INTO tag_links(tag_id,target_id,kind) VALUES(?,?,?)
+              ON CONFLICT(tag_id,target_id) DO UPDATE SET kind=excluded.kind`,
+        params: [s.itemId, s.text, s.kind],
+      });
+    }
     stmts.push({ sql: `INSERT INTO config(key,value) VALUES('content_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, params: [String(p.version)] });
     stmts.push({ sql: `INSERT INTO config(key,value) VALUES('pack_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, params: [p.packId] });
     await this.db.tx(stmts);
@@ -238,6 +263,23 @@ export class SqlRepo implements LocalRepo {
       [itemId],
     );
     return rows.map(toSegmentRow);
+  }
+
+  async listTagLinks(): Promise<TagLinkRow[]> {
+    const rows = await this.db.select(
+      `SELECT tag_id,target_id,kind FROM tag_links ORDER BY tag_id ASC, kind ASC, target_id ASC`,
+    );
+    return rows.map(toTagLinkRow);
+  }
+
+  async listTagLinksOfTargets(targetIds: string[]): Promise<TagLinkRow[]> {
+    if (targetIds.length === 0) return [];
+    const marks = targetIds.map(() => '?').join(',');
+    const rows = await this.db.select(
+      `SELECT tag_id,target_id,kind FROM tag_links WHERE target_id IN (${marks}) ORDER BY tag_id ASC, kind ASC, target_id ASC`,
+      targetIds,
+    );
+    return rows.map(toTagLinkRow);
   }
 
   async listLocalItemIds(): Promise<string[]> {
@@ -535,6 +577,14 @@ function toSegmentRow(r: Record<string, unknown>): SegmentRow {
   };
 }
 
+function toTagLinkRow(r: Record<string, unknown>): TagLinkRow {
+  return {
+    tagId: String(r.tag_id ?? ''),
+    targetId: String(r.target_id ?? ''),
+    kind: String(r.kind ?? ''),
+  };
+}
+
 function toCommentOutRow(r: Record<string, unknown>): CommentOutRow {
   return {
     eventId: String(r.event_id),
@@ -583,7 +633,7 @@ function toMySubmissionRow(r: Record<string, unknown>): MySubmissionRow {
   const state = String(r.state);
   return {
     itemId: String(r.item_id),
-    type: String(r.type) === 'quiz' ? 'quiz' : 'article',
+    type: String(r.type) === 'quiz' ? 'quiz' : String(r.type) === 'tag' ? 'tag' : 'article',
     title: String(r.title ?? ''),
     bodyMd: String(r.body_md ?? ''),
     questionJson: String(r.question_json ?? ''),

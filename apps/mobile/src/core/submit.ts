@@ -21,7 +21,7 @@ export type SubmitOptions = CommentOptions;
 /** 一条待投内容：与台账行的可编辑字段一一对应。 */
 export interface SubmitDraft {
   itemId: string;
-  type: 'article' | 'quiz';
+  type: 'article' | 'quiz' | 'tag';
   title: string;
   bodyMd: string;
   /** quiz 专有；article 恒为空串 */

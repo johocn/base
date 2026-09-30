@@ -57,6 +57,19 @@ export interface SegmentRow {
   contentHash: string;
 }
 
+/**
+ * 一个标签与一个目标的关联（本地派生表 `tag_links`，#37 册子 §5.1）。
+ * **权威在节点**：本地行只是从包里 `tag/*` 条目的 `segments` 行重建出来的只读投影。
+ */
+export interface TagLinkRow {
+  /** `tag/<名称>/<章>/<节>` */
+  tagId: string;
+  /** `course|lesson|article` 的 `item_id`，或 `comment/<event_id>` */
+  targetId: string;
+  /** course | lesson | article | comment（与节点侧 kind 同一取值域） */
+  kind: string;
+}
+
 /** question_json 里的一道题（spec §6.2） */
 export interface Question {
   q: string;
@@ -96,7 +109,7 @@ export interface CommentOutRow {
 export interface MySubmissionRow {
   /** `<type>/<slug>`，与节点侧同一 id */
   itemId: string;
-  type: 'article' | 'quiz';
+  type: 'article' | 'quiz' | 'tag';
   title: string;
   /** 文章正文（quiz 行为空串） */
   bodyMd: string;
