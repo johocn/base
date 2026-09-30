@@ -23,6 +23,12 @@
     <text v-if="flagsLine" class="meta">{{ flagsLine }}</text>
     <button size="mini" class="copy" :disabled="items.length === 0" @click="copy">复制结果</button>
     <text v-if="tip" class="hint">{{ tip }}</text>
+
+    <view class="log">
+      <text class="grp-name">编辑面日志（末尾 4 KiB，只读）</text>
+      <pre v-if="logTail" class="log-body">{{ logTail }}</pre>
+      <text v-else class="hint">暂无编辑面失败记录</text>
+    </view>
   </view>
 </template>
 
@@ -32,11 +38,13 @@ import { onLoad } from '@dcloudio/uni-app';
 
 import { applySelfCheck, bootstrap } from '../../platform';
 import { plusRuntime } from '../../platform/uni';
+import { readEditLog } from '../../core/editlog';
 import { runSelfCheck, type CheckResult, type SelfCheckReport } from '../../core/selfcheck';
 
 const report = ref<SelfCheckReport | null>(null);
 const running = ref(false);
 const tip = ref('');
+const logTail = ref('');
 
 const items = computed<CheckResult[]>(() => report.value?.items ?? []);
 const degraded = computed(() => report.value?.degraded === true);
@@ -69,20 +77,20 @@ async function run() {
   try {
     // bootstrap 失败也得能出报告：此时以降级模式跑（spec §4）
     const app = await bootstrap().catch(() => null);
-    const r = await runSelfCheck(
-      app
-        ? {
-            adapters: app.opts.adapters,
-            repo: app.repo,
-            db: app.db,
-            nodeBaseUrl: app.opts.nodeBaseUrl,
-            workDir: app.opts.workDir,
-          }
-        : null,
-      { plus: plusRuntime() },
-    );
+    const opts = app
+      ? {
+          adapters: app.opts.adapters,
+          repo: app.repo,
+          db: app.db,
+          nodeBaseUrl: app.opts.nodeBaseUrl,
+          workDir: app.opts.workDir,
+        }
+      : null;
+    const r = await runSelfCheck(opts, { plus: plusRuntime() });
     report.value = r;
     applySelfCheck(r);
+    // 只读回看编辑面失败现场：日志内容不得写回任何能力标志
+    logTail.value = opts ? await readEditLog(opts.adapters.fs, opts.workDir, 4096) : '';
   } catch (e) {
     tip.value = `自检执行失败：${(e as Error).message}`;
   } finally {
@@ -127,4 +135,6 @@ onLoad(() => {
 .row-affects { display: block; color: #999999; font-size: 12px; margin-top: 2px; }
 .meta { display: block; margin-top: 16px; color: #666666; font-size: 12px; }
 .copy { margin-top: 16px; }
+.log { margin-top: 20px; }
+.log-body { white-space: pre-wrap; word-break: break-all; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 11px; color: #444444; }
 </style>

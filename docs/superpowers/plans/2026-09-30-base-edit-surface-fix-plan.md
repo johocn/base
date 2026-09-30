@@ -175,4 +175,34 @@
 
 ## 执行实况
 
-> 待执行时回填：Task 1–9 的 commit hash、门禁实测值（vitest 文件数 / 用例数、`tsc`、`build:h5`、`acceptance-d.ps1`）、执行期更正、真机取证结论（F3 的 `pickOk` 与 `stage` 原文；**不写根因结论**）。
+> 已回填（2026-09-30 执行期实况）：Task 1–9 的 commit、门禁实测值、执行期更正与真机取证结论如下。
+
+**Commit 序列（A 主线 第 5 册，Task 1–8 共 9 条，含 Task 4 收尾）：**
+
+| Task | 内容 | commit |
+| --- | --- | --- |
+| 1 | 编辑面日志出口 `core/editlog.ts`（+ 测试 6 用例） | `7e4f2cc` |
+| 2 | 自检 `pick.*` 两条探测 + `pickOk` + `canPickFile` / `pickBlockedReason` | `9a67650` |
+| 3 | `pickLocalFile()` 运行时双分支（相册·拍照 与 `chooseFile`）+ `bootstrap()` 冷启动判 `pickOk` | `8d6ef7e` |
+| 4 | 课程编辑页 F3（可读文案 + 本地日志 + 门禁） | `abdfec4` |
+| 4′ | 课程编辑页 F3 收尾（日志只落一处） | `b9a66c8` |
+| 5 | 课时编辑页 F3（同构） | `5ef3bf6` |
+| 6 | 候选源纯函数 `core/carrier-pick.ts`（+ 测试 6 用例） | `b2ae27f` |
+| 7 | 课时编辑页载体搜索 + 点选 + 只读标题 | `4da3849` |
+| 8 | 课程编辑页「+ 选已有课时」（`lessonTitle` 现状已满足，无改动） | `1c133c6` |
+
+**门禁实测值（Task 9 收口）：**
+
+- mobile `npx vitest run`：**25 文件 / 246 用例**全绿（基线 25 / 246，只增不减）
+- mobile `npx tsc --noEmit`：干净无输出
+- mobile `npm run build:h5`：`DONE Build complete`
+- 仓库根 `go build ./...` / `go vet ./...` / `go test ./...`：均 exit 0（本册不动 Go，无变化）
+- `scripts/acceptance-d.ps1`：D 组推出「TC-D01–TC-D07 全绿」，**7 / 7 PASS**
+- 发布前硬检查：`apps/mobile/src/pages` 全目录 `.value` 模板写法扫描**无输出**（acceptance D6 扫 24 个 `.vue`，无命中）
+- 版本号：本册不改（`manifest.json` 仍 `0.15.0` / `20`，随 `#45` 批次统一改）
+
+**执行期更正：**
+
+- Task 4 收尾 `b9a66c8`：课程编辑页 F3 日志只落一处（避免同一失败重复写日志，`#46 §2.2` 取消时不写日志的口径保持）。
+
+**真机取证结论：待真机复测。** 本册只预置运行时能力探测（`pickOk`）、三段失败的可读文案与本地日志、运行时双分支，供真机复测时按 `pickOk` 标志与失败 `stage` 原文取证；**F3 根因未定位，结论待真机复测补回**。
