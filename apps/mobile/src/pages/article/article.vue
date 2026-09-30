@@ -24,12 +24,11 @@
           <text class="quiz-title">{{ qz.title }}</text>
         </view>
       </block>
-      <text
-        v-for="(p, i) in paragraphs"
-        :key="i"
-        class="para"
+      <rich-text
+        :nodes="bodyHtml"
+        class="body"
         :style="`font-size:${READER_FONT_SIZE[fontScale]}px`"
-      >{{ p }}</text>
+      />
     </block>
   </view>
 </template>
@@ -51,11 +50,12 @@ import {
 import { childrenOf, lessonOfCarrier } from '../../core/course-tree';
 import { setPendingTarget } from '../../core/comment';
 import { canGovern, tagsOf, untaggedTargets } from '../../core/tags';
+import { renderMarkdown } from '../../core/markdown';
 import type { ArticleRow, TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 
 const article = ref<ArticleRow | null>(null);
-const paragraphs = ref<string[]>([]);
+const bodyHtml = ref('');
 const coverPath = ref('');
 const error = ref('');
 const fav = ref(false);
@@ -92,11 +92,7 @@ onLoad(async (query) => {
     }
     article.value = row;
     itemId.value = row.itemId;
-    paragraphs.value = row.bodyMd
-      .replace(/\r\n/g, '\n')
-      .split('\n\n')
-      .map((s) => s.trim())
-      .filter((s) => s !== '');
+    bodyHtml.value = renderMarkdown(row.bodyMd);
 
     const path = await repo.findBlobPathByItem(`${row.itemId}/cover`);
     coverPath.value = path ? (path.startsWith('file://') ? path : `file://${path}`) : '';
@@ -229,7 +225,16 @@ function decodedId(raw: string): string {
 .actions { display: flex; margin-bottom: 16px; }
 .act { margin-right: 18px; color: #2b6cb0; font-size: 14px; }
 .act-on { color: #b7791f; }
-.para { display: block; margin-bottom: 12px; line-height: 1.8; }
+.body { display: block; margin-bottom: 12px; line-height: 1.8; }
+
+/* 正文变色：7 个枚举类（#44 §6）。c-mark 只改背景、不覆盖字色 */
+.c-red { color: #C53030; }
+.c-orange { color: #B7791F; }
+.c-green { color: #2F855A; }
+.c-blue { color: #2B6CB0; }
+.c-purple { color: #6B46C1; }
+.c-gray { color: #718096; }
+.c-mark { background: #FFF3BF; }
 .error { color: #c53030; font-size: 13px; }
 .group { display: block; margin: 16px 0 6px; color: #888888; font-size: 13px; }
 .quiz-item { padding: 10px 0; border-bottom: 1px solid #f2f2f2; }
@@ -244,11 +249,25 @@ function decodedId(raw: string): string {
 .sepia .title { color: #3d3428; }
 .sepia .meta { color: #8a7c66; }
 .sepia .act { color: #8a6d3b; }
-.sepia .para { color: #4a4034; }
+.sepia .body { color: #4a4034; }
+.sepia .c-red { color: #B23A3A; }
+.sepia .c-orange { color: #A0651A; }
+.sepia .c-green { color: #3B7A57; }
+.sepia .c-blue { color: #2E5E8C; }
+.sepia .c-purple { color: #6B4A9E; }
+.sepia .c-gray { color: #8A7C66; }
+.sepia .c-mark { background: #EFD9A0; }
 
 .wrap.dark { background: #1a1a1a; color: #e6e6e6; }
 .dark .title { color: #f0f0f0; }
 .dark .meta { color: #999999; }
-.dark .para { color: #e6e6e6; }
+.dark .body { color: #e6e6e6; }
 .dark .act { color: #63b3ed; }
+.dark .c-red { color: #FC8181; }
+.dark .c-orange { color: #F6AD55; }
+.dark .c-green { color: #68D391; }
+.dark .c-blue { color: #63B3ED; }
+.dark .c-purple { color: #B794F4; }
+.dark .c-gray { color: #A0AEC0; }
+.dark .c-mark { background: #5A4A1F; }
 </style>

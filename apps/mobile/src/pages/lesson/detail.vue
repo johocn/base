@@ -15,9 +15,9 @@
         <text v-if="canEdit" class="act" @click="openEdit">编辑本课时</text>
 
         <!-- 正文：缺失整块不渲染（老包无 attr.body_md），不显示空块 -->
-        <block v-if="paragraphs.length > 0">
+        <block v-if="bodyHtml !== ''">
           <text class="group">正文</text>
-          <text v-for="(p, i) in paragraphs" :key="i" class="para">{{ p }}</text>
+          <rich-text :nodes="bodyHtml" class="body" />
         </block>
 
         <text class="group">载体（{{ carriers.length }}）</text>
@@ -45,6 +45,7 @@ import { onLoad } from '@dcloudio/uni-app';
 import { fetchBlob } from '../../core/blob';
 import { attrsOf, childrenRowsOf, type AttachmentVM } from '../../core/container-view';
 import { lessonNo } from '../../core/course-tree';
+import { renderMarkdown } from '../../core/markdown';
 import { canGovern, tagsOf, untaggedTargets } from '../../core/tags';
 import type { TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
@@ -59,7 +60,7 @@ const lessonId = ref('');
 const courseId = ref('');
 const lessonLabel = ref('');
 const metaLine = ref('');
-const paragraphs = ref<string[]>([]);
+const bodyHtml = ref('');
 const carriers = ref<CarrierVM[]>([]);
 const attachments = ref<AttachmentVM[]>([]);
 const coverPath = ref('');
@@ -105,11 +106,7 @@ onLoad(async (query) => {
     if (attrs.duration > 0) meta.push(`约 ${Math.round(attrs.duration / 60)} 分钟`);
     metaLine.value = meta.join(' · ');
 
-    paragraphs.value = attrs.bodyMd
-      .replace(/\r\n/g, '\n')
-      .split('\n\n')
-      .map((s) => s.trim())
-      .filter((s) => s !== '');
+    bodyHtml.value = renderMarkdown(attrs.bodyMd);
 
     const rows = childrenRowsOf(segs);
     const built: CarrierVM[] = [];
@@ -217,7 +214,16 @@ async function openAttachment(a: AttachmentVM) {
 .title { display: block; font-size: 20px; font-weight: 600; margin-bottom: 4px; }
 .meta { display: block; color: #888888; font-size: 12px; }
 .cover { width: 100%; margin-bottom: 12px; border-radius: 6px; }
-.para { display: block; font-size: 15px; line-height: 1.7; margin-bottom: 10px; }
+.body { display: block; font-size: 15px; line-height: 1.7; margin-bottom: 10px; }
+
+/* 正文变色：7 个枚举类（#44 §6）。c-mark 只改背景、不覆盖字色 */
+.c-red { color: #C53030; }
+.c-orange { color: #B7791F; }
+.c-green { color: #2F855A; }
+.c-blue { color: #2B6CB0; }
+.c-purple { color: #6B46C1; }
+.c-gray { color: #718096; }
+.c-mark { background: #FFF3BF; }
 .carrier { padding: 10px 0; border-bottom: 1px solid #f2f2f2; }
 .carrier-title { color: #2b6cb0; font-size: 15px; }
 .attach { padding: 8px 0; }
@@ -229,4 +235,31 @@ async function openAttachment(a: AttachmentVM) {
 .tag { padding: 2px 8px; margin: 0 8px 6px 0; background: #ebf8ff; color: #2b6cb0; border-radius: 10px; font-size: 12px; }
 .tag-pending { padding: 2px 8px; margin: 0 8px 6px 0; background: #fffaf0; color: #b7791f; border-radius: 10px; font-size: 12px; }
 .tag-note { margin: 0 0 6px; color: #888888; font-size: 12px; }
+
+/* 护眼：米黄纸底 + 暖褐字，介于浅色与深色之间 */
+.wrap.sepia { background: #f4ecd8; color: #4a4034; }
+.sepia .title { color: #3d3428; }
+.sepia .meta { color: #8a7c66; }
+.sepia .act { color: #8a6d3b; }
+.sepia .body { color: #4a4034; }
+.sepia .c-red { color: #B23A3A; }
+.sepia .c-orange { color: #A0651A; }
+.sepia .c-green { color: #3B7A57; }
+.sepia .c-blue { color: #2E5E8C; }
+.sepia .c-purple { color: #6B4A9E; }
+.sepia .c-gray { color: #8A7C66; }
+.sepia .c-mark { background: #EFD9A0; }
+
+.wrap.dark { background: #1a1a1a; color: #e6e6e6; }
+.dark .title { color: #f0f0f0; }
+.dark .meta { color: #999999; }
+.dark .body { color: #e6e6e6; }
+.dark .act { color: #63b3ed; }
+.dark .c-red { color: #FC8181; }
+.dark .c-orange { color: #F6AD55; }
+.dark .c-green { color: #68D391; }
+.dark .c-blue { color: #63B3ED; }
+.dark .c-purple { color: #B794F4; }
+.dark .c-gray { color: #A0AEC0; }
+.dark .c-mark { background: #5A4A1F; }
 </style>
