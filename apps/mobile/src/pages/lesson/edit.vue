@@ -100,7 +100,7 @@
 import { onLoad } from '@dcloudio/uni-app';
 import { ref } from 'vue';
 
-import { DIFFICULTY_ADVANCED, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO } from '../../core/attrs';
+import { DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO } from '../../core/attrs';
 import { uploadBlob } from '../../core/blob';
 import { loadContainerForm, saveContainer, startNewLesson, type ChildRow, type ContainerForm } from '../../core/course-edit';
 import { bootstrap } from '../../platform';
