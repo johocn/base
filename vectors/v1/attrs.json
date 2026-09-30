@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "六属性全给",
+      "lines": [
+        {"kind": "attr.instructor", "text": "李老师"},
+        {"kind": "attr.duration", "text": "3600"},
+        {"kind": "attr.difficulty", "text": "basic"},
+        {"kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"},
+        {"kind": "attr.body_md", "text": "# 正文\n\n段落\n"},
+        {"kind": "attr.attachment", "text": "ffffffffffffffffffffffffffffffff\t附录.pdf"},
+        {"kind": "attr.attachment", "text": "00000000000000000000000000000000\t讲义.pdf"}
+      ],
+      "slots": [
+        {"seq": -1, "kind": "attr.attachment", "text": "00000000000000000000000000000000\t讲义.pdf"},
+        {"seq": -2, "kind": "attr.attachment", "text": "ffffffffffffffffffffffffffffffff\t附录.pdf"},
+        {"seq": -3, "kind": "attr.body_md", "text": "# 正文\n\n段落\n"},
+        {"seq": -4, "kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"},
+        {"seq": -5, "kind": "attr.difficulty", "text": "basic"},
+        {"seq": -6, "kind": "attr.duration", "text": "3600"},
+        {"seq": -7, "kind": "attr.instructor", "text": "李老师"}
+      ]
+    },
+    {
+      "name": "仅封面与讲师",
+      "lines": [
+        {"kind": "attr.instructor", "text": "王老师"},
+        {"kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"}
+      ],
+      "slots": [
+        {"seq": -1, "kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"},
+        {"seq": -2, "kind": "attr.instructor", "text": "王老师"}
+      ]
+    },
+    {
+      "name": "无属性",
+      "lines": [],
+      "slots": []
+    }
+  ]
+}
