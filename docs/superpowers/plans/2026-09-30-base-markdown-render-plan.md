@@ -316,4 +316,41 @@ git commit -m "chore(release): 正文渲染增强随批次收口 0.16.0/21 并�
 
 ## 执行实况
 
-（留空待执行时回填）
+**F5 收口（Task 7，2026-10-01）——只跑门禁 + 回填文档，未改任何生产代码。**
+
+**7 条 commit（F5 全链）**
+
+| 步骤 | commit | 内容 |
+| --- | --- | --- |
+| Task 1 | `a63bd73` | 双端共享渲染契约向量 `vectors/v1/markdown.json`（42 条用例） |
+| 上游回填 | `8075452` | `#44` 回填向量裁决五则（p 包裹 / blockquote / 丢属性 / 裸 HTML / 块间无分隔） |
+| Task 2 | `61064f3` | Go 侧解析消毒单出口 `internal/markdown`（`Render` / `RenderString`） |
+| Task 3 | `bf05fda` | TS 侧 `core/markdown.ts`（`renderMarkdown`）+ 同向量消费 |
+| Task 4 | `f3b9b1f` | 节点门户 `web.go` 直出 + `article.html` + 门户 7 色类 |
+| Task 5 | `69ad44b` | App 文章页 / 课时页改 `rich-text` + 7 色类 |
+| Task 6 | `fcb9817` | 课时与文章编辑器加工具栏与实时预览（保存口径零改动） |
+
+**门禁实测值（本机，2026-10-01）**
+
+- 仓库根 Go 三连：`go build ./...` exit 0、`go vet ./...` exit 0、`go test ./...` exit 0（全包 ok，含新增 `internal/markdown`）。
+- `apps/mobile`：`npx vitest run` → **27 文件 / 300 用例全绿**（基线 27 文件 / 300 用例，未减少）；`npx tsc --noEmit` 干净；`npm run build:h5` → `DONE Build complete.`。
+- `scripts/acceptance-d.ps1` → **D1/TC-D01、D2/TC-D02、D3/TC-D03、D4/TC-D04、D5/TC-D05、D6/TC-D06、D7/TC-D07 全 PASS**（D6「扫描 24 个 .vue，无命中」；D7 `8f969d3` 为 HEAD 祖先）。
+- 发布前硬检查 `grep -nE '="[^"]*\.value|\{\{[^}]*\.value' apps/mobile/src/pages/*/*.vue` → **无输出**。
+
+**AC 1–8 逐条结论**
+
+- **AC 1｜通过**：Go `internal/markdown/vector_test.go` 与 TS `core/markdown.test.ts` 共读同一份 `vectors/v1/markdown.json`，两跑全绿（同一份 42 条用例逐条断言）。
+- **AC 2｜通过**：向量含每类拒绝项负例——`javascript:` href、`onerror` img、`<script>`、未知类名 `c-foo` 均在向量中，断言「丢属性 / 丢标签留文本」而非整块消失。
+- **AC 3｜通过**：向量含「无标记真实正文」等价例，逐段落文本与旧 `splitParagraphs` 语义一致。
+- **AC 4｜通过（三端一致）**：三端同走一份向量；Go 与 TS 两份实现共用同一 `markdown.json` 且双跑逐字节全绿，App 文章页 / 课时页 / 节点门户即同一渲染输出。（本机不做 HTTP 探活——纯 HTTP 打 8081/8083 会回 400，探活走服务器 HTTPS，属批次收口。）
+- **AC 5｜通过**：Task 6 保存路径一行未动——`core/course-edit.ts:108` 仍 `{ kind: ATTR_BODY_MD, text: form.bodyMd }`，`core/submit.ts` 文章链路仍 `body_md: bodyMd`（源文本）；`attr.body_md` 存源文本、不含 HTML（可 grep 证）。
+- **AC 6｜通过**：7 色类已落三端四落点——App `article.vue` / `lesson/detail.vue` 各有浅色 + `.sepia` + `.dark` 三版，门户 `web/templates/base.html` 落浅色一版；`c-mark` 只改背景、不覆盖字色。
+- **AC 7｜待真机（本批次不做真机测试）**：App `rich-text` 渲染标题 / 列表 / 引用 / 行内代码 / 变色是否全部可见且不破版，须真机验收；退路（列表降级为带 `·` 前缀段落）**只在真机验证后启用，未预先实现**。
+- **AC 8｜通过**：Step 1 全部门禁 + Step 3 发布前硬检查全通过（见上）。
+
+**两处刻意裁剪（本 Task 照做，留批次收口）**
+
+1. **不改 `apps/mobile/src/manifest.json` 版本号**：本 Task 只跑门禁 + 改文档；`manifest.json:5-6` 实测仍为 `0.15.0` / `20`。批次目标 `0.16.0` / `21` 留到 F6 / F7 / F9 全部落地后的批次收口统一落。
+2. **不部署节点二进制、不执行任何发布动作**：`#45 §5` 规定整批只发一次 `0.16.0` / `21`（云打包 → 上传 `/opt/appdl` → 落地页改指 → `based release` 签发），本次不做部署、不做探活（本机纯 HTTP 打 8081/8083 会回 400，探活是服务器 HTTPS，属批次收口）。Task 7 Step 4 / Step 5 整体顺延至批次收口。
+
+**偏差登记**：本计划 Task 7 Step 3 原文称「`manifest.json:5-6` 版本号已为 `0.16.0` / `21`」，实测仍为 `0.15.0` / `20`——版本号随批次收口，本 Task 刻意不改（见「刻意裁剪 1」）。
