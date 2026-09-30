@@ -13,11 +13,11 @@
     <text v-if="syncBlocked" class="error">本地文件不可写，无法同步（设置 → 基座自检 可看原因）</text>
     <text v-if="total === 0 && !error" class="hint">还没有内容，点「同步」从节点拉取。</text>
     <block v-if="groups.length > 0">
-      <block v-for="g in groups" :key="g.category.itemId">
-        <text class="group group-cat" @click="toggle(g.category.itemId)">
-          {{ collapsed[g.category.itemId] ? '▸ ' : '▾ ' }}{{ g.category.title }}
+      <block v-for="g in groups" :key="g.slug">
+        <text class="group group-cat" @click="toggle(g.slug)">
+          {{ collapsed[g.slug] ? '▸ ' : '▾ ' }}{{ g.title }}
         </text>
-        <block v-if="!collapsed[g.category.itemId]">
+        <block v-if="!collapsed[g.slug]">
           <view v-for="it in g.courses" :key="it.itemId" class="item" @click="openCourse(it.itemId)">
             <text class="item-title">{{ it.title }}</text>
             <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
@@ -55,13 +55,14 @@ import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
 import { syncOnce } from '../../core/sync';
-import { coursesOfCategory, splitCategories, splitCourses } from '../../core/course-tree';
-import type { ItemRow } from '../../core/types';
+import { groupCoursesByCategory, splitCourses } from '../../core/course-tree';
+import type { ItemRow, SegmentRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 import { canSync } from '../../core/selfcheck';
 
 interface CategoryGroupVM {
-  category: ItemRow;
+  slug: string;
+  title: string;
   courses: ItemRow[];
 }
 
@@ -87,22 +88,17 @@ async function load() {
     const tree = splitCourses(active);
     courses.value = tree.courses;
 
-    // 分类分组：逐分类取清单（分类数量级远小于课程，逐条查询即可）；
-    // 清单为空的分类不显示（既有分类在课程全部改归别处后会被重写成空清单）。
-    const cats = splitCategories(active);
-    const built: CategoryGroupVM[] = [];
-    for (const cat of cats) {
-      const segs = await repo.listSegments(cat.itemId);
-      const cs = coursesOfCategory(cat.itemId, active, segs);
-      if (cs.length === 0) continue;
-      built.push({ category: cat, courses: cs });
+    // 分类分组（册子 #49 §3）：双来源 + 优先级，组标题与未归类口径都由纯函数给出。
+    // 需要课程自身的 attr.category（逐课程取 segments）与分类清单行（逐分类取 segments）；只读、零写入。
+    const segsByItemId = new Map<string, SegmentRow[]>();
+    for (const it of active) {
+      if (it.type === 'course' || it.source === 'category') {
+        segsByItemId.set(it.itemId, await repo.listSegments(it.itemId));
+      }
     }
+    const { groups: built, unclassified: orphan } = groupCoursesByCategory(active, segsByItemId);
     groups.value = built;
-
-    // 未归类课程 = 全部课程 − 被任一分类清单引用的课程
-    const referenced = new Set<string>();
-    for (const g of built) for (const c of g.courses) referenced.add(c.itemId);
-    unclassified.value = tree.courses.filter((c) => !referenced.has(c.itemId));
+    unclassified.value = orphan;
 
     // 独立内容 = 独立文章 article/<aid> ∪ 独立题库 quiz/<qid>（册子 §5.2）
     standalone.value = [
