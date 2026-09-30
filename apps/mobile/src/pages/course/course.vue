@@ -2,6 +2,7 @@
   <view class="wrap">
     <view class="bar">
       <text class="title">课程</text>
+      <button size="mini" @click="createCourse">新建课程</button>
       <button size="mini" :disabled="busy || syncBlocked" @click="doSync">{{ busy ? '同步中…' : '同步' }}</button>
     </view>
     <view class="searchbox" @click="openSearch">
@@ -151,6 +152,10 @@ async function doSync() {
 
 function openSearch() {
   uni.navigateTo({ url: '/pages/search/search' });
+}
+
+function createCourse() {
+  uni.navigateTo({ url: '/pages/course/edit' });
 }
 
 function openArticle(itemId: string) {
