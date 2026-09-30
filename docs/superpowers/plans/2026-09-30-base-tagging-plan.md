@@ -3622,3 +3622,11 @@ git push origin master
 实际怎么做的：**次序互换并拆分落点**——先执行 Task 9 的 Step 1–5（台账 `links_json` 列 + `ensureSubmissionColumns` + `submit.ts` 载体 + `submit.test.ts` 两条用例），提交 `156cc06`（文件同计划，**不含 `tags.ts`**，该文件此轮尚未创建）；Step 6（`tags.ts` 的三段本地校验与 `TAG_SEGMENT_MAX_RUNES`）**随 Task 8 周期一并落地**，于是 Task 8 的提交含 `tags.ts` + `tags.test.ts`。
 依据：Step 6 的全部内容都在 `tags.ts` 内，它天然属于 Task 8 的产物；把它留在 Task 9 会让 Task 9 的提交无法独立门禁（缺 `tags.ts`），反之并入 Task 8 则两个提交都各自全绿。契约、用例语义与最终文件内容**均未变**，只是两批改动的归属与提交次序调整。
 
+**更正 7（Task 8 · 用例期望值两处笔误，与用例自身实现/节点契约对立）**
+现象：Task 8 Step 1 的 `tags.test.ts` 有两处期望值与同一用例的断言对象自相矛盾，照抄必红：
+1. `untaggedTargets` 用例期望 `['course/c1/lesson/l1/article/a1', 'article/a2']`，而计划自己的实现（Step 3 `untaggedTargets`）末尾是 `.map(...).sort()`，即 `item_id` 升序，实际必为 `['article/a2', 'course/c1/lesson/l1/article/a1']`。
+2. `tagsOf` 用例期望 `['tag/甲/一/一', 'tag/乙/一/一']`，但升序是**字节序**：`乙`(U+4E59) < `甲`(U+7532)，实际必为 `['tag/乙/一/一', 'tag/甲/一/一']`。
+计划写的是：上述两条期望值（Step 1 代码块）。
+实际怎么做的：**实现逐字不动**（`tagsOf` 的升序实现与 `repo.ts` 的 `ORDER BY tag_id ASC`、节点 `store.ListTagsOf` 三方一致），只把这两处期望值校正为实际（正确）值，并在用例内注明依据（提交 `9d070ed`）。
+依据：第 2 条有节点侧硬证据——`internal/store/tag_test.go:182` 明确断言 `[]string{"tag/乙/一/一", "tag/甲/一/一"}`，即计划测试的字面量本身写反；第 1 条是计划测试与计划实现互斥，且 `untaggedTargets` 的返回值只被 `new Set(...)` 消费，序不影响任何行为。两处均属**计划笔误**，非契约分歧。
+
