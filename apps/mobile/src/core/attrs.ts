@@ -59,7 +59,8 @@ export interface AttrSlot {
  *  2. 同一 kind 至多一行，唯 `attr.attachment` 可多行——多行占**连续递减区间**，
  *     同一 kind 内按 text（含 `<blob_id>\t<文件名>` 的整串）升序映射到递减 seq。
  *
- * 返回值天然按 seq 升序（首元素 seq 最小 = -1）。
+ * 返回值按 seq **降序**（首元素 seq 最大 = -1）。
+ * 调用方不必按这个顺序传回：`attrSeqsCanonical` 与入参数组顺序无关。
  */
 export function assignAttrSeqs(lines: AttrLine[]): AttrSlot[] {
   const byKind = new Map<string, string[]>();
@@ -87,11 +88,19 @@ export function assignAttrSeqs(lines: AttrLine[]): AttrSlot[] {
   return out;
 }
 
-/** 报告一组属性行是否已按 `assignAttrSeqs` 的规则排布（调用方按 seq 升序传入）。 */
+/**
+ * 报告一组属性行是否已按 `assignAttrSeqs` 的规则排布，**与入参数组顺序无关**：
+ * 两侧都按 seq 升序对齐后逐行比对，判据强度与 Go 侧一致。
+ */
 export function attrSeqsCanonical(slots: AttrSlot[]): boolean {
-  const want = assignAttrSeqs(slots.map((s) => ({ kind: s.kind, text: s.text })));
+  const want = assignAttrSeqs(slots.map((s) => ({ kind: s.kind, text: s.text }))).sort(bySeqAsc);
   if (want.length !== slots.length) return false;
-  return want.every((w, i) => w.seq === slots[i]!.seq && w.kind === slots[i]!.kind && w.text === slots[i]!.text);
+  const got = [...slots].sort(bySeqAsc);
+  return want.every((w, i) => w.seq === got[i]!.seq && w.kind === got[i]!.kind && w.text === got[i]!.text);
+}
+
+function bySeqAsc(a: AttrSlot, b: AttrSlot): number {
+  return a.seq - b.seq;
 }
 
 /** 一条待提交的 `segments` 行（`POST /v1/submit` 的 `segments` 元素，本册 §2.3）。 */

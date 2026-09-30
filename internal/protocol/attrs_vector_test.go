@@ -56,6 +56,48 @@ func TestAssignAttrSeqsSingleRowPerKind(t *testing.T) {
 	}
 }
 
+// AttrSeqsCanonical 与入参数组顺序无关：同 kind 字典序递减分配，attachment 占连续递减区间。
+// 判据强度不降——seq 取值本身错了（这里 cover 与 instructor 互换了 seq）仍须为假。
+func TestAttrSeqsCanonicalOrderIndependent(t *testing.T) {
+	// kind 字典序：attr.attachment < attr.cover < attr.instructor，
+	// 故 attachment 先占 -1 起，同 kind 内按 text 升序占递减 seq。
+	cover := AttrSlot{Seq: -3, Kind: AttrKeyCover, Text: "00112233445566778899aabbccddeeff"}
+	instructor := AttrSlot{Seq: -4, Kind: AttrKeyInstructor, Text: "李老师"}
+	attachA := AttrSlot{Seq: -1, Kind: AttrKeyAttachment, Text: "aa11\t甲.pdf"}
+	attachB := AttrSlot{Seq: -2, Kind: AttrKeyAttachment, Text: "bb22\t乙.pdf"}
+
+	cases := []struct {
+		name string
+		in   []AttrSlot
+		want bool
+	}{
+		{"规范（seq 降序）", []AttrSlot{attachA, attachB, cover, instructor}, true},
+		{"乱序（seq 升序）", []AttrSlot{instructor, cover, attachB, attachA}, true},
+		{"乱序（交错）", []AttrSlot{attachB, cover, attachA, instructor}, true},
+		{"单条", []AttrSlot{{Seq: -1, Kind: AttrKeyCover, Text: cover.Text}}, true},
+		{"seq 赋值错（cover/instructor 互换）", []AttrSlot{
+			{Seq: -1, Kind: AttrKeyInstructor, Text: "李老师"},
+			{Seq: -2, Kind: AttrKeyCover, Text: cover.Text},
+		}, false},
+		{"附件区间不连续（-1/-3）", []AttrSlot{
+			attachA,
+			{Seq: -3, Kind: AttrKeyAttachment, Text: attachB.Text},
+			{Seq: -4, Kind: AttrKeyCover, Text: cover.Text},
+			{Seq: -5, Kind: AttrKeyInstructor, Text: instructor.Text},
+		}, false},
+		{"附件 text 降序占递减 seq", []AttrSlot{
+			{Seq: -1, Kind: AttrKeyAttachment, Text: attachB.Text},
+			{Seq: -2, Kind: AttrKeyAttachment, Text: attachA.Text},
+			cover, instructor,
+		}, false},
+	}
+	for _, c := range cases {
+		if got := AttrSeqsCanonical(c.in); got != c.want {
+			t.Fatalf("%s: got=%v want=%v in=%+v", c.name, got, c.want, c.in)
+		}
+	}
+}
+
 func TestIsAttrKind(t *testing.T) {
 	if !IsAttrKind(AttrKeyCover) || !IsAttrKind(AttrKeyBodyMD) {
 		t.Fatal("六种属性 kind 均应通过")

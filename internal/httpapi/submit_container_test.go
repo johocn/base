@@ -101,6 +101,52 @@ func TestSubmitAcceptsCourseAndLesson(t *testing.T) {
 	}
 }
 
+// 回归（F1，0.15.0 实测 400）：≥2 条属性行时两种传入顺序都必须落库。
+// 线上口径是「编辑器按 assignAttrSeqs 产出 seq 降序 → 节点校验前按 seq 升序排序」——
+// 旧 AttrSeqsCanonical 逐元素比对，只认降序，故 ≥2 条属性行必判 item_segments_invalid。
+func TestSubmitAcceptsMultipleAttrRowsInEitherOrder(t *testing.T) {
+	canonical := []submitSegment{
+		{Seq: -1, Kind: "attr.cover", Text: "00112233445566778899aabbccddeeff"},
+		{Seq: -2, Kind: "attr.difficulty", Text: "basic"},
+		{Seq: -3, Kind: "attr.duration", Text: "600"},
+		{Seq: -4, Kind: "attr.instructor", Text: "李老师"},
+	}
+	for _, c := range []struct {
+		name string
+		in   []submitSegment
+	}{
+		{"编辑器产出顺序（seq 降序）", canonical},
+		{"校验端排序顺序（seq 升序）", []submitSegment{canonical[3], canonical[2], canonical[1], canonical[0]}},
+	} {
+		n := newSubmitNode(t)
+		segs := append(append([]submitSegment{}, c.in...),
+			submitSegment{Seq: 0, Kind: "digest", Text: "简介"},
+			submitSegment{Seq: 1, Kind: "lesson", Text: "course/c3/lesson/l1"},
+		)
+		body := containerSubmitBody(t, testSeed, "course", "course/c3", "甲课", segs)
+		code, out := postSubmit(t, n, testSeed, body)
+		if code != http.StatusOK || out["created"] != true {
+			t.Fatalf("%s: code=%d out=%v", c.name, code, out)
+		}
+		stored, err := n.st.ListSegments("course/c3")
+		if err != nil || len(stored) != 6 {
+			t.Fatalf("%s: n=%d err=%v", c.name, len(stored), err)
+		}
+		for i := 1; i < len(stored); i++ {
+			if stored[i-1].Seq >= stored[i].Seq {
+				t.Fatalf("%s: 未按 seq 升序落库: %+v", c.name, stored)
+			}
+		}
+		it, ok, err := n.st.GetItem("course/c3")
+		if err != nil || !ok {
+			t.Fatalf("%s: GetItem ok=%v err=%v", c.name, ok, err)
+		}
+		if want := store.SegmentsContentHash(stored); it.ContentHash != want {
+			t.Fatalf("%s: content_hash=%s want=%s", c.name, it.ContentHash, want)
+		}
+	}
+}
+
 // 本人重投同一容器 → created=false，行集整体替换。
 func TestSubmitContainerReSubmitByOwner(t *testing.T) {
 	n := newSubmitNode(t)

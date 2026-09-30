@@ -32,10 +32,11 @@
 
 ### 0.2 2026-09-30 执行期更正
 
-本册实施期（计划 `#41`）共 2 条与计划的偏差，均已在实现中收口：
+本册实施期（计划 `#41`）共 3 条与计划的偏差，均已在实现中收口：
 
 1. **`attrsOf` 读取顺序由 `seq` 升序改为 `seq` 降序**：计划 Task 8 的 `attrsOf` 原稿按 `seq` **升序**读属性行，与 `assignAttrSeqs` 的产出顺序不自洽——后者按 `kind` 字典序从 `-1` 起**递减**分配，`attr.attachment` 多行时按 `blob_id` 升序占**递减** `seq`。若按升序读，多附件行的相对顺序会与写入口径相反。实现改为按 `seq` **降序**读。
 2. **清掉页面稿未使用的 `DIFFICULTY_ADVANCED` import**：计划 Task 12 / Task 13 的页面稿 import 了未使用的 `DIFFICULTY_ADVANCED`，执行期已移除（`tsc --noEmit` 干净）。
+3. **`AttrSeqsCanonical` 判据改为与入参数组顺序无关**（0.15.0 实测缺陷）：计划 Task 2 的原稿逐元素比对，隐含要求调用方按 `AssignAttrSeqs` 的产出顺序（`seq` **降序**）传入；而 `validateSubmitSegments` 为查重先按 `seq` **升序**排过，于是 **≥2 条属性行必判 `item_segments_invalid`(400)**——0/1 条属性行时顺序退化同序，故 D1–D7 全绿而线上失败。实现改为两侧都按 `seq` 升序对齐后逐行比对；判据强度不降（`seq` 取值、attachment 的连续递减区间、同 kind 内 text 升序仍须逐字节吻合）。测试缺口同时补上：`validateSubmitSegments` 的 ≥2 属性行路径此前无任何用例覆盖。
 
 ## 1. 范围与不做什么
 

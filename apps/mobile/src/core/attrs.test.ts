@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import {
   ATTR_BODY_MD,
   ATTR_COVER,
+  ATTR_DIFFICULTY,
+  ATTR_DURATION,
   ATTR_INSTRUCTOR,
   assignAttrSeqs,
   attrSeqsCanonical,
@@ -57,13 +59,26 @@ describe('attrs：分配规则边界', () => {
     }
   });
 
-  it('非规范排布（顺序颠倒）不得通过 canonical', () => {
+  it('非规范排布（seq 赋值错）不得通过 canonical', () => {
     expect(
       attrSeqsCanonical([
         { seq: -1, kind: ATTR_INSTRUCTOR, text: '甲' },
         { seq: -2, kind: ATTR_COVER, text: '00112233445566778899aabbccddeeff' },
       ]),
     ).toBe(false);
+  });
+
+  it('canonical 与入参数组顺序无关（≥2 条属性行）', () => {
+    const cover: AttrSlot = { seq: -1, kind: ATTR_COVER, text: '00112233445566778899aabbccddeeff' };
+    const difficulty: AttrSlot = { seq: -2, kind: ATTR_DIFFICULTY, text: 'basic' };
+    const duration: AttrSlot = { seq: -3, kind: ATTR_DURATION, text: '600' };
+    const instructor: AttrSlot = { seq: -4, kind: ATTR_INSTRUCTOR, text: '李老师' };
+    // 编辑器按 assignAttrSeqs 产出的是 seq 降序；节点校验前按 seq 升序排过——两向都必须通过
+    expect(attrSeqsCanonical([cover, difficulty, duration, instructor])).toBe(true);
+    expect(attrSeqsCanonical([instructor, duration, difficulty, cover])).toBe(true);
+    expect(attrSeqsCanonical([difficulty, cover, instructor, duration])).toBe(true);
+    // 但 seq 取值本身错了仍然拦下
+    expect(attrSeqsCanonical([{ ...cover, seq: -2 }, { ...difficulty, seq: -1 }, duration, instructor])).toBe(false);
   });
 });
 
