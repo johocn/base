@@ -27,6 +27,28 @@
     </view>
 
     <view class="field">
+      <text class="label">分类</text>
+      <input v-model="categoryInput" class="input" placeholder="分类 slug，如 math（可空）" />
+      <text class="add" @click="openCategoryPicker">+ 选本机分类</text>
+      <view v-if="categoryPickOpen" class="card">
+        <text class="label">选择分类</text>
+        <input v-model="categoryKeyword" class="input" placeholder="搜索分类" />
+        <text v-if="categoryCandidates.length === 0" class="hint">本机还没有已有分类，直接手填 slug 即可</text>
+        <view class="chips">
+          <text
+            v-for="c in categoryCandidates"
+            :key="c.slug"
+            class="chip"
+            :class="categoryInput.trim() === c.slug ? 'chip-on' : ''"
+            @click="pickCategory(c.slug)"
+          >{{ c.label }}</text>
+        </view>
+        <text class="add" @click="categoryPickOpen = false">收起</text>
+      </view>
+      <text class="hint">slug 规则 [a-z0-9][a-z0-9-]{0,63}；空则不归类</text>
+    </view>
+
+    <view class="field">
       <text class="label">难度</text>
       <view class="chips">
         <text
@@ -101,6 +123,7 @@ import { DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO } from '../../co
 import { uploadBlob } from '../../core/blob';
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
 import { loadContainerForm, saveContainer, startNewCourse, type ChildRow, type ContainerForm } from '../../core/course-edit';
+import { splitCategories } from '../../core/course-tree';
 import { recordEditFailure } from '../../core/editlog';
 import type { LocalRepo } from '../../core/repo';
 import { UNKNOWN_FLAGS, canPickFile, pickBlockedReason, type CapabilityFlags } from '../../core/selfcheck';
@@ -123,6 +146,17 @@ const candidates = ref<CarrierCandidate[]>([]);
 /** 本机仓库（候选查询用），bootstrap 后才有值 */
 let pickRepo: LocalRepo | null = null;
 
+/** 分类输入（slug）；候选源 = 本机已下载条目里的既有分类（零新接口） */
+const categoryInput = ref('');
+const categoryPickOpen = ref(false);
+const categoryKeyword = ref('');
+const categoryAll = ref<Array<{ slug: string; label: string }>>([]);
+const categoryCandidates = computed(() => {
+  const kw = categoryKeyword.value.trim().toLowerCase();
+  if (kw === '') return categoryAll.value;
+  return categoryAll.value.filter((c) => c.slug.toLowerCase().includes(kw) || c.label.toLowerCase().includes(kw));
+});
+
 /** 能力标志：启动时只有 cryptoOk / pickOk 有值，其余 unknown（unknown 不降级，照常尝试） */
 const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
 const pickBlocked = computed(() => pickBlockedReason(caps.value));
@@ -141,8 +175,14 @@ onLoad(async (query) => {
       isEdit.value = true;
       form.value = await loadContainerForm(ctx.repo, courseId, 'course');
       durationMin.value = form.value.durationSec > 0 ? String(Math.round(form.value.durationSec / 60)) : '';
+      categoryInput.value = form.value.category;
     }
-    lessonTitles.value = Object.fromEntries((await ctx.repo.listItems()).map((i) => [i.itemId, i.title || i.itemId]));
+    const items = await ctx.repo.listItems();
+    lessonTitles.value = Object.fromEntries(items.map((i) => [i.itemId, i.title || i.itemId]));
+    categoryAll.value = splitCategories(items).map((c) => {
+      const slug = c.itemId.replace(/^category\//, '');
+      return { slug, label: c.title || slug };
+    });
   } catch (e) {
     error.value = (e as Error).message;
   }
@@ -157,6 +197,22 @@ function difficultyLabel(d: string): string {
 /** 再点一次取消选择（空串 = 不产该属性行） */
 function toggleDifficulty(d: string) {
   form.value.difficulty = form.value.difficulty === d ? '' : d;
+}
+
+/** 打开本机分类候选面板（候选已在 onLoad 一次性读出，纯本机过滤） */
+function openCategoryPicker() {
+  categoryPickOpen.value = true;
+}
+
+/** 点选本机分类：回填 slug，再点同一项取消（空串 = 不产该属性行） */
+function pickCategory(slug: string) {
+  categoryInput.value = categoryInput.value.trim() === slug ? '' : slug;
+}
+
+/** 分类 slug 归一：空 / 非法一律归空（= 不产 attr.category 行） */
+function normalizeCategorySlug(raw: string): string {
+  const s = raw.trim();
+  return /^[a-z0-9][a-z0-9-]{0,63}$/.test(s) ? s : '';
 }
 
 /** 失败落本地日志（`workDir/edit-surface.log`）；取消不落，日志写失败静默不影响主流程。 */
@@ -292,6 +348,13 @@ async function submit() {
   notice.value = '';
   const f = form.value;
   f.durationSec = durationSecOf();
+  const catRaw = categoryInput.value.trim();
+  const catSlug = normalizeCategorySlug(catRaw);
+  if (catRaw !== '' && catSlug === '') {
+    error.value = '分类 slug 只允许 [a-z0-9][a-z0-9-]{0,63}';
+    return;
+  }
+  f.category = catSlug;
   busy.value = true;
   try {
     const { opts, repo } = await bootstrap();
