@@ -146,15 +146,15 @@
 
 ---
 
-## 执行实况（待执行后回填）
+## 执行实况
 
-> 本节在实施完成后按 `#41` / `#46` 计划的体例回填：① 落地任务清单与偏差；② 门禁实测数字（mobile 文件数 / 用例数、Go 三连）；③ 发布前硬检查输出；④ 发布四步与线上验签（随批次执行）；⑤ 真机验收（AC 8）结论。**执行前保持占位。**
+**F7 收口（Task 5，2026-10-01）——只跑门禁 + 回填文档，未改任何生产代码。**
 
 | 项 | 内容 |
 | --- | --- |
-| 落地任务 | 待填 |
-| 偏差 / 更正 | 待填 |
-| 门禁跑分 | 待填（`internal/` 零改动佐证） |
-| 发布前硬检查 | 待填 |
-| 发布与验签 | 待填（随批次 `0.16.0`/`21`） |
-| 真机验收 | 待填（AC 8） |
+| 落地任务 | **Task 1–2**（`4c4c1ac`）：新增 `apps/mobile/src/core/my-created.ts`（`statusLabelOf` / `buildMyCreatedView` 视图模型 + `ledgerSegmentsOf` / `containerFormFromLedger` 台账行集桥）与 `my-created.test.ts`（15 用例）。<br>**Task 3–4**（`5a60aca`）：`course.vue` 新增「我创建的」区（计数 / 空态 / 状态色）+ `from=ledger` 跳转；`course/detail.vue` / `lesson/detail.vue` / `article/article.vue` / `quiz/quiz.vue` 各加 `from=ledger` 分支。<br>**Task 5**（本次收口 commit）：门禁 + 本「执行实况」回填，零生产代码改动。<br>本册范围（`e45c19b..HEAD`）：7 文件 / +462 −3（`my-created.ts`、`my-created.test.ts`、5 个 `.vue`）。 |
+| 偏差 / 更正 | ① **课时跳转的 `courseId` 由 `itemId` 的 `/lesson/` 形态剥离**——台账行无 `courseId` 字段，`lesson/detail` 路由需 `courseId`，遂从 `itemId` 前缀解析。<br>② **课时详情 `ledger` 分支为避免触达包表，不显示「第 N 讲」序号、不显示标签与治理入口**（这些需读 `items` / `segments` 或节点）；同步态老入口（非 `from=ledger`）不受影响。 |
+| 门禁跑分 | **Go 三连**：`go build ./...` exit 0、`go vet ./...` exit 0、`go test ./...` 全包 ok（10 包 `ok` + 2 包 `no test files`）。<br>**mobile**：`npx vitest run` → **28 文件 / 331 用例全绿**（基线 23 文件 / 230 用例，只增不减；本册新增 `my-created.test.ts` 15 用例）；`npx tsc --noEmit` → exit 0；`npm run build:h5` → `DONE Build complete.`；`npm run build:app` → `DONE Build complete.`。<br>**acceptance**：`scripts/acceptance-d.ps1` → TC-D01–TC-D07 全 PASS（D5 内联 vitest 28/331 + build:h5；D6「扫描 24 个 .vue，无命中」；D7 HEAD = `5a60aca`）。<br>**`internal/` 零改动佐证**：`git diff --stat e45c19b..HEAD -- internal/` → **无输出**；`core/repo.ts` / `submit.ts` / `sync.ts` 亦不在改动清单。 |
+| 发布前硬检查 | ① 模板 `.value` 扫描 `grep -nE '="[^"]*\.value|\{\{[^}]*\.value' apps/mobile/src/pages/*/*.vue` → **无输出**（acceptance D6 亦报「扫描 24 个 .vue，无命中」）。<br>② `build:app` 产物 `\.value\.value`：本册页面产物 `app-service.js` 计数 **0**；仅 uni-app 框架自带 `uni-app-view.umd.js` 3 处（checkbox/radio 内部实现 `t.value.value` 等，`node_modules` 内置、非本册引入）。 |
+| 发布与验签 | 随批次 `0.16.0` / `21` **单次发布**，本册**不单独发版**。本册**零节点改动 ⇒ 不交叉编译 / 不部署节点二进制**（`/opt/base/based` 未动）。`manifest.json` 版本改号（`0.15.0`/`20` → `0.16.0`/`21`）与四步发布（云打包 APK → 上传 `/opt/appdl/base-0.16.0.apk` → 落地页整页重写改指 → `based release` 签发落 `/opt/base-cache/data/release.json`）**留批次收口 REL**。 |
+| 真机验收 | **待人工（AC 8）**——新建课程（断网）→ 本区立刻可见（待补发）→ 联网转「已同步」；有网新建 → 立刻可见且可点开看正文。<br>**AC 1**｜逻辑单测覆盖，端到端**待人工**（新建保存后立刻可见 + `pending`/`failed` 文案）。<br>**AC 2**｜**通过**（单测四象限：`pending`→待补发 / `failed`→失败+`reason` / `sent` 且包表有→不列出 / `sent` 且包表无→标已同步）。<br>**AC 3**｜桥单测通过（`containerFormFromLedger` 字段与 `loadContainerForm` 一致），点击渲染端到端**待人工**。<br>**AC 4**｜**通过**（`buildMyCreatedView` 去重单测）。<br>**AC 5**｜**待人工**（四类新建保存后从本区进入看内容，端到端）。<br>**AC 6**｜**通过**（`git diff` 佐证：`internal/**` 与包表 / 同步 / 台账 DDL / 六方法零改动、零新接口）。<br>**AC 7**｜**通过**（Go 三连 + vitest 28/331 + `tsc` + `build:h5` + `acceptance-d` + `.value` 硬检查全通过）。 |
