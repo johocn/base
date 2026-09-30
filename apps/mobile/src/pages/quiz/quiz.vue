@@ -42,9 +42,26 @@ const itemId = ref('');
 const current = computed<ShuffledQuestion | null>(() => questions.value[index.value] ?? null);
 
 onLoad(async (query) => {
-  const raw = String((query as Record<string, string> | undefined)?.itemId ?? '');
+  const q = (query as Record<string, string> | undefined) ?? {};
+  const raw = String(q.itemId ?? '');
   try {
     const { repo } = await bootstrap();
+    // from=ledger：从「我创建的」区进入 → 题组取台账行，不读包表（册子 #51 §3.3）。
+    if (q.from === 'ledger') {
+      const sub = await repo.getSubmission(raw);
+      if (!sub) {
+        error.value = '本地没有这套题目，请返回先同步';
+        return;
+      }
+      const parsed = parseQuestionDoc(sub.questionJson);
+      if (parsed === null) {
+        error.value = '题目格式不支持，请升级节点内容';
+        return;
+      }
+      itemId.value = sub.itemId;
+      questions.value = shuffleAll(parsed, sub.itemId);
+      return;
+    }
     const alt = decodedId(raw);
     const row = (await repo.getQuiz(raw)) ?? (alt === raw ? null : await repo.getQuiz(alt));
     if (!row) {

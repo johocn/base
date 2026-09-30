@@ -47,6 +47,7 @@ import { attrsOf, childrenRowsOf, type AttachmentVM } from '../../core/container
 import { lessonNo } from '../../core/course-tree';
 import { renderMarkdown } from '../../core/markdown';
 import { canGovern, tagsOf, untaggedTargets } from '../../core/tags';
+import { containerFormFromLedger } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 
@@ -79,6 +80,31 @@ onLoad(async (query) => {
   lessonId.value = raw;
   try {
     const { opts, repo } = await bootstrap();
+    // from=ledger：从「我创建的」区进入 → 只用台账行集渲染，不读包表（册子 #51 §3.3）。
+    if (q.from === 'ledger') {
+      const sub = await repo.getSubmission(wait(raw));
+      if (!sub) {
+        error.value = '本地没有这个课时，请返回先同步';
+        return;
+      }
+      const form = containerFormFromLedger(sub);
+      lessonId.value = form.itemId;
+      const mid = form.itemId.indexOf('/lesson/');
+      courseId.value = cid !== '' ? cid : mid > 0 ? form.itemId.slice(0, mid) : '';
+      lessonLabel.value = form.title || form.itemId;
+      const meta: string[] = [];
+      if (form.instructor !== '') meta.push(`讲师 ${form.instructor}`);
+      if (form.difficulty !== '') meta.push(`难度 ${difficultyLabel(form.difficulty)}`);
+      if (form.durationSec > 0) meta.push(`约 ${Math.round(form.durationSec / 60)} 分钟`);
+      metaLine.value = meta.join(' · ');
+      bodyHtml.value = renderMarkdown(form.bodyMd);
+      // children 行标题回落 itemId（台账行集不含子项标题，与既有「本地未同步」回落同口径）
+      carriers.value = form.children.map((c) => ({ itemId: c.itemId, type: c.kind, title: c.itemId }));
+      attachments.value = form.attachments;
+      canEdit.value = sub.state === 'sent';
+      loaded.value = true;
+      return;
+    }
     const lid = wait(raw);
     const row = await repo.getItem(lid);
     const segs = await repo.listSegments(lid);

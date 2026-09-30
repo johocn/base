@@ -8,6 +8,15 @@
     <view class="searchbox" @click="openSearch">
       <text class="searchtext">搜索标题与正文</text>
     </view>
+    <view class="sec">
+      <text class="sec-title">我创建的（{{ myCreated.length }}）</text>
+      <text v-if="myCreated.length === 0" class="hint">还没有我创建的内容</text>
+      <view v-for="row in myCreated" :key="row.itemId" class="item" @click="openMyCreated(row)">
+        <text class="item-title">{{ typeLabel(row.type) }} · {{ row.title }}</text>
+        <text class="meta" :style="`color:${statusColor(row.state)}`">{{ row.statusLabel }}</text>
+        <text v-if="row.reason !== ''" class="reason">{{ row.reason }}</text>
+      </view>
+    </view>
     <text v-if="tip" class="tip">{{ tip }}</text>
     <text v-if="error" class="error">{{ error }}</text>
     <text v-if="syncBlocked" class="error">本地文件不可写，无法同步（设置 → 基座自检 可看原因）</text>
@@ -56,6 +65,7 @@ import { onShow } from '@dcloudio/uni-app';
 
 import { syncOnce } from '../../core/sync';
 import { groupCoursesByCategory, splitCourses } from '../../core/course-tree';
+import { buildMyCreatedView, type MyCreatedRow, type MyCreatedType } from '../../core/my-created';
 import type { ItemRow, SegmentRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 import { canSync } from '../../core/selfcheck';
@@ -71,6 +81,7 @@ const groups = ref<CategoryGroupVM[]>([]);
 const unclassified = ref<ItemRow[]>([]);
 const standalone = ref<ItemRow[]>([]);
 const collapsed = ref<Record<string, boolean>>({});
+const myCreated = ref<MyCreatedRow[]>([]);
 const total = computed(
   () => courses.value.length + groups.value.reduce((n, g) => n + g.courses.length, 0) + standalone.value.length,
 );
@@ -105,6 +116,11 @@ async function load() {
       ...tree.ungrouped,
       ...active.filter((i) => i.type === 'quiz' && i.itemId.startsWith('quiz/')),
     ].sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0));
+
+    // 「我创建的」区（册子 #51 §3）：台账行集 + 包表 id 集合（复用上面已取的 all，不重复查询）。
+    // 去重全在 buildMyCreatedView 内，此处只消费结果。
+    const subs = await repo.listSubmissions();
+    myCreated.value = buildMyCreatedView(subs, new Set(all.map((i) => i.itemId)));
 
     error.value = '';
   } catch (e) {
@@ -162,6 +178,39 @@ function openCourse(itemId: string) {
   uni.navigateTo({ url: `/pages/course/detail?courseId=${encodeURIComponent(itemId)}` });
 }
 
+const TYPE_LABEL: Record<MyCreatedType, string> = { course: '课程', lesson: '课时', article: '文章', quiz: '题库' };
+
+function typeLabel(t: MyCreatedType): string {
+  return TYPE_LABEL[t];
+}
+
+/** 状态色照「我的条目」页既有色值：待补发 / 失败 / 已同步。 */
+function statusColor(state: MyCreatedRow['state']): string {
+  return state === 'pending' ? '#b7791f' : state === 'failed' ? '#c53030' : '#888888';
+}
+
+/**
+ * 点开「我创建的」行 → 走既有详情页路由并带 `from=ledger`，详情页据此改从台账行集渲染。
+ * 课时行：台账无 courseId 字段，按 id 形态 `course/<cid>/lesson/<lid>` 剥出（与 lesson/detail 既有口径同源）。
+ */
+function openMyCreated(row: MyCreatedRow) {
+  const id = encodeURIComponent(row.itemId);
+  if (row.type === 'course') {
+    uni.navigateTo({ url: `/pages/course/detail?courseId=${id}&from=ledger` });
+    return;
+  }
+  if (row.type === 'lesson') {
+    const mid = row.itemId.indexOf('/lesson/');
+    const cid = mid > 0 ? row.itemId.slice(0, mid) : '';
+    uni.navigateTo({
+      url: `/pages/lesson/detail?courseId=${encodeURIComponent(cid)}&lessonId=${id}&from=ledger`,
+    });
+    return;
+  }
+  const page = row.type === 'quiz' ? 'quiz/quiz' : 'article/article';
+  uni.navigateTo({ url: `/pages/${page}?itemId=${id}&from=ledger` });
+}
+
 onShow(() => {
   void load();
 });
@@ -179,6 +228,9 @@ onShow(() => {
 .error { color: #c53030; font-size: 13px; }
 .searchbox { padding: 10px 12px; margin: 8px 0 12px; background: #f5f5f5; border-radius: 6px; }
 .searchtext { color: #999999; font-size: 14px; }
+.sec { margin-bottom: 18px; }
+.sec-title { display: block; font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.reason { display: block; color: #c53030; font-size: 13px; }
 .group { display: block; margin: 16px 0 4px; color: #888888; font-size: 13px; }
 .group-cat { color: #2b6cb0; }
 </style>

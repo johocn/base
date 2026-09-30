@@ -80,10 +80,37 @@ const scrolled = ref(0);
 const themeLabel = computed(() => READER_THEME_LABEL[theme.value]);
 
 onLoad(async (query) => {
-  const raw = String((query as Record<string, string> | undefined)?.itemId ?? '');
+  const q = (query as Record<string, string> | undefined) ?? {};
+  const raw = String(q.itemId ?? '');
   itemId.value = raw;
   try {
     const { opts, repo } = await bootstrap();
+    // from=ledger：从「我创建的」区进入 → 正文取台账行，不读包表（册子 #51 §3.3）。
+    if (q.from === 'ledger') {
+      const sub = await repo.getSubmission(raw);
+      if (!sub) {
+        error.value = '本地没有这篇正文，请返回先同步';
+        return;
+      }
+      article.value = {
+        itemId: sub.itemId,
+        title: sub.title,
+        digest: '',
+        publishedAt: '',
+        tagsJson: '',
+        bodyMd: sub.bodyMd,
+        contentHash: '',
+        rev: '',
+      };
+      itemId.value = sub.itemId;
+      bodyHtml.value = renderMarkdown(sub.bodyMd);
+      theme.value = normalizeTheme(await repo.getConfig('reader_theme'));
+      fontScale.value = normalizeFontScale(await repo.getConfig('reader_font_scale'));
+      fav.value = await repo.isFavorite(sub.itemId);
+      await nextTick();
+      measure();
+      return;
+    }
     const alt = decodedId(raw);
     const row = (await repo.getArticle(raw)) ?? (alt === raw ? null : await repo.getArticle(alt));
     if (!row) {

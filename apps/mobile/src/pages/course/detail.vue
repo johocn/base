@@ -45,6 +45,7 @@ import { fetchBlob } from '../../core/blob';
 import { attrsOf, childCounts, childrenRowsOf, digestOf, type AttachmentVM } from '../../core/container-view';
 import { lessonNo } from '../../core/course-tree';
 import { canGovern, tagsOf, untaggedTargets } from '../../core/tags';
+import { containerFormFromLedger } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 
@@ -75,9 +76,39 @@ const error = ref('');
 const KIND_LABEL: Record<string, string> = { article: '文章', quiz: '测验', video: '视频', audio: '音频' };
 
 onLoad(async (query) => {
-  const raw = String((query as Record<string, string> | undefined)?.courseId ?? '');
+  const q = (query as Record<string, string> | undefined) ?? {};
+  const raw = String(q.courseId ?? '');
   try {
     const { opts, repo } = await bootstrap();
+    // from=ledger：从「我创建的」区进入 → 只用台账行集渲染，不读包表（册子 #51 §3.3）。
+    if (q.from === 'ledger') {
+      const row = await repo.getSubmission(raw);
+      if (!row) {
+        error.value = '本地没有这门课程，请返回先同步';
+        return;
+      }
+      const form = containerFormFromLedger(row);
+      courseId.value = form.itemId;
+      courseTitle.value = form.title || form.itemId;
+      digest.value = form.digest;
+      const meta: string[] = [];
+      if (form.instructor !== '') meta.push(`讲师 ${form.instructor}`);
+      if (form.difficulty !== '') meta.push(`难度 ${difficultyLabel(form.difficulty)}`);
+      if (form.durationSec > 0) meta.push(`共约 ${Math.round(form.durationSec / 60)} 分钟`);
+      metaLine.value = meta.join(' · ');
+      attachments.value = form.attachments;
+      // children 行标题回落 itemId（台账行集不含子项标题，与既有「本地未同步」回落同口径）
+      lessons.value = form.children.map((c, i) => ({
+        itemId: c.itemId,
+        no: i + 1,
+        title: c.itemId,
+        sub: '本地未同步（点开按 id 直接查）',
+        tags: [],
+      }));
+      canEdit.value = row.state === 'sent';
+      loaded.value = true;
+      return;
+    }
     const cid = decodedId(raw);
     const course = (await repo.getItem(raw)) ?? (cid === raw ? null : await repo.getItem(cid));
     if (!course) {
