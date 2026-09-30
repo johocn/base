@@ -17,6 +17,9 @@
     <text class="group">私信</text>
     <navigator url="/pages/dm/list" class="link">好友与私信</navigator>
 
+    <text class="group">标签</text>
+    <navigator url="/pages/tag/list" class="link">全部标签</navigator>
+
     <navigator url="/pages/favorite/favorite" class="link">我的收藏</navigator>
     <navigator url="/pages/setting/setting" class="link">设置</navigator>
   </view>

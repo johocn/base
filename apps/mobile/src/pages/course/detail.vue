@@ -5,10 +5,20 @@
       <text v-if="!loaded" class="hint">加载中…</text>
       <block v-else>
         <text class="title">{{ courseTitle }}</text>
+        <view class="tags">
+          <text v-for="t in courseTags" :key="t.tagId" class="tag" @click="openTag(t.tagId)">{{ tagLabel(t.tagId) }}</text>
+          <text v-if="pendingOf(courseId)" class="tag-pending" @click="applyTag(courseId, 'course')">待补标签 · 补标签</text>
+          <text v-else-if="courseTags.length > 0" class="tag-note" @click="proposeTag(courseTags[0]!.tagId)">已有标签，改动需提案</text>
+        </view>
         <text v-if="lessons.length === 0" class="hint">这门课程还没有课时</text>
         <block v-for="ls in lessons" :key="ls.itemId">
           <view class="lesson" @click="onLesson(ls)">
             <text class="lesson-title">{{ lessonLabel(ls) }}</text>
+          </view>
+          <view class="tags">
+            <text v-for="t in lessonTags[ls.itemId] ?? []" :key="t.tagId" class="tag" @click.stop="openTag(t.tagId)">{{ tagLabel(t.tagId) }}</text>
+            <text v-if="pendingOf(ls.itemId)" class="tag-pending" @click.stop="applyTag(ls.itemId, 'lesson')">待补标签 · 补标签</text>
+            <text v-else-if="(lessonTags[ls.itemId] ?? []).length > 0" class="tag-note" @click.stop="proposeTag(lessonTags[ls.itemId]![0]!.tagId)">已有标签，改动需提案</text>
           </view>
           <block v-if="expanded === ls.itemId">
             <view v-for="c in ls.carriers" :key="c.itemId" class="carrier" @click="openCarrier(c)">
@@ -35,6 +45,8 @@ import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
 import { childrenOf, lessonNo } from '../../core/course-tree';
+import { canGovern, tagsOf, untaggedTargets } from '../../core/tags';
+import type { TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 
 interface CarrierVM {
@@ -64,12 +76,18 @@ const expanded = ref('');
 const loaded = ref(false);
 const error = ref('');
 const quizGroups = ref<QuizGroupVM[]>([]);
+const courseId = ref('');
+const courseTags = ref<TagLinkRow[]>([]);
+const lessonTags = ref<Record<string, TagLinkRow[]>>({});
+const tagTitles = ref<Record<string, string>>({});
+const untagged = ref<Set<string>>(new Set());
+const governor = ref(false);
 const quizTotal = computed(() => quizGroups.value.reduce((n, g) => n + g.quizzes.length, 0));
 
 onLoad(async (query) => {
   const raw = String((query as Record<string, string> | undefined)?.courseId ?? '');
   try {
-    const { repo } = await bootstrap();
+    const { opts, repo } = await bootstrap();
     const alt = decodedId(raw);
     const course = (await repo.getItem(raw)) ?? (alt === raw ? null : await repo.getItem(alt));
     if (!course) {
@@ -102,6 +120,16 @@ onLoad(async (query) => {
     }
     lessons.value = acc;
     quizGroups.value = quizzesByLesson;
+    courseId.value = course.itemId;
+    const links = await repo.listTagLinks();
+    const all = await repo.listItems();
+    untagged.value = new Set(untaggedTargets(all, links));
+    tagTitles.value = Object.fromEntries(all.filter((i) => i.type === 'tag').map((i) => [i.itemId, i.title || i.itemId]));
+    courseTags.value = tagsOf(links, course.itemId);
+    const byLesson: Record<string, TagLinkRow[]> = {};
+    for (const ls of acc) byLesson[ls.itemId] = tagsOf(links, ls.itemId);
+    lessonTags.value = byLesson;
+    governor.value = await canGovern({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
     loaded.value = true;
   } catch (e) {
     error.value = (e as Error).message;
@@ -152,6 +180,28 @@ function decodedId(raw: string): string {
     return raw;
   }
 }
+
+function tagLabel(tagId: string): string {
+  return tagTitles.value[tagId] ?? tagId;
+}
+
+/** 「待补标签」只在治理人眼里出现；非治理人看不到任何提示（册子 §3.6） */
+function pendingOf(id: string): boolean {
+  return governor.value && untagged.value.has(id);
+}
+
+function openTag(tagId: string) {
+  uni.navigateTo({ url: `/pages/tag/detail?tagId=${encodeURIComponent(tagId)}` });
+}
+
+function applyTag(targetId: string, kind: string) {
+  uni.navigateTo({ url: `/pages/tag/apply?target=${encodeURIComponent(targetId)}&kind=${kind}` });
+}
+
+/** 已有标签的内容要改动 = 对该标签提 `edit` 提案（提案粒度是整个关联集，册子 §3.5） */
+function proposeTag(tagId: string) {
+  uni.navigateTo({ url: `/pages/governance/governance?itemId=${encodeURIComponent(tagId)}` });
+}
 </script>
 
 <style>
@@ -165,4 +215,8 @@ function decodedId(raw: string): string {
 .error { color: #c53030; font-size: 13px; }
 .group { display: block; margin: 20px 0 6px; color: #888888; font-size: 13px; }
 .quiz-lesson { display: block; margin: 10px 0 2px; color: #666666; font-size: 13px; }
+.tags { display: flex; flex-wrap: wrap; align-items: center; margin: 0 0 10px; }
+.tag { padding: 2px 8px; margin: 0 8px 6px 0; background: #ebf8ff; color: #2b6cb0; border-radius: 10px; font-size: 12px; }
+.tag-pending { padding: 2px 8px; margin: 0 8px 6px 0; background: #fffaf0; color: #b7791f; border-radius: 10px; font-size: 12px; }
+.tag-note { margin: 0 0 6px; color: #888888; font-size: 12px; }
 </style>

@@ -6,6 +6,11 @@
       <image v-if="coverPath" :src="coverPath" mode="widthFix" class="cover" />
       <text class="title">{{ article?.title }}</text>
       <text class="meta">{{ article?.publishedAt }}</text>
+      <view class="tags">
+        <text v-for="t in articleTags" :key="t.tagId" class="tag" @click="openTag(t.tagId)">{{ tagLabel(t.tagId) }}</text>
+        <text v-if="pendingTag" class="tag-pending" @click="applyTag">待补标签 · 补标签</text>
+        <text v-else-if="articleTags.length > 0" class="tag-note" @click="proposeTag">已有标签，改动需提案</text>
+      </view>
       <view class="actions">
         <text class="act" :class="fav ? 'act-on' : ''" @click="toggleFav">{{ fav ? '已收藏' : '收藏' }}</text>
         <text class="act" @click="cycleFont">A {{ fontScale }}</text>
@@ -45,7 +50,8 @@ import {
 } from '../../core/state';
 import { childrenOf, lessonOfCarrier } from '../../core/course-tree';
 import { setPendingTarget } from '../../core/comment';
-import type { ArticleRow } from '../../core/types';
+import { canGovern, tagsOf, untaggedTargets } from '../../core/tags';
+import type { ArticleRow, TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 
 const article = ref<ArticleRow | null>(null);
@@ -61,6 +67,11 @@ interface SiblingQuiz {
   title: string;
 }
 const siblingQuizzes = ref<SiblingQuiz[]>([]);
+const articleTags = ref<TagLinkRow[]>([]);
+const tagTitles = ref<Record<string, string>>({});
+const untagged = ref<Set<string>>(new Set());
+const governor = ref(false);
+const pendingTag = computed(() => governor.value && untagged.value.has(itemId.value));
 const itemId = ref('');
 /** 可滚动高度 = 正文实际高度 − 视口高度；为 0 表示还没量到，此时不显示进度条 */
 const scrollable = ref(0);
@@ -72,7 +83,7 @@ onLoad(async (query) => {
   const raw = String((query as Record<string, string> | undefined)?.itemId ?? '');
   itemId.value = raw;
   try {
-    const { repo } = await bootstrap();
+    const { opts, repo } = await bootstrap();
     const alt = decodedId(raw);
     const row = (await repo.getArticle(raw)) ?? (alt === raw ? null : await repo.getArticle(alt));
     if (!row) {
@@ -103,6 +114,12 @@ onLoad(async (query) => {
       }
       siblingQuizzes.value = acc;
     }
+    const links = await repo.listTagLinks();
+    const all = await repo.listItems();
+    untagged.value = new Set(untaggedTargets(all, links));
+    tagTitles.value = Object.fromEntries(all.filter((i) => i.type === 'tag').map((i) => [i.itemId, i.title || i.itemId]));
+    articleTags.value = tagsOf(links, row.itemId);
+    governor.value = await canGovern({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
     // 进入即标记已读；readAtNext 保证只写首次
     await repo.markRead(row.itemId, new Date().toISOString());
     await nextTick();
@@ -177,6 +194,22 @@ function openGovernance() {
   uni.navigateTo({ url: `/pages/governance/governance?itemId=${encodeURIComponent(itemId.value)}` });
 }
 
+function tagLabel(tagId: string): string {
+  return tagTitles.value[tagId] ?? tagId;
+}
+
+function openTag(tagId: string) {
+  uni.navigateTo({ url: `/pages/tag/detail?tagId=${encodeURIComponent(tagId)}` });
+}
+
+function applyTag() {
+  uni.navigateTo({ url: `/pages/tag/apply?target=${encodeURIComponent(itemId.value)}&kind=article` });
+}
+
+function proposeTag() {
+  uni.navigateTo({ url: `/pages/governance/governance?itemId=${encodeURIComponent(articleTags.value[0]!.tagId)}` });
+}
+
 /** 页面间传参在个别机型上会保留百分号编码（itemId 含 `:` 会变成 %3A），按原样查不到就按解码后再查 */
 function decodedId(raw: string): string {
   try {
@@ -201,6 +234,10 @@ function decodedId(raw: string): string {
 .group { display: block; margin: 16px 0 6px; color: #888888; font-size: 13px; }
 .quiz-item { padding: 10px 0; border-bottom: 1px solid #f2f2f2; }
 .quiz-title { color: #2b6cb0; font-size: 15px; }
+.tags { display: flex; flex-wrap: wrap; align-items: center; margin: 0 0 10px; }
+.tag { padding: 2px 8px; margin: 0 8px 6px 0; background: #ebf8ff; color: #2b6cb0; border-radius: 10px; font-size: 12px; }
+.tag-pending { padding: 2px 8px; margin: 0 8px 6px 0; background: #fffaf0; color: #b7791f; border-radius: 10px; font-size: 12px; }
+.tag-note { margin: 0 0 6px; color: #888888; font-size: 12px; }
 
 /* 护眼：米黄纸底 + 暖褐字，介于浅色与深色之间 */
 .wrap.sepia { background: #f4ecd8; color: #4a4034; }

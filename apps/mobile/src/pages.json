@@ -71,6 +71,18 @@
     {
       "path": "pages/dm/chat",
       "style": { "navigationBarTitleText": "私信会话" }
+    },
+    {
+      "path": "pages/tag/list",
+      "style": { "navigationBarTitleText": "全部标签" }
+    },
+    {
+      "path": "pages/tag/detail",
+      "style": { "navigationBarTitleText": "标签" }
+    },
+    {
+      "path": "pages/tag/apply",
+      "style": { "navigationBarTitleText": "补标签" }
     }
   ],
   "tabBar": {

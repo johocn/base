@@ -42,6 +42,9 @@
         <text class="cmt-meta">{{ short(c.actor) }} · {{ rel(c.createdAt) }}</text>
         <text v-if="c.replyTo" class="cmt-reply">回复 {{ short(c.replyTo) }}</text>
         <text class="cmt-text">{{ c.text }}</text>
+        <view v-if="(tagsByEvent[c.eventId] ?? []).length > 0" class="cmt-tags">
+          <text v-for="(t, i) in tagsByEvent[c.eventId] ?? []" :key="i" class="cmt-tag">{{ t }}</text>
+        </view>
       </view>
       <text v-if="loading" class="hint">加载中…</text>
       <text v-else-if="!error && list.length > 0 && nextCursor === null" class="hint">没有更多了</text>
@@ -101,6 +104,8 @@ const notice = ref('');
 const loading = ref(false);
 const sending = ref(false);
 const draft = ref('');
+/** eventId → 该评论已有标签的标题列表（空数组/无键 = 不显示，不占位） */
+const tagsByEvent = ref<Record<string, string[]>>({});
 
 /** 能力标志：启动时只有 cryptoOk 有值，其余 unknown（unknown 不降级） */
 const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
@@ -167,6 +172,7 @@ async function refresh() {
     const page = await listComments(opts.value, { targetId: target.value });
     nextCursor.value = page.nextCursor;
     list.value = await withText(visible(page.items), opts.value);
+    await attachTags(list.value);
   } catch (e) {
     error.value = e instanceof CommentError ? e.message : (e as Error).message;
     list.value = [];
@@ -183,6 +189,7 @@ async function loadMore() {
     const page = await listComments(opts.value, { targetId: target.value, cursor: nextCursor.value });
     nextCursor.value = page.nextCursor;
     list.value = [...list.value, ...(await withText(visible(page.items), opts.value))];
+    await attachTags(list.value);
   } catch (e) {
     error.value = e instanceof CommentError ? e.message : (e as Error).message;
   } finally {
@@ -200,6 +207,18 @@ async function withText(rows: CommentItem[], o: CommentOptions): Promise<Row[]> 
   return Promise.all(
     rows.map(async (r) => ({ ...r, text: (await fetchCommentText(o, r.payloadCid)) ?? '正文暂不可用' })),
   );
+}
+
+/** 逐条挂标签：只查当前可见这几条评论的关联行，不整表扫（仓储侧走 `idx_tag_links_target`） */
+async function attachTags(rows: Row[]) {
+  if (!opts.value) return;
+  const links = await opts.value.repo.listTagLinksOfTargets(rows.map((r) => r.eventId));
+  const map: Record<string, string[]> = {};
+  for (const l of links) {
+    const t = await opts.value.repo.getItem(l.tagId);
+    (map[l.targetId] ??= []).push(t?.title || l.tagId);
+  }
+  tagsByEvent.value = map;
 }
 
 function pick(itemId: string) {
@@ -277,6 +296,8 @@ onReachBottom(() => {
 .cmt-meta { display: block; color: #888888; font-size: 12px; }
 .cmt-reply { display: block; color: #888888; font-size: 12px; }
 .cmt-text { display: block; margin-top: 4px; font-size: 15px; line-height: 1.6; }
+.cmt-tags { display: flex; flex-wrap: wrap; margin-top: 4px; }
+.cmt-tag { padding: 1px 8px; margin: 0 8px 4px 0; background: #ebf8ff; color: #2b6cb0; border-radius: 10px; font-size: 12px; }
 .hint { display: block; margin-top: 8px; color: #888888; font-size: 13px; }
 .error { display: block; color: #c53030; font-size: 13px; }
 .pending { margin-bottom: 12px; padding: 10px; background: #fffaf0; border: 1px solid #f6e05e; border-radius: 6px; }

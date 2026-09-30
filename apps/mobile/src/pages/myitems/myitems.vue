@@ -12,7 +12,7 @@
         <text class="meta">{{ row.itemId }}</text>
         <text v-if="row.reason" class="meta">{{ row.reason }}</text>
         <view class="acts">
-          <text class="act" @click="edit(row)">修改</text>
+          <text v-if="row.type !== 'tag'" class="act" @click="edit(row)">修改</text>
           <text class="act" @click="remove(row)">删除</text>
         </view>
       </view>
@@ -27,7 +27,7 @@
         <text class="meta">{{ row.itemId }} · {{ row.created === 1 ? '首投' : '更新' }} · {{ row.sentAt.slice(0, 10) }}</text>
         <view class="acts">
           <text class="act" @click="open(row)">查看</text>
-          <text class="act" @click="edit(row)">重投更新</text>
+          <text v-if="row.type !== 'tag'" class="act" @click="edit(row)">重投更新</text>
         </view>
       </view>
     </view>
@@ -84,6 +84,10 @@ function edit(row: MySubmissionRow) {
 }
 
 function open(row: MySubmissionRow) {
+  if (row.type === 'tag') {
+    uni.navigateTo({ url: `/pages/tag/detail?tagId=${encodeURIComponent(row.itemId)}` });
+    return;
+  }
   const page = row.type === 'quiz' ? 'quiz/quiz' : 'article/article';
   uni.navigateTo({ url: `/pages/${page}?itemId=${encodeURIComponent(row.itemId)}` });
 }
