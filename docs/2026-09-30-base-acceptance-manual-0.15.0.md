@@ -271,6 +271,8 @@ sha256sum /opt/base/based
 ## 5. D 组：自动化门禁（可复跑）
 
 > AC 1–9 的自动面。**本机**即可跑，不需部署机；全绿是本手册的可信前提。
+>
+> 一键复跑：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/acceptance-d.ps1`（逐条执行下表 D1–D7，末尾打印 PASS/FAIL 汇总，任一失败退出码 1）。
 
 | # | 命令（cwd） | 对应 AC |
 |---|---|---|
