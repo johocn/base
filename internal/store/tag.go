@@ -79,7 +79,7 @@ func replaceTagLinksTx(tx *sql.Tx, tagID string, links []TagLink) (string, error
 			return "", fmt.Errorf("store: 写 tag_links %s→%s: %w", tagID, s.Text, err)
 		}
 	}
-	if _, err := tx.Exec(`DELETE FROM segments WHERE item_id=?`, tagID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM segments WHERE item_id=? AND seq>=1`, tagID); err != nil {
 		return "", fmt.Errorf("store: 清旧 segments %s: %w", tagID, err)
 	}
 	for _, s := range segs {

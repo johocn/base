@@ -128,6 +128,18 @@ func digestTextOf(segs []store.Segment) string {
 	return ""
 }
 
+// attrSegsOf 取既有 segments 里的属性行（seq<0），按 seq 升序原样返回（本册 §2.1 铁律 1）。
+// 重建容器时这些行必须原样保留：它们是课程 / 课时的封面、讲师、难度等字段的唯一载体。
+func attrSegsOf(segs []store.Segment) []store.Segment {
+	out := []store.Segment{}
+	for _, s := range segs {
+		if s.Seq < 0 {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // rebuildContainer 合并式重建一个容器条目的 segments。
 // children 为本次 Run 声明的子项（已排序），digest 为空则省略 seq=0 行。
 func rebuildContainer(st *store.Store, itemID, source, typ, title, digest string, children []string) error {
@@ -136,7 +148,7 @@ func rebuildContainer(st *store.Store, itemID, source, typ, title, digest string
 		return err
 	}
 	merged := mergeChildren(childIDsOf(existing), children)
-	segs := []store.Segment{}
+	segs := attrSegsOf(existing) // 先搬既有属性行，再拼 seq=0 与 seq>=1
 	seq := 1
 	if digest != "" {
 		segs = append(segs, store.Segment{Seq: 0, Kind: "digest", Text: digest})
@@ -218,18 +230,18 @@ func rebuildCategories(st *store.Store, items []parsedMD) []string {
 	errs := []string{}
 	for _, slug := range ordered {
 		itemID := "category/" + slug
+		existingSegs, err := st.ListSegments(itemID)
+		if err != nil {
+			errs = append(errs, itemID+": "+err.Error())
+			continue
+		}
 		if digest[slug] == "" {
-			segs, err := st.ListSegments(itemID)
-			if err != nil {
-				errs = append(errs, itemID+": "+err.Error())
-				continue
-			}
-			digest[slug] = digestTextOf(segs)
+			digest[slug] = digestTextOf(existingSegs)
 		}
 		courses := append([]string{}, bySlug[slug]...)
 		sort.Strings(courses)
 
-		segs := []store.Segment{}
+		segs := attrSegsOf(existingSegs)
 		seq := 1
 		if digest[slug] != "" {
 			segs = append(segs, store.Segment{Seq: 0, Kind: "digest", Text: digest[slug]})
