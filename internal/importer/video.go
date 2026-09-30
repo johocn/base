@@ -3,6 +3,7 @@ package importer
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -34,6 +35,7 @@ type VideoResult struct {
 	TotalSize   int64
 	Written     int // 本次真正写盘的块数（已存在的同字节块跳过写盘）
 	ContentHash string
+	Warnings    []string // 投稿域课时容器被跳过等非致命提示
 }
 
 // ImportVideo 把一个文件按定长 1 MiB 分块入库。
@@ -114,7 +116,12 @@ func ImportVideo(st *store.Store, opt VideoOptions) (VideoResult, error) {
 		return res, fmt.Errorf("importer: 登记条目: %w", err)
 	}
 	if err := ensureLessonChild(st, opt.Course, opt.Lesson, itemID); err != nil {
-		return res, fmt.Errorf("importer: 并入课时清单: %w", err)
+		if errors.Is(err, errSubmittedContainer) {
+			res.Warnings = append(res.Warnings, "skipped: "+
+				fmt.Sprintf("course/%s/lesson/%s", opt.Course, opt.Lesson)+" 投稿域，导入器不覆盖")
+		} else {
+			return res, fmt.Errorf("importer: 并入课时清单: %w", err)
+		}
 	}
 	return res, nil
 }

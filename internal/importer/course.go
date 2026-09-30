@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -8,6 +9,20 @@ import (
 	"github.com/johocn/base/internal/protocol"
 	"github.com/johocn/base/internal/store"
 )
+
+// errSubmittedContainer 表示目标容器属于投稿域（items.author_id 非空），导入器一律不覆盖。
+// 它不是失败：调用方把它转成 Result.Warnings（本册 §6.3）。
+var errSubmittedContainer = errors.New("importer: 投稿域容器，导入器不覆盖")
+
+// isSubmittedContainer 判定一个容器是否已由投稿登记（author_id 非空）。
+// 空归属的存量容器（导入器自建）返回 false，故导入器仍可重建它们（本册 §2.1 占用口径）。
+func isSubmittedContainer(st *store.Store, itemID string) (bool, error) {
+	it, ok, err := st.GetItem(itemID)
+	if err != nil {
+		return false, err
+	}
+	return ok && it.AuthorID != "", nil
+}
 
 // placement 是一个载体（article / video / quiz）的归属解析结果（册子 §4.2）。
 type placement struct {
@@ -143,6 +158,13 @@ func attrSegsOf(segs []store.Segment) []store.Segment {
 // rebuildContainer 合并式重建一个容器条目的 segments。
 // children 为本次 Run 声明的子项（已排序），digest 为空则省略 seq=0 行。
 func rebuildContainer(st *store.Store, itemID, source, typ, title, digest string, children []string) error {
+	submitted, err := isSubmittedContainer(st, itemID)
+	if err != nil {
+		return err
+	}
+	if submitted {
+		return errSubmittedContainer
+	}
 	existing, err := st.ListSegments(itemID)
 	if err != nil {
 		return err

@@ -4,6 +4,7 @@ package importer
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,6 +37,7 @@ type Result struct {
 	Imported int
 	Failed   int
 	Errors   []string
+	Warnings []string
 }
 
 // Options 是 Run 的行为开关。
@@ -236,10 +238,14 @@ func Run(st *store.Store, dir string, opts Options) (Result, error) {
 		res.Imported++
 	}
 
-	// 阶段 3：合并式重建受影响容器。
-	for _, e := range rebuildContainers(st, items) {
-		res.Failed++
-		res.Errors = append(res.Errors, e)
+	// 阶段 3：合并式重建受影响容器。投稿域容器不覆盖，转 warning 不转 error。
+	{
+		errs, warns := rebuildContainers(st, items)
+		res.Warnings = append(res.Warnings, warns...)
+		for _, e := range errs {
+			res.Failed++
+			res.Errors = append(res.Errors, e)
+		}
 	}
 
 	// 阶段 3.5：分类容器全量重算（册子 §3.2）。必须在课程/课时容器重建之后，
@@ -274,7 +280,7 @@ func Run(st *store.Store, dir string, opts Options) (Result, error) {
 
 // rebuildContainers 按 (course, lesson) 归组做合并式重建（册子 §4.2 规则 6）：
 // 先重建全部课时容器，再重建受影响课程容器（lesson id 升序）。返回失败明细，不整批失败。
-func rebuildContainers(st *store.Store, items []parsedMD) []string {
+func rebuildContainers(st *store.Store, items []parsedMD) (errs, warns []string) {
 	type lessonKey struct{ course, lesson string }
 
 	groups := map[lessonKey][]placement{}
@@ -314,7 +320,7 @@ func rebuildContainers(st *store.Store, items []parsedMD) []string {
 		return keys[i].lesson < keys[j].lesson
 	})
 
-	errs := []string{}
+	errs, warns = []string{}, []string{}
 	courseLessons := map[string][]string{} // cid → lesson item_id（lid 升序）
 	for _, k := range keys {
 		declared := sortDeclared(groups[k])
@@ -328,7 +334,11 @@ func rebuildContainers(st *store.Store, items []parsedMD) []string {
 			title = k.lesson
 		}
 		if err := rebuildContainer(st, lessonID, "lesson", "lesson", title, lessonDigest[k], children); err != nil {
-			errs = append(errs, lessonID+": "+err.Error())
+			if errors.Is(err, errSubmittedContainer) {
+				warns = append(warns, "skipped: "+lessonID+" 投稿域，导入器不覆盖")
+			} else {
+				errs = append(errs, lessonID+": "+err.Error())
+			}
 		}
 		courseLessons[k.course] = append(courseLessons[k.course], lessonID)
 	}
@@ -345,10 +355,14 @@ func rebuildContainers(st *store.Store, items []parsedMD) []string {
 			title = cid
 		}
 		if err := rebuildContainer(st, courseID, "course", "course", title, courseDigest[cid], courseLessons[cid]); err != nil {
-			errs = append(errs, courseID+": "+err.Error())
+			if errors.Is(err, errSubmittedContainer) {
+				warns = append(warns, "skipped: "+courseID+" 投稿域，导入器不覆盖")
+			} else {
+				errs = append(errs, courseID+": "+err.Error())
+			}
 		}
 	}
-	return errs
+	return errs, warns
 }
 
 // upsertArticleDoc 把一个解析好的文章写进内容库（口径与既有实现一致）。
