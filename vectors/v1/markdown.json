@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "h1 标题",
+      "src": "# 标题",
+      "html": "<h1>标题</h1>"
+    },
+    {
+      "name": "h2 标题",
+      "src": "## 标题",
+      "html": "<h2>标题</h2>"
+    },
+    {
+      "name": "h3 标题",
+      "src": "### 标题",
+      "html": "<h3>标题</h3>"
+    },
+    {
+      "name": "四级标题降级为 h3",
+      "src": "#### 深标题",
+      "html": "<h3>深标题</h3>"
+    },
+    {
+      "name": "粗体",
+      "src": "**粗**",
+      "html": "<p><strong>粗</strong></p>"
+    },
+    {
+      "name": "斜体",
+      "src": "*斜*",
+      "html": "<p><em>斜</em></p>"
+    },
+    {
+      "name": "粗斜嵌套",
+      "src": "**粗 *斜* 粗**",
+      "html": "<p><strong>粗 <em>斜</em> 粗</strong></p>"
+    },
+    {
+      "name": "行内代码",
+      "src": "`code`",
+      "html": "<p><code>code</code></p>"
+    },
+    {
+      "name": "无序列表",
+      "src": "- a\n- b",
+      "html": "<ul><li>a</li><li>b</li></ul>"
+    },
+    {
+      "name": "有序列表",
+      "src": "1. a\n2. b",
+      "html": "<ol><li>a</li><li>b</li></ol>"
+    },
+    {
+      "name": "两空格嵌套列表",
+      "src": "- a\n  - b",
+      "html": "<ul><li>a<ul><li>b</li></ul></li></ul>"
+    },
+    {
+      "name": "引用连续行合并为一块",
+      "src": "> a\n> b",
+      "html": "<blockquote>a<br>b</blockquote>"
+    },
+    {
+      "name": "分隔线",
+      "src": "---",
+      "html": "<hr>"
+    },
+    {
+      "name": "链接",
+      "src": "[文字](http://example.com)",
+      "html": "<p><a href=\"http://example.com\">文字</a></p>"
+    },
+    {
+      "name": "图片",
+      "src": "![alt](http://example.com/a.png)",
+      "html": "<p><img src=\"http://example.com/a.png\" alt=\"alt\"></p>"
+    },
+    {
+      "name": "空行分段",
+      "src": "甲\n\n乙",
+      "html": "<p>甲</p><p>乙</p>"
+    },
+    {
+      "name": "单换行产 br",
+      "src": "甲\n乙",
+      "html": "<p>甲<br>乙</p>"
+    },
+    {
+      "name": "歧义消解链接 https",
+      "src": "[A](https://x)",
+      "html": "<p><a href=\"https://x\">A</a></p>"
+    },
+    {
+      "name": "变色 c-red",
+      "src": "[A]{.c-red}",
+      "html": "<p><span class=\"c-red\">A</span></p>"
+    },
+    {
+      "name": "变色 c-orange",
+      "src": "[橙]{.c-orange}",
+      "html": "<p><span class=\"c-orange\">橙</span></p>"
+    },
+    {
+      "name": "变色 c-green",
+      "src": "[绿]{.c-green}",
+      "html": "<p><span class=\"c-green\">绿</span></p>"
+    },
+    {
+      "name": "变色 c-blue",
+      "src": "[蓝]{.c-blue}",
+      "html": "<p><span class=\"c-blue\">蓝</span></p>"
+    },
+    {
+      "name": "变色 c-purple",
+      "src": "[紫]{.c-purple}",
+      "html": "<p><span class=\"c-purple\">紫</span></p>"
+    },
+    {
+      "name": "变色 c-gray",
+      "src": "[灰]{.c-gray}",
+      "html": "<p><span class=\"c-gray\">灰</span></p>"
+    },
+    {
+      "name": "变色 c-mark",
+      "src": "[高亮]{.c-mark}",
+      "html": "<p><span class=\"c-mark\">高亮</span></p>"
+    },
+    {
+      "name": "变色内允许行内嵌套",
+      "src": "[**粗**]{.c-blue}",
+      "html": "<p><span class=\"c-blue\"><strong>粗</strong></span></p>"
+    },
+    {
+      "name": "方括号都不匹配原样输出",
+      "src": "[A]",
+      "html": "<p>[A]</p>"
+    },
+    {
+      "name": "未知类名整段字面量",
+      "src": "[文字]{.c-foo}",
+      "html": "<p>[文字]{.c-foo}</p>"
+    },
+    {
+      "name": "转义方括号",
+      "src": "\\[A\\]",
+      "html": "<p>[A]</p>"
+    },
+    {
+      "name": "转义优先于变色规则",
+      "src": "\\[A\\]{.c-red}",
+      "html": "<p>[A]{.c-red}</p>"
+    },
+    {
+      "name": "未闭合粗体字面量",
+      "src": "**未闭合",
+      "html": "<p>**未闭合</p>"
+    },
+    {
+      "name": "未闭合行内代码字面量",
+      "src": "`未闭合",
+      "html": "<p>`未闭合</p>"
+    },
+    {
+      "name": "引用无空格降级字面量",
+      "src": ">无空格",
+      "html": "<p>&gt;无空格</p>"
+    },
+    {
+      "name": "文本节点转义",
+      "src": "5 < 6 & 7",
+      "html": "<p>5 &lt; 6 &amp; 7</p>"
+    },
+    {
+      "name": "javascript 链接丢 href 留文本",
+      "src": "[x](javascript:alert(1))",
+      "html": "<p><a>x</a></p>"
+    },
+    {
+      "name": "javascript 图片丢 src 留 alt",
+      "src": "![x](javascript:alert(1))",
+      "html": "<p><img alt=\"x\"></p>"
+    },
+    {
+      "name": "onerror 标签按文本处理",
+      "src": "<img src=x onerror=alert(1)>",
+      "html": "<p>&lt;img src=x onerror=alert(1)&gt;</p>"
+    },
+    {
+      "name": "非白名单标签按文本处理",
+      "src": "<script>x</script>",
+      "html": "<p>&lt;script&gt;x&lt;/script&gt;</p>"
+    },
+    {
+      "name": "data 协议链接丢 href",
+      "src": "[x](data:text/html,hi)",
+      "html": "<p><a>x</a></p>"
+    },
+    {
+      "name": "相对路径图片丢 src",
+      "src": "![图片](./pic.png)",
+      "html": "<p><img alt=\"图片\"></p>"
+    },
+    {
+      "name": "链接无多余属性",
+      "src": "[x](https://a)",
+      "html": "<p><a href=\"https://a\">x</a></p>"
+    },
+    {
+      "name": "老数据纯文本等价",
+      "src": "本课讲解 Markdown 渲染。\n\n请按顺序阅读。",
+      "html": "<p>本课讲解 Markdown 渲染。</p><p>请按顺序阅读。</p>"
+    }
+  ]
+}
