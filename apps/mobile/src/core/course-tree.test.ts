@@ -162,7 +162,7 @@ describe('lessonOfCarrier', () => {
   });
 });
 
-describe('groupCoursesByCategory：分组读取（以 attr.category 为唯一依据）', () => {
+describe('groupCoursesByCategory：分组读取（双来源 + attr.category 优先）', () => {
   const math: ItemRow = { ...item('category/math', 'category'), title: '数学' };
   const physics: ItemRow = { ...item('category/physics', 'category'), title: '物理' };
   const c1 = item('course/c1', 'course');
@@ -185,16 +185,16 @@ describe('groupCoursesByCategory：分组读取（以 attr.category 为唯一依
     expect(got.unclassified).toEqual([]);
   });
 
-  it('无 attr.category 的课程不落任何组，进未归类（清单行也不救）', () => {
+  it('主判据②：无 attr.category 且 category/math 清单含该课程 ⇒ 低优先回退归 math', () => {
     const got = groupCoursesByCategory(
       [math, c1],
       segMap([['category/math', [manifestRow('category/math', 1, 'course/c1')]]]),
     );
-    expect(got.groups).toEqual([]);
-    expect(got.unclassified.map((i) => i.itemId)).toEqual(['course/c1']);
+    expect(got.groups).toEqual([{ slug: 'math', title: '数学', courses: [c1] }]);
+    expect(got.unclassified).toEqual([]);
   });
 
-  it('导入器清单行读取分组时忽略：冲突时 attr.category 优先且清单归属不生效', () => {
+  it('主判据①：有 attr.category=math 且 category/physics 清单含该课程 ⇒ 归 math、不归 physics', () => {
     const got = groupCoursesByCategory(
       [physics, math, c1],
       segMap([
@@ -206,35 +206,54 @@ describe('groupCoursesByCategory：分组读取（以 attr.category 为唯一依
     expect(got.unclassified).toEqual([]);
   });
 
-  it('容器不存在时组标题回落 slug 本身', () => {
+  it('容器不存在（或 title 空串）时组标题回落 slug 本身', () => {
     const got = groupCoursesByCategory([c1], segMap([['course/c1', [attrRow('course/c1', 'self')]]]));
     expect(got.groups).toEqual([{ slug: 'self', title: 'self', courses: [c1] }]);
-  });
-
-  it('容器存在但 title 为空串时同样回落 slug', () => {
     const empty = { ...item('category/self', 'category'), title: '' };
-    const got = groupCoursesByCategory(
-      [empty, c1],
-      segMap([['course/c1', [attrRow('course/c1', 'self')]]]),
-    );
-    expect(got.groups).toEqual([{ slug: 'self', title: 'self', courses: [c1] }]);
+    const got2 = groupCoursesByCategory([empty, c1], segMap([['course/c1', [attrRow('course/c1', 'self')]]]));
+    expect(got2.groups).toEqual([{ slug: 'self', title: 'self', courses: [c1] }]);
   });
 
-  it('分组按 slug 升序；未归类按 itemId 升序；空组不显示', () => {
-    const czz = item('course/zz', 'course');
+  it('未归类纳入双来源：两来源都未归入的课程才进 unclassified（按 itemId 升序）', () => {
     const caa = item('course/aa', 'course');
     const cmm = item('course/mm', 'course');
     const got = groupCoursesByCategory(
-      [cmm, czz, caa, physics, math],
+      [cmm, caa, math],
+      segMap([
+        ['course/aa', [attrRow('course/aa', 'math')]],
+        ['course/mm', []],
+      ]),
+    );
+    expect(got.groups).toEqual([{ slug: 'math', title: '数学', courses: [caa] }]);
+    expect(got.unclassified.map((i) => i.itemId)).toEqual(['course/mm']);
+  });
+
+  it('分组按 slug 升序、空组不显示、组内课程按 itemId 升序', () => {
+    const czz = item('course/zz', 'course');
+    const caa = item('course/aa', 'course');
+    const got = groupCoursesByCategory(
+      [czz, caa, physics, math],
       segMap([
         ['course/zz', [attrRow('course/zz', 'math')]],
         ['course/aa', [attrRow('course/aa', 'physics')]],
-        ['course/mm', []],
       ]),
     );
     expect(got.groups.map((g) => g.slug)).toEqual(['math', 'physics']);
     expect(got.groups.map((g) => g.title)).toEqual(['数学', '物理']);
-    expect(got.unclassified.map((i) => i.itemId)).toEqual(['course/mm']);
+  });
+
+  it('悬空：清单行指向不存在的课程 ⇒ 静默跳过、不产组', () => {
+    const got = groupCoursesByCategory(
+      [math],
+      segMap([['category/math', [manifestRow('category/math', 1, 'course/nope')]]]),
+    );
+    expect(got.groups).toEqual([]);
+    expect(got.unclassified).toEqual([]);
+  });
+
+  it('悬空：attr.category 指向不存在的分类容器 ⇒ 仍以 slug 成组', () => {
+    const got = groupCoursesByCategory([c1], segMap([['course/c1', [attrRow('course/c1', 'ghost')]]]));
+    expect(got.groups).toEqual([{ slug: 'ghost', title: 'ghost', courses: [c1] }]);
   });
 
   it('非课程条目（文章）既不进分组也不进未归类', () => {

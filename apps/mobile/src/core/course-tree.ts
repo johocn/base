@@ -74,26 +74,31 @@ export interface CategoryGroup {
 const CATEGORY_PREFIX = 'category/';
 
 /**
- * 课程分组读取（册子 #49 §3）：以课程自身 `attr.category` 为分组依据（组 slug）。
+ * 课程分组读取（册子 #49 §3）：**双来源 + 优先级**。
+ * 高优先 = 课程自身 `attr.category`（有则以它为准，该课程不再出现在清单行给的其它分类里）；
+ * 低优先 = 导入器产 `category/<slug>` 的 `seq>=1` 清单行（`course/<cid>`）——**缺失才回退**。
  * 组标题优先取**已存在的** `category/<slug>` 容器的 `title`，容器不存在（或 title 为空）回落 slug 本身。
- * 导入器产 `category/<slug>` 清单行在**读取分组时忽略**；`attr.category` 缺失的课程不落任何组，进 `unclassified`。
- * **只读**：不写库、不改清单、不发请求。纯函数、无 IO。
+ * 两来源都未归入的课程进 `unclassified`；清单行悬空引用静默跳过。**只读**：不写库、不改清单、不发请求。
  */
 export function groupCoursesByCategory(
   items: ItemRow[],
   segsByItemId: Map<string, SegmentRow[]>,
 ): { groups: CategoryGroup[]; unclassified: ItemRow[] } {
   const titleBySlug = new Map<string, string>();
+  const slugByListedCourse = new Map<string, string>();
   for (const cat of splitCategories(items)) {
-    if (cat.itemId.startsWith(CATEGORY_PREFIX)) {
-      titleBySlug.set(cat.itemId.slice(CATEGORY_PREFIX.length), cat.title);
+    if (!cat.itemId.startsWith(CATEGORY_PREFIX)) continue;
+    const slug = cat.itemId.slice(CATEGORY_PREFIX.length);
+    titleBySlug.set(slug, cat.title);
+    for (const listedId of childrenOf(segsByItemId.get(cat.itemId) ?? [])) {
+      if (!slugByListedCourse.has(listedId)) slugByListedCourse.set(listedId, slug);
     }
   }
 
   const bySlug = new Map<string, ItemRow[]>();
   const unclassified: ItemRow[] = [];
   for (const course of splitCourses(items).courses) {
-    const slug = attrsOf(segsByItemId.get(course.itemId) ?? []).category;
+    const slug = attrsOf(segsByItemId.get(course.itemId) ?? []).category || slugByListedCourse.get(course.itemId) || '';
     if (slug === '') {
       unclassified.push(course);
       continue;
