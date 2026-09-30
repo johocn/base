@@ -69,12 +69,12 @@ B 交流互动主线四条形态中，内容锚定讨论（`comment.v1`）、学
 - `body` 形状：
 
 ```json
-{ "item_id": "<32hex>", "position": 640, "done": false, "day": "2026-10-01" }
+{ "item_id": "article/hello-world", "position": 640, "done": false, "day": "2026-10-01" }
 ```
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
-| `item_id` | string | 32 hex | 被学习的条目（course / lesson / article / video / quiz）。 |
+| `item_id` | string | ASCII 1..256 | 被学习的条目（course / lesson / article / video / quiz）。**形态是路径式 `item_id`**（总纲 §6.0 命名空间，如 `course/<cid>` / `article/<slug>`），**不是 32 hex**——与 `comment.v1` 的 `target_id` 同一条校验（`validTargetID`）。 |
 | `position` | int | `>= 0` | 归一化进度位，量纲按 `type` 分派，见 §3.2。 |
 | `done` | bool | 必填 | 完成标记，**由客户端判定并显式上报**；节点只信该值，不反推。 |
 | `day` | string | `YYYY-MM-DD` | **客户端本地时区**的打卡日，见 §3.5。 |
@@ -88,7 +88,7 @@ B 交流互动主线四条形态中，内容锚定讨论（`comment.v1`）、学
 | `article` | 正文滚动千分比 | `0–1000` | 客户端：`position >= 1000` |
 | `video` | 已看到秒数 | `0–maxInt` | 客户端：看到末尾（由视频页判定） |
 | `quiz` | 已作答题数 | `0–题目总数` | 客户端：`position >= 题目总数` |
-| `course` / `lesson` | **不上报**——容器自身无「阅读位置」 | — | 容器完成度由子条目聚合，见 §4.4 |
+| `course` / `lesson` | **不上报**——容器自身无「阅读位置」 | — | 容器完成度由子条目聚合，见 §6「容器完成度聚合口径」 |
 
 **这是唯一的量纲定义处**；Go / TS 两份实现与两侧单测都引用本表，不得各自另立口径。
 
@@ -139,9 +139,11 @@ B 交流互动主线四条形态中，内容锚定讨论（`comment.v1`）、学
 
 ### 4.4 `GET /v1/me` 接真
 
-- [identity.go](file:///e:/code/base/internal/httpapi/identity.go#L237-L242) 的 `"progress": []any{}` 改为**按签名身份返回真实进度**：数组元素形如 `{item_id, position, done, day, updated_at}`。
+- [identity.go](file:///e:/code/base/internal/httpapi/identity.go#L237-L242) 的 `"progress": []any{}` 改为**按签名身份返回真实进度**：数组元素形如 `{item_id, position, done, day, updated_at, event_id}`。
+- **`event_id` 是写计划时发现的必需字段**（笔误更正）：§5.5 要求 `GET /v1/me` 的远程行按 §3.4 同一比较函数合并进本地表，而 §3.4 的平局判据是 `event_id` 升序——响应不带胜者 `event_id` 就无法复现该判据 ⇒ 必须回传。
+- **新增 `"checkin_days": []any{}`**：元素形如 `{day, first_event_id, created_at}`。理由：§3.5 明确打卡日**不能**从折叠后的 `progress` 派生，手机端要显示连续天数就必须拿到节点侧的打卡日集合，否则跨设备打卡日在手机端永远不收敛。同样恒为数组而非 `null`。
 - `events` 数组本册**保持现状**（空数组），不扩面——它属于另一条待办，不在本册范围。
-- 现有断言「恒为空数组而非 null」保留：改为真数据后仍是数组，`null` 红线不破。
+- 现有断言「恒为空数组而非 null」保留并**扩到三个数组**：改为真数据后仍是数组，`null` 红线不破。
 
 ### 4.5 限速风险（须在计划里处理）
 
@@ -155,10 +157,11 @@ B 交流互动主线四条形态中，内容锚定讨论（`comment.v1`）、学
 
 | 表 | 主键 | 列 | 说明 |
 | --- | --- | --- | --- |
-| `progress` | `item_id` | `item_id, position, done, day, updated_at, dirty` | **总纲 §9 已预留**（`item_id, position, updated_at, dirty`），本册**补 `done` 与 `day` 两列**；因本地单人库故无 `id` 列。 |
+| `progress` | `item_id` | `item_id, position, done, day, updated_at, event_id, dirty` | **总纲 §9 已预留**（`item_id, position, updated_at, dirty`），本册**补 `done` / `day` / `event_id` 三列**；因本地单人库故无 `id` 列。**`event_id` 是写计划时发现的必需列**（笔误更正）：§3.4 的 LWW 平局判据是 `event_id` 升序，本地若不存胜者 `event_id` 就无法复现该判据 ⇒ 必须落列。 |
 | `checkin_days` | `day` | `day, first_event_id, created_at` | 新增；与节点侧同构。 |
 
-- 建表写进 [repo.ts](file:///e:/code/base/apps/mobile/src/core/repo.ts#L101-L148) 的 DDL 清单；**既有库靠幂等补列手法演进**（`CREATE TABLE IF NOT EXISTS` 不补列），沿用 [repo.ts](file:///e:/code/base/apps/mobile/src/core/repo.ts#L148-L163) 既有的 `ensureGroupColumns` 同款手法，为存量库补 `done` / `day`。
+- 建表写进 [repo.ts](file:///e:/code/base/apps/mobile/src/core/repo.ts#L101-L148) 的 DDL 清单；**既有库靠幂等补列手法演进**（`CREATE TABLE IF NOT EXISTS` 不补列），沿用 [repo.ts](file:///e:/code/base/apps/mobile/src/core/repo.ts#L148-L163) 既有的 `ensureGroupColumns` 同款手法，为存量库补 `done` / `day` / `event_id`。
+- **`updated_at` 的语义**（写计划时定死，双端一致）：存**胜者事件的 `created_at`**（毫秒），不是「本机写入时刻」——否则跨设备比较无意义。`GET /v1/me` 返回的同名字段同义。
 
 ### 5.2 写入顺序
 
@@ -175,8 +178,9 @@ B 交流互动主线四条形态中，内容锚定讨论（`comment.v1`）、学
 
 - 复用 [repo.ts](file:///e:/code/base/apps/mobile/src/core/repo.ts#L118-L121) 的 `comment_out` 作为待发队列（与 `group.v1` / `dm.v1` 的离线发言同口径，**不加列**）。
 - **承载口径**（`comment_out` 没有 type 列，类型由 `wire` 自带，故无需区分）：`wire` = `buildEventWire(ident,'progress.v1', body)` 产出的**已签名请求体**（逐字节冻结、补发原样重放）；`target_id` = `item_id`（便于排查）；`text` / `reply_to` 留空字面量。先例见 [dm.ts](file:///e:/code/base/apps/mobile/src/core/dm.ts#L295-L309)。
-- 状态机沿用 [submit.ts](file:///e:/code/base/apps/mobile/src/core/submit.ts#L218-L229) 的分类：送达 → `sent`；断网 / `429` / 5xx → `pending` 等下轮；其余 4xx → `failed`（永久失败，不再重试）。
-- 补发挂到 [submit.ts](file:///e:/code/base/apps/mobile/src/core/submit.ts#L347) 的 `flushSubmissions` 既有编排上，按 `queued_at ASC` 顺序补发。
+- **状态机与补发编排复用的是 `core/comment.ts`，不是 `core/submit.ts`**（写计划时发现的笔误更正）：`comment_out` 只有 `pending` / `failed` 两态，**送达即删行**（不置 `sent`）。补发由 [comment.ts](file:///e:/code/base/apps/mobile/src/core/comment.ts#L282) 的 `flushPending` 逐条**重放 `wire`**（`queued_at ASC`）：成功 → `removeCommentOut`；`revoked` / `rejected` → `markCommentOutFailed`（永久失败，不再重试）；其余（网络 / `429` / 5xx）→ **中止本轮**、留 `pending` 等下轮（判据在 [comment.ts](file:///e:/code/base/apps/mobile/src/core/comment.ts#L296) 的 `runFlush` / `isPermanentFailure`）。
+- **为什么不是 `flushSubmissions`**（[submit.ts](file:///e:/code/base/apps/mobile/src/core/submit.ts#L347)）：它只补 `my_submissions`（投稿台账），且用 `submitItem` **重建载荷**，根本不读 `wire`——照它做等于一行也补不出去。
+- **补发挂载点**：`mine.vue` 的 `onShow` 里调一次 `flushPending`（与 §5.5 的 `GET /v1/me` 同一处）；评论 / 小组 / 私信三页既有的 `flushPending` 调用点也会顺带重放进度行（队列不分类型，`wire` 自带 type）。
 
 ### 5.5 本地读取
 
@@ -189,10 +193,16 @@ B 交流互动主线四条形态中，内容锚定讨论（`comment.v1`）、学
 | 落点 | 文件 | 内容 |
 | --- | --- | --- |
 | 内容页 | [article.vue](file:///e:/code/base/apps/mobile/src/pages/article/article.vue#L68)、`pages/lesson/detail.vue`、`pages/quiz/quiz.vue` | 进入时**续位**到上次位置（文章滚动到千分比对应处）；顶栏细进度条复用 [article.vue](file:///e:/code/base/apps/mobile/src/pages/article/article.vue#L258) 已有的那根，改为读本地 `progress` 而非页面瞬时值。 |
-| 课程页 | [course.vue](file:///e:/code/base/apps/mobile/src/pages/course/course.vue) | 每门课显示**完成度** = 已完成课时数 / 总课时数（按 §4.4 的容器聚合口径派生，不新增存储）。 |
+| 课程页 | [course.vue](file:///e:/code/base/apps/mobile/src/pages/course/course.vue) | 每门课显示**完成度** = 已完成课时数 / 总课时数（按本节下文的容器聚合口径派生，不新增存储）。 |
 | 我的页 | [mine.vue](file:///e:/code/base/apps/mobile/src/pages/mine/mine.vue) | 新增**进度卡**：今日是否已打卡、连续天数、在学中列表（有进度但 `done=false` 的条目）。**这是自动打卡唯一的可见处**——自动打卡没有按钮，不落展示就等于没做。 |
 
-**容器完成度聚合口径**：`course` / `lesson` 的完成度 = 其可获得子条目中 `done=true` 的比例；不可得的子条目（未下载）不计入分母。该口径只用于展示，**不产生事件、不落表**。
+**容器完成度聚合口径**（§3.2 已定容器自身不上报 `done`，故完成度**只能**由叶子载体折算，不能从折叠后的 `progress` 派生）：
+
+- 叶子载体 = `article` / `video` / `quiz`（这三类才有 `position` / `done`）。
+- `lesson` 完成 ⇔ 其**可达**叶子载体数 > 0 且**全部** `done=true`。
+- `course` 完成度 = 已完成 `lesson` 数 / `lesson` 总数（展示为「已学 a / b 讲」）；`lesson` 总数 = 该课**可达**的全部 lesson。
+- **不可得的子条目（未下载）不计入分母**；分母为 0 时完成度按 0 处理，不显示 `NaN`。
+- 该口径只用于展示，**不产生事件、不落表**。
 
 ---
 
