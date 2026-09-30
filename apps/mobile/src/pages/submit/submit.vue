@@ -16,7 +16,41 @@
 
     <view v-if="type === 'article'" class="field">
       <text class="label">正文（Markdown）</text>
-      <textarea v-model="bodyMd" class="area" placeholder="正文内容" />
+      <view class="toolbar">
+        <view
+          v-for="b in PARAGRAPH_BUTTONS"
+          :key="b.key"
+          class="tool"
+          @click="applyTool(b.action)"
+        >{{ b.label }}</view>
+        <view class="tool-divider" />
+        <view
+          v-for="b in INLINE_BUTTONS"
+          :key="b.key"
+          class="tool"
+          @click="applyTool(b.action)"
+        >{{ b.label }}</view>
+        <view class="tool-divider" />
+        <view
+          v-for="b in COLOR_BUTTONS"
+          :key="b.key"
+          class="tool tool-color"
+          :title="b.hint"
+          @click="applyTool(b.action)"
+        >{{ b.label }}<text class="tool-note">{{ b.hint }}</text></view>
+      </view>
+      <textarea
+        ref="bodyRef"
+        v-model="bodyMd"
+        class="area"
+        placeholder="正文内容"
+        :selection-start="bodySelStart"
+        :selection-end="bodySelEnd"
+        :focus="bodyFocus"
+      />
+      <text class="hint">正文以 Markdown 源文本保存，与课时同口径；支持 [文字]{.c-red} 变色</text>
+      <text class="preview-label">预览</text>
+      <rich-text :nodes="previewHtml" class="preview" />
     </view>
 
     <block v-else>
@@ -45,9 +79,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
+import { renderMarkdown } from '../../core/markdown';
+import {
+  COLOR_BUTTONS,
+  INLINE_BUTTONS,
+  PARAGRAPH_BUTTONS,
+  applyToolbar,
+  type ToolbarAction,
+} from '../../core/markdown-toolbar';
 import { buildQuestionJSON, draftsFromQuestionJSON, emptyDraft, type QuestionDraft } from '../../core/quizdoc';
 import { enqueueOrSend, newItemID, type SubmitDraft } from '../../core/submit';
 import { bootstrap } from '../../platform';
@@ -60,6 +102,43 @@ const drafts = ref<QuestionDraft[]>([emptyDraft()]);
 const busy = ref(false);
 const error = ref('');
 const notice = ref('');
+
+/** 正文编辑：工具栏产出源文本标记；预览是只读派生，不落库（保存口径零改动） */
+const bodyRef = ref<{ $el?: Element } | null>(null);
+const bodySelStart = ref(-1);
+const bodySelEnd = ref(-1);
+const bodyFocus = ref(false);
+const previewHtml = computed(() => renderMarkdown(bodyMd.value));
+
+/** H5：组件根节点下即原生 textarea，用 ref 拿真实选区；其它端落 props 兜底 */
+function bodyTextarea(): HTMLTextAreaElement | null {
+  const root = bodyRef.value?.$el;
+  if (!root || typeof root.querySelector !== 'function') return null;
+  return root.querySelector('textarea') as HTMLTextAreaElement | null;
+}
+
+/** 工具栏动作：把变换结果写回源文本，并把光标/选区落到新位置。 */
+function applyTool(action: ToolbarAction) {
+  const field = bodyTextarea();
+  const src = bodyMd.value;
+  const start = field ? field.selectionStart : bodySelStart.value >= 0 ? bodySelStart.value : src.length;
+  const end = field ? field.selectionEnd : bodySelEnd.value >= 0 ? bodySelEnd.value : src.length;
+  const r = applyToolbar(src, start, end, action);
+  bodyMd.value = r.text;
+  bodySelStart.value = r.start;
+  bodySelEnd.value = r.end;
+  bodyFocus.value = false;
+  nextTick(() => {
+    bodyFocus.value = true;
+    const el = bodyTextarea();
+    if (el) {
+      // 直接落到原生节点：绕开组件 model→DOM 的 100ms 防抖，避免光标被重置到末尾
+      el.value = r.text;
+      el.focus();
+      el.setSelectionRange(r.start, r.end);
+    }
+  });
+}
 
 const isUpdate = computed(() => itemId.value !== '');
 
@@ -159,6 +238,22 @@ async function submit() {
 .input { border: 1px solid #eeeeee; border-radius: 6px; padding: 8px; font-size: 14px; }
 .opt-in { flex: 1; }
 .area { border: 1px solid #eeeeee; border-radius: 6px; padding: 8px; width: 100%; height: 220px; font-size: 14px; }
+.toolbar { display: flex; flex-wrap: wrap; margin-bottom: 6px; }
+.tool { padding: 4px 10px; margin: 0 6px 6px 0; border: 1px solid #dddddd; border-radius: 6px; color: #444444; font-size: 13px; }
+.tool-divider { width: 1px; margin: 0 4px 6px; background: #eeeeee; }
+.tool-color { display: flex; align-items: baseline; }
+.tool-note { margin-left: 3px; color: #999999; font-size: 10px; }
+.preview-label { display: block; margin: 10px 0 4px; color: #666666; font-size: 14px; }
+.preview { display: block; padding: 8px; border: 1px solid #f0f0f0; border-radius: 6px; font-size: 14px; line-height: 1.8; color: #333333; }
+
+/* 正文预览变色：7 个枚举类（#44 §6）。c-mark 只改背景、不覆盖字色 */
+.c-red { color: #C53030; }
+.c-orange { color: #B7791F; }
+.c-green { color: #2F855A; }
+.c-blue { color: #2B6CB0; }
+.c-purple { color: #6B46C1; }
+.c-gray { color: #718096; }
+.c-mark { background: #FFF3BF; }
 .qcard { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 12px; }
 .qhead { display: flex; justify-content: space-between; }
 .opt { display: flex; align-items: center; margin: 6px 0; }
