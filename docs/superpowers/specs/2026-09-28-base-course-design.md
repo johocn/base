@@ -56,6 +56,19 @@
 - §2.1 的 `item_id` 形态表由总纲 §6.0 统一补齐（`category/<slug>`、`tag/<名称>/<章>/<节>`），本册不再复述。
 - §4 落地改动面、§5 手机端三级浏览、§6 验收均不变：**#36 在 §6 之上加一层分类分组并另立册子**；标签不进课程树，#37 另立册子。
 
+### 0.4 2026-09-30 `seq<0` 属性槽位、`audio` kind 与投稿域容器（#40 课程与课时编辑立册时）
+
+**作废：** 无。**补充（本册 §3.1 / §4 的三处口径）**：
+
+1. **`segments` 扩一个区间**：除「`seq=0` 简介 + `seq>=1` 子项清单」外，新增 **`seq<0` 属性槽位**（`kind = attr.<key>`），承载封面 / 讲师 / 难度 / 时长 / 附件 / 课时正文（Markdown 源）。**`seq=0` 与 `seq>=1` 的既有语义一字不改**；`seq<0` 行对 `childrenOf` / `childIDsOf` / `digestTextOf` **天然不可见**（老客户端零破坏）。槽位分配规则与 `text` 形状见 #40 §2.1。
+2. **课时简介行不再有新写路径**：本册 §3.1 与 §4.2 规则 4 的「lesson 承载 `kind=digest, seq=0` 的课时简介」**不废止**（导入器照旧产出、客户端照旧可读），但**投稿 / 编辑面不产该行**——课时摘要改由客户端按正文首段截断派生（#40 §2.2）。
+3. **lesson 子项 `kind` 集合扩 `audio`**：由 `article | video | quiz` 扩为 `article | video | audio | quiz`。`audio` 复用 `media_meta` + `blobs`（靠 `mime` 前缀 `audio/` 区分），**不新增表 / 字段 / 枚举值**；播放器与导入器 audio 支持**不在 #40**。
+4. **三处容器重建必须保留 `seq<0` 行**：本册 §4.2 规则 6 的合并式重建（`rebuildContainer`）、`rebuildCategories` 的全量快照、`internal/store/tag.go` 的 `replaceTagLinksTx` 都是「删后重写」，**必须把既有 `seq<0` 行原样带入**——否则导入器一跑就抹掉投稿方写的封面 / 讲师 / 正文（#40 §4.2）。
+5. **容器形态可由投稿产生**：`course/<cid>` 与 `course/<cid>/lesson/<lid>` 不再只由导入器产出（#25 §0.3 解锁）。**导入器遇投稿域容器（`items.author_id` 非空）跳过该容器的重建并报 warning**，不静默改、不静默删（#40 §4.3）。
+6. **封面有两条路径**：导入器仍产独立 `.../cover` 条目（本册 §3.1 原样有效）；**投稿 / 编辑路径改用 `attr.cover` 属性行**（`text = blob_id`），不产独立 cover 条目。
+
+**明确不变：** §2.1 的 `item_id` 命名空间、§3.2 的排序模型（顺序 = `seq`）、§3.3 的两条哈希口径、§5 的兼容与迁移、§6 的三级浏览（**课程页的形态由 #40 §5.1 改版**：下线载体内联手风琴与测验汇总块）。
+
 ## 1. 范围与不做什么
 
 **做五件事：**
@@ -137,10 +150,11 @@ article/<aid>                                    # 不属于任何课程的独�
 | `course/<cid>` | `segments` | `kind=digest, seq=0` 的 `text` = 课程简介；`kind=lesson, seq=1..n` 的 `text` = 子 lesson 的 `item_id` |
 | `course/<cid>/lesson/<lid>` | `segments` | `kind=digest, seq=0` 的 `text` = 课时简介；`kind=article\|video\|quiz, seq=1..n` 的 `text` = 子载体 `item_id` |
 
-- course 的子项 `kind` 只允许 `lesson`；lesson 的子项 `kind` 只允许 `article` / `video` / `quiz`。
+- course 的子项 `kind` 只允许 `lesson`；lesson 的子项 `kind` 只允许 `article` / `video` / `audio` / `quiz`（`audio` 由 2026-09-30 §0.4 补入）。
 - `seq=0` 固定留给简介，`seq>=1` 固定为子项清单 —— 顺序即 `seq` 升序。
+- **`seq<0` 固定为属性槽位**（`kind = attr.<key>`，2026-09-30 §0.4 补）：承载封面 / 讲师 / 难度 / 时长 / 附件 / 课时正文；分配规则与 `text` 形状见 #40 册子 §2.1。
 - 条目标题走 `items.title`（已在 `manifest.entries[].title` 内），不进 segments。
-- 封面不进 segments，仍是独立 cover 条目，走既有 `media_meta` + blob 路径。
+- 封面**两条路径**（2026-09-30 §0.4 补）：导入器仍产独立 cover 条目，走既有 `media_meta` + blob 路径；**投稿 / 编辑路径改用 `attr.cover` 属性行**（`text = blob_id`），不产独立 cover 条目。
 
 ### 3.2 排序模型
 
