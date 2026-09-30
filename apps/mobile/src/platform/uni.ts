@@ -88,6 +88,12 @@ export interface PlusRuntime {
 interface UniGlobal {
   getStorageSync(key: string): string;
   setStorageSync(key: string, value: string): void;
+  /** 选本地文件（封面 / 附件上传用，本册 §6）；App 端 3.4.0+ 提供 */
+  chooseFile?(o: {
+    count: number;
+    success: (res: { tempFilePaths?: string[]; tempFiles?: Array<{ path?: string; name?: string }> }) => void;
+    fail: (e: unknown) => void;
+  }): void;
   request(o: {
     url: string;
     method: 'GET' | 'POST';
@@ -435,6 +441,45 @@ export function base64ToBytes(b64: string): Uint8Array {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+/** 一次「选文件」的结果：文件名 + 字节。 */
+export interface PickedFile {
+  name: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * 选一个本地文件并读成字节（封面 / 附件上传，本册 §6）。
+ * 读字节复用本层的 `PlusFs.readFile`（与附件下载落盘同一实现）。
+ * **用户主动取消返回 null**——取消不是错误，页面据此静默返回。
+ */
+export async function pickLocalFile(): Promise<PickedFile | null> {
+  const uni = uniGlobal();
+  if (!uni.chooseFile) throw new Error('当前运行时不支持选择文件');
+  const picked = await new Promise<{ path: string; name: string } | null>((resolve, reject) => {
+    uni.chooseFile!({
+      count: 1,
+      success: (res) => {
+        const f = res.tempFiles?.[0];
+        const path = f?.path ?? res.tempFilePaths?.[0] ?? '';
+        if (path === '') {
+          resolve(null);
+          return;
+        }
+        resolve({ path, name: f?.name ?? path.split('/').pop() ?? 'file' });
+      },
+      fail: (e) => {
+        // 取消也走 fail；只有非取消的错误才该让页面看到
+        const msg = JSON.stringify(e ?? '');
+        if (msg.includes('cancel')) resolve(null);
+        else reject(new Error(`选择文件失败：${msg}`));
+      },
+    });
+  });
+  if (!picked) return null;
+  const bytes = await new PlusFs(assertAppRuntime()).readFile(picked.path);
+  return { name: picked.name, bytes };
 }
 
 export function toUint8(data: unknown): Uint8Array {
