@@ -10,10 +10,15 @@ import {
   ATTR_DIFFICULTY,
   ATTR_DURATION,
   ATTR_INSTRUCTOR,
+  BADGE_WORDS_AUTHOR,
+  TITLE_COLORS,
   assignAttrSeqs,
   attrSeqsCanonical,
   isAttrKind,
+  isTitleColor,
+  parseBadge,
   segmentsContentHash,
+  serializeBadge,
   type AttrSlot,
 } from './attrs';
 
@@ -112,5 +117,37 @@ describe('attrs：容器 content_hash 口径', () => {
     );
     // 输入顺序不影响：内部按 seq 升序归一
     expect(segmentsContentHash([...rows].reverse())).toBe(segmentsContentHash(rows));
+  });
+});
+
+describe('attrs：图章序列化与标题色白名单', () => {
+  it('serializeBadge：去重 + 码位升序 + 半角逗号', () => {
+    expect(serializeBadge(['悬赏', '活动', '悬赏', '置顶'])).toBe('悬赏,活动,置顶');
+    expect(serializeBadge(['辩论', '热门', '精华', '推荐', '置顶', '悬赏', '活动'])).toBe(
+      '悬赏,推荐,活动,热门,精华,置顶,辩论',
+    );
+    expect(serializeBadge(BADGE_WORDS_AUTHOR)).toBe('悬赏,活动,置顶,辩论');
+    expect(serializeBadge([])).toBe('');
+  });
+
+  it('parseBadge：空串、去重、域外词静默丢弃并归一到规范序', () => {
+    expect(parseBadge('')).toEqual([]);
+    expect(parseBadge('活动,活动')).toEqual(['活动']);
+    expect(parseBadge('活动,自定义词,悬赏')).toEqual(['悬赏', '活动']);
+    expect(parseBadge('悬赏,活动')).toEqual(['悬赏', '活动']);
+    expect(parseBadge('辩论,热门,精华,推荐,置顶,悬赏,活动')).toEqual([
+      '悬赏',
+      '推荐',
+      '活动',
+      '热门',
+      '精华',
+      '置顶',
+      '辩论',
+    ]);
+  });
+
+  it('标题色白名单：只认 6 色，c-mark 不算', () => {
+    for (const c of TITLE_COLORS) expect(isTitleColor(c)).toBe(true);
+    for (const c of ['', 'mark', 'c-mark', 'yellow']) expect(isTitleColor(c)).toBe(false);
   });
 });

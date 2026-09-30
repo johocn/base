@@ -31,6 +31,31 @@ export const DIGEST_KIND = 'digest';
 /** 编辑页难度下拉的取值域（与上面三个常量同源）。 */
 export const DIFFICULTY_CHOICES = [DIFFICULTY_INTRO, DIFFICULTY_BASIC, DIFFICULTY_ADVANCED];
 
+/** 图章取值域（封闭 7 词；不含分隔符 `,`）。数组顺序仅为 UI 候选展示序，规范序由序列化函数保证。 */
+export const BADGE_WORDS = ['活动', '悬赏', '推荐', '热门', '精华', '置顶', '辩论'] as const;
+
+/** 作者可选的 4 种（编辑自建条目；`置顶` 仅限自己）。 */
+export const BADGE_WORDS_AUTHOR = ['活动', '悬赏', '辩论', '置顶'] as const;
+
+/** 标题色 6 字色（复用例 #44 §6；不含 c-mark）。 */
+export const TITLE_COLORS = ['red', 'orange', 'green', 'blue', 'purple', 'gray'] as const;
+
+/** 多值 → 单行：去重 + 码位升序 + 半角逗号连接。 */
+export function serializeBadge(words: readonly string[]): string {
+  return [...new Set(words)].sort().join(',');
+}
+
+/** 单行 → 多值：切分 → 去空 → 去重 → 码位升序 → 只留取值域内的词。 */
+export function parseBadge(text: string): string[] {
+  const set = new Set<string>(BADGE_WORDS);
+  return [...new Set(text.split(',').map((s) => s.trim()).filter((s) => set.has(s)))].sort();
+}
+
+/** 标题色白名单判定（只认 6 色；`c-mark` 不算）。 */
+export function isTitleColor(name: string): boolean {
+  return (TITLE_COLORS as readonly string[]).includes(name);
+}
+
 const ATTR_KIND_SET: Record<string, true> = {
   [ATTR_ATTACHMENT]: true,
   [ATTR_BADGE]: true,
