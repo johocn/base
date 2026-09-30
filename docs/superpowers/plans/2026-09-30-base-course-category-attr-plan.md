@@ -359,4 +359,43 @@ git commit -m "chore(release): 课程分类属性槽位随批次收口 0.16.0/21
 
 ## 执行实况
 
-（留空待执行时回填）
+**F6 收口（Task 6，2026-10-01）——只跑门禁 + 回填文档，未改任何生产代码。**
+
+**6 条 commit（F6 全链）+ 本次收口 commit**
+
+| 步骤 | commit | 内容 |
+| --- | --- | --- |
+| Task 1 | `b3b9a56` | 双端新增 `attr.category` 槽位与契约向量（`#50` Task 1） |
+| Task 2 | `9003a3e` | 容器表单与读取视图支持 `attr.category` 读写（`#50` Task 2） |
+| Task 3 | `58542f4` | 课程编辑页新增分类输入与本机候选点选（`#50` Task 3） |
+| Task 4 | `1e928e5` | 分类分组读取纯函数（`attr.category` 优先 + 标题回退）（`#50` Task 4） |
+| Task 4 更正 | `19b535a` | 分组读取恢复清单行低优先回退口径（`#50` Task 4 更正） |
+| Task 5 | `0f308dc` | 课程页分类分组改走双来源读取（`#50` Task 5） |
+| Task 6（本收口） | 本次收口 commit | 门禁与文档回填（本「执行实况」所在提交，未改生产代码） |
+
+**门禁实测值（本机，2026-10-01）**
+
+- 仓库根 Go 三连：`go build ./...` exit 0、`go vet ./...` exit 0、`go test ./...` exit 0（全包 ok）。
+- `apps/mobile`：`npx vitest run` → **27 文件 / 316 用例全绿**（基线 27 文件 / 316 用例，未减少；新增 `attrs` / `course-tree` / `container-view` / `course-edit` 用例）；`npx tsc --noEmit` → exit 0；`npm run build:h5` → `DONE Build complete.`。
+- `scripts/acceptance-d.ps1` → **D1/TC-D01 … D7/TC-D07 全 PASS**（D2 含新增「含课程分类（attr.category）」向量子例；D6「扫描 24 个 .vue，无命中」；D7 HEAD = `0f308dc`）。
+- `git diff --stat internal/importer` → **无输出**（AC 6：导入器一行不改）。
+- 发布前硬检查 `grep -nE '="[^"]*\.value|\{\{[^}]*\.value' apps/mobile/src/pages/*/*.vue` → **无输出**。
+
+**AC 1–9 逐条结论**
+
+- **AC 1｜通过**：`go test ./internal/protocol/`（含 `TestAttrVectorFile` 新增「含课程分类（attr.category）」子例）与 `npx vitest run src/core/attrs.test.ts`（11 用例）全绿，双端共读 `vectors/v1/attrs.json`。
+- **AC 2｜通过**：老条目既有向量（六属性全给 / 仅封面与讲师 / 无属性）`slots` 未改且仍过；新增「含课程分类（attr.category）」用例过；`TestAttrSeqsCanonicalOrderIndependent` 顺序无关回归过；`attrs.test.ts` 含「不含 `attr.category` 的字段集排布不因新 kind 而变（老条目不破）」用例。
+- **AC 3｜待人工**：编辑页分类合法 slug 产 `attr.category`、空 / 非法不产、本机候选可点选——需人工 H5 点选验收。
+- **AC 4｜通过**：`course-tree.test.ts`（23 用例）全绿，含「有 `attr.category=math` 且 `category/physics` 清单行含该课程 ⇒ 归 math、不归 physics」双来源优先级用例。
+- **AC 5｜通过**：`course-tree.test.ts` 含组标题用例——组标题取既有 `category/<slug>` 容器 `title`，容器不存在（或 `title` 空串）时回落 slug 本身。
+- **AC 6｜通过**：`git diff --stat internal/importer` 无输出；分组读取只读。
+- **AC 7｜通过（代码核对）**：`git diff 62687fa..HEAD`（F6 全链）仅动 `internal/protocol/attrs.go`（新增 `attr.category` kind 常量与 `AttrKindSet` 条目，共 2 行）、`vectors/v1/attrs.json`、`apps/mobile` 的 TS / Vue——**零新 HTTP 接口 / 零新表 / 零新字段 / 零配置 / 不 bump `schema_version` / 不新增 `source`·`type` 枚举值**；`internal/httpapi`、`internal/store`、`internal/importer` 三目录 diff 为空。
+- **AC 8｜通过**：Step 1 全部门禁 + Step 3 发布前硬检查全通过（见上）。
+- **AC 9｜待人工（本批次不做真机测试）**：新建课程填分类 → 分组可见（标题按口径）→ 冲突时 `attr.category` 优先，须真机验收。
+
+**两处刻意裁剪（本 Task 照做，留批次收口）**
+
+1. **不改 `apps/mobile/src/manifest.json` 版本号**：本 Task 只跑门禁 + 改文档；`manifest.json:5-6` 实测仍为 `0.15.0` / `20`。批次目标 `0.16.0` / `21` 由批内多次 F 条共享、整批只改一次，留到 F6 / F7 / F9 全部落地后的批次收口统一落。
+2. **不部署节点二进制、不执行任何发布动作**：`#45 §5` 规定整批只发一次 `0.16.0` / `21`（云打包 APK → 上传 `/opt/appdl` → 落地页改指 → `based release` 签发）。本册虽改了 `internal/protocol/attrs.go`，Task 6 Step 4 的节点二进制部署与 Step 5 的随批次单次发布仍整体顺延至批次收口 REL（理由：整批单次发布）。本次不做部署、不做探活。
+
+**偏差登记**：本计划 Task 6 Step 3 原文称「`manifest.json:5-6` 版本号已为 `0.16.0` / `21`」，实测仍为 `0.15.0` / `20`——版本号随批次收口，本 Task 刻意不改（见「刻意裁剪 1」）。另 Task 4 执行期发现回退口径偏差：清单行回落应为**低优先回退**而非直接忽略，已由 `19b535a` 更正（`1e928e5` 的原口径过于激进，`19b535a` 恢复双来源低优先回退）。
