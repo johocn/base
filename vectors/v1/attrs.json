@@ -37,6 +37,21 @@
       "name": "无属性",
       "lines": [],
       "slots": []
+    },
+    {
+      "name": "含课程分类（attr.category）",
+      "lines": [
+        {"kind": "attr.instructor", "text": "李老师"},
+        {"kind": "attr.category", "text": "math"},
+        {"kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"},
+        {"kind": "attr.body_md", "text": "# 正文\n\n段落\n"}
+      ],
+      "slots": [
+        {"seq": -1, "kind": "attr.body_md", "text": "# 正文\n\n段落\n"},
+        {"seq": -2, "kind": "attr.category", "text": "math"},
+        {"seq": -3, "kind": "attr.cover", "text": "00112233445566778899aabbccddeeff"},
+        {"seq": -4, "kind": "attr.instructor", "text": "李老师"}
+      ]
     }
   ]
 }

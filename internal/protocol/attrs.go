@@ -8,6 +8,7 @@ const (
 
 	AttrKeyAttachment = "attr.attachment"
 	AttrKeyBodyMD     = "attr.body_md"
+	AttrKeyCategory   = "attr.category"
 	AttrKeyCover      = "attr.cover"
 	AttrKeyDifficulty = "attr.difficulty"
 	AttrKeyDuration   = "attr.duration"
@@ -26,6 +27,7 @@ const (
 var AttrKindSet = map[string]bool{
 	AttrKeyAttachment: true,
 	AttrKeyBodyMD:     true,
+	AttrKeyCategory:   true,
 	AttrKeyCover:      true,
 	AttrKeyDifficulty: true,
 	AttrKeyDuration:   true,

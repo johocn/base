@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ATTR_BODY_MD,
+  ATTR_CATEGORY,
   ATTR_COVER,
   ATTR_DIFFICULTY,
   ATTR_DURATION,
@@ -51,12 +52,29 @@ describe('attrs：分配规则边界', () => {
     ).toEqual([{ seq: -1, kind: ATTR_INSTRUCTOR, text: '甲' }]);
   });
 
-  it('isAttrKind 只认六种属性 kind', () => {
+  it('isAttrKind 只认七种属性 kind', () => {
     expect(isAttrKind(ATTR_COVER)).toBe(true);
     expect(isAttrKind(ATTR_BODY_MD)).toBe(true);
+    expect(isAttrKind(ATTR_CATEGORY)).toBe(true);
     for (const k of ['', 'attr.', 'attr.unknown', 'digest', 'lesson', 'article']) {
       expect(isAttrKind(k)).toBe(false);
     }
+  });
+
+  it('不含 attr.category 的字段集排布不因新 kind 而变（老条目不破）', () => {
+    // 字典序里 attr.category 落在 attr.body_md 与 attr.cover 之间；
+    // 该行缺席时既有属性行的 seq 与新增常量前逐字节一致，不得整体位移。
+    expect(
+      assignAttrSeqs([
+        { kind: ATTR_INSTRUCTOR, text: '李老师' },
+        { kind: ATTR_BODY_MD, text: '# 正文' },
+        { kind: ATTR_COVER, text: '00112233445566778899aabbccddeeff' },
+      ]),
+    ).toEqual([
+      { seq: -1, kind: ATTR_BODY_MD, text: '# 正文' },
+      { seq: -2, kind: ATTR_COVER, text: '00112233445566778899aabbccddeeff' },
+      { seq: -3, kind: ATTR_INSTRUCTOR, text: '李老师' },
+    ]);
   });
 
   it('非规范排布（seq 赋值错）不得通过 canonical', () => {
