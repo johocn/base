@@ -6,13 +6,17 @@
  */
 import {
   ATTR_ATTACHMENT,
+  ATTR_BADGE,
   ATTR_BODY_MD,
   ATTR_CATEGORY,
   ATTR_COVER,
   ATTR_DIFFICULTY,
   ATTR_DURATION,
   ATTR_INSTRUCTOR,
+  ATTR_TITLE_COLOR,
   DIGEST_KIND,
+  isTitleColor,
+  parseBadge,
 } from './attrs';
 import type { SegmentRow } from './types';
 
@@ -35,11 +39,15 @@ export interface ContainerAttrs {
   bodyMd: string;
   /** 仅课程有：分类 slug；空串 = 未设置 */
   category: string;
+  /** 图章（已解析为数组；空数组 = 未设置） */
+  badge: string[];
+  /** red|orange|green|blue|purple|gray；空串 = 未设置 */
+  titleColor: string;
 }
 
 /** 空属性集（新建表单的初值，也是 `attrsOf` 的基底）。 */
 export function emptyAttrs(): ContainerAttrs {
-  return { cover: '', instructor: '', difficulty: '', duration: 0, attachments: [], bodyMd: '', category: '' };
+  return { cover: '', instructor: '', difficulty: '', duration: 0, attachments: [], bodyMd: '', category: '', badge: [], titleColor: '' };
 }
 
 /**
@@ -77,6 +85,12 @@ export function attrsOf(segs: SegmentRow[]): ContainerAttrs {
         if (i > 0) out.attachments.push({ blobId: s.text.slice(0, i), name: s.text.slice(i + 1) });
         break;
       }
+      case ATTR_BADGE:
+        out.badge = parseBadge(s.text);
+        break;
+      case ATTR_TITLE_COLOR:
+        out.titleColor = isTitleColor(s.text) ? s.text : '';
+        break;
       default:
         break;
     }

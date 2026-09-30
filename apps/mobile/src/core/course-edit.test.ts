@@ -1,6 +1,7 @@
 import { utf8 } from '@base/protocol-ts';
 import { describe, expect, it } from 'vitest';
 
+import { attrSeqsCanonical } from './attrs';
 import {
   buildContainerSegments,
   emptyContainerForm,
@@ -91,6 +92,21 @@ describe('buildContainerSegments：表单 → 行集（本册 §4.1）', () => {
     const rows = buildContainerSegments(lessonForm({ durationSec: 0, attachments: [], digest: '', children: [] }));
     expect(rows.map((r) => r.kind)).toEqual(['attr.body_md', 'attr.cover', 'attr.difficulty', 'attr.instructor']);
   });
+
+  it('多选图章 → 单行（去重 + 码位升序）；标题色 → 单行；属性行整体规范', () => {
+    const form = { ...emptyContainerForm('course', 'course/c1'), badge: ['悬赏', '活动'], titleColor: 'red' };
+    const segs = buildContainerSegments(form);
+    expect(segs.find((s) => s.kind === 'attr.badge')?.text).toBe('悬赏,活动');
+    expect(segs.find((s) => s.kind === 'attr.title_color')?.text).toBe('red');
+    const attrRows = segs.filter((s) => s.seq < 0).map((s) => ({ seq: s.seq, kind: s.kind, text: s.text }));
+    expect(attrSeqsCanonical(attrRows)).toBe(true);
+  });
+
+  it('空图章 / 空色名 ⇒ 不产这两行', () => {
+    const rows = buildContainerSegments(lessonForm({ badge: [], titleColor: '' }));
+    expect(rows.some((r) => r.kind === 'attr.badge')).toBe(false);
+    expect(rows.some((r) => r.kind === 'attr.title_color')).toBe(false);
+  });
 });
 
 describe('loadContainerForm：从本地包回填', () => {
@@ -114,7 +130,7 @@ describe('loadContainerForm：从本地包回填', () => {
       cover: '00112233445566778899aabbccddeeff', instructor: '', difficulty: '', durationSec: 0,
       attachments: [], bodyMd: '# 讲稿',
       children: [{ kind: 'article', itemId: 'course/c1/lesson/l1/article/a1' }],
-      category: '',
+      category: '', badge: [], titleColor: '',
     });
   });
 
@@ -138,6 +154,29 @@ describe('loadContainerForm：从本地包回填', () => {
     expect(form.title).toBe('');
     expect(form.itemId).toBe('course/none');
     expect(form.type).toBe('course');
+  });
+
+  it('回填 attr.badge / attr.title_color：course 与 lesson 均生效', async () => {
+    const repo = new MemoryRepo();
+    await repo.applyPack({
+      version: 1, packId: 'p3', updatedAt: '2026-09-30T00:00:00Z', articles: [], quizzes: [], tombstones: [],
+      items: [
+        { itemId: 'course/c1', source: 'course', type: 'course', title: '数学', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '' },
+        { itemId: 'course/c1/lesson/l1', source: 'lesson', type: 'lesson', title: '第一讲', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '' },
+      ],
+      segments: [
+        { itemId: 'course/c1', seq: -1, kind: 'attr.badge', text: '悬赏,活动', contentHash: 'h' },
+        { itemId: 'course/c1', seq: -2, kind: 'attr.title_color', text: 'red', contentHash: 'h' },
+        { itemId: 'course/c1/lesson/l1', seq: -1, kind: 'attr.badge', text: '热门', contentHash: 'h' },
+        { itemId: 'course/c1/lesson/l1', seq: -2, kind: 'attr.title_color', text: 'blue', contentHash: 'h' },
+      ],
+    });
+    const course = await loadContainerForm(repo, 'course/c1', 'course');
+    expect(course.badge).toEqual(['悬赏', '活动']);
+    expect(course.titleColor).toBe('red');
+    const lesson = await loadContainerForm(repo, 'course/c1/lesson/l1', 'lesson');
+    expect(lesson.badge).toEqual(['热门']);
+    expect(lesson.titleColor).toBe('blue');
   });
 });
 

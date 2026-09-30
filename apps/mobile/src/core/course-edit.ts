@@ -8,14 +8,18 @@
  */
 import {
   ATTR_ATTACHMENT,
+  ATTR_BADGE,
   ATTR_BODY_MD,
   ATTR_CATEGORY,
   ATTR_COVER,
   ATTR_DIFFICULTY,
   ATTR_DURATION,
   ATTR_INSTRUCTOR,
+  ATTR_TITLE_COLOR,
   DIGEST_KIND,
   assignAttrSeqs,
+  isTitleColor,
+  serializeBadge,
   type AttrLine,
   type SubmitSegmentRow,
 } from './attrs';
@@ -64,6 +68,10 @@ export interface ContainerForm {
   bodyMd: string;
   /** 仅课程：分类 slug；空则不产 `attr.category` 行（lesson 恒忽略） */
   category: string;
+  /** 图章（多值；空数组 = 不产该行） */
+  badge: string[];
+  /** 标题色（6 色；空串 = 不产该行） */
+  titleColor: string;
   /** 子项清单，按展示顺序；写入时 seq 从 1 起连续 */
   children: ChildRow[];
 }
@@ -82,6 +90,8 @@ export function emptyContainerForm(type: ContainerType, itemId: string): Contain
     attachments: [],
     bodyMd: '',
     category: '',
+    badge: [],
+    titleColor: '',
     children: [],
   };
 }
@@ -112,6 +122,9 @@ export function buildContainerSegments(form: ContainerForm): SubmitSegmentRow[] 
     if (a.blobId !== '') lines.push({ kind: ATTR_ATTACHMENT, text: `${a.blobId}\t${a.name}` });
   }
   if (form.type === 'lesson' && form.bodyMd !== '') lines.push({ kind: ATTR_BODY_MD, text: form.bodyMd });
+  const badgeText = serializeBadge(form.badge);
+  if (badgeText !== '') lines.push({ kind: ATTR_BADGE, text: badgeText });
+  if (isTitleColor(form.titleColor)) lines.push({ kind: ATTR_TITLE_COLOR, text: form.titleColor });
 
   const out: SubmitSegmentRow[] = assignAttrSeqs(lines).map((s) => ({ seq: s.seq, kind: s.kind, text: s.text }));
   if (form.digest !== '') out.push({ seq: 0, kind: DIGEST_KIND, text: form.digest });
@@ -134,6 +147,8 @@ export async function loadContainerForm(repo: LocalRepo, itemId: string, type: C
   form.attachments = attrs.attachments.map((a) => ({ blobId: a.blobId, name: a.name }));
   form.bodyMd = type === 'lesson' ? attrs.bodyMd : '';
   form.category = type === 'course' ? attrs.category : '';
+  form.badge = attrs.badge;
+  form.titleColor = attrs.titleColor;
   form.children = childrenRowsOf(segs).map((r) => ({ kind: r.kind, itemId: r.text }));
   return form;
 }

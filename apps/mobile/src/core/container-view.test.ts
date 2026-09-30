@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ATTR_ATTACHMENT,
+  ATTR_BADGE,
   ATTR_BODY_MD,
   ATTR_CATEGORY,
   ATTR_COVER,
   ATTR_DIFFICULTY,
   ATTR_DURATION,
   ATTR_INSTRUCTOR,
+  ATTR_TITLE_COLOR,
 } from './attrs';
 import { attrsOf, childCounts, childrenRowsOf, digestOf, firstLine, lessonDigest } from './container-view';
 import type { SegmentRow } from './types';
@@ -38,6 +40,8 @@ describe('attrsOf：解析 seq<0 属性行', () => {
       ],
       bodyMd: '# 讲稿\n\n正文\n',
       category: '',
+      badge: [],
+      titleColor: '',
     });
   });
 
@@ -50,6 +54,8 @@ describe('attrsOf：解析 seq<0 属性行', () => {
       attachments: [],
       bodyMd: '',
       category: '',
+      badge: [],
+      titleColor: '',
     });
     const got = attrsOf([seg(-1, 'attr.unknown', 'x'), seg(-2, ATTR_ATTACHMENT, '没有制表符'), seg(-3, ATTR_DURATION, 'soon')]);
     expect(got.attachments).toEqual([]);
@@ -59,6 +65,21 @@ describe('attrsOf：解析 seq<0 属性行', () => {
   it('解析 attr.category：有该行取 text，无该行得空串', () => {
     expect(attrsOf([seg(-1, ATTR_CATEGORY, 'math')]).category).toBe('math');
     expect(attrsOf([seg(-1, ATTR_COVER, 'x')]).category).toBe('');
+  });
+
+  it('解析 attr.badge：切分后归一为码位升序；域外词与重复词被丢弃', () => {
+    expect(attrsOf([seg(-1, ATTR_BADGE, '活动,悬赏')]).badge).toEqual(['悬赏', '活动']);
+    expect(attrsOf([seg(-1, ATTR_BADGE, '悬赏,悬赏,自定义,活动')]).badge).toEqual(['悬赏', '活动']);
+    expect(attrsOf([seg(-1, ATTR_BADGE, '')]).badge).toEqual([]);
+    expect(attrsOf([seg(-1, ATTR_COVER, 'x')]).badge).toEqual([]);
+  });
+
+  it('解析 attr.title_color：只认 6 色；c-mark / yellow / 空 → 空串（静默忽略）', () => {
+    expect(attrsOf([seg(-1, ATTR_TITLE_COLOR, 'red')]).titleColor).toBe('red');
+    expect(attrsOf([seg(-1, ATTR_TITLE_COLOR, 'c-mark')]).titleColor).toBe('');
+    expect(attrsOf([seg(-1, ATTR_TITLE_COLOR, 'yellow')]).titleColor).toBe('');
+    expect(attrsOf([seg(-1, ATTR_TITLE_COLOR, '')]).titleColor).toBe('');
+    expect(attrsOf([seg(-1, ATTR_COVER, 'x')]).titleColor).toBe('');
   });
 });
 
