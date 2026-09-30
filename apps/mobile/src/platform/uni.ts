@@ -122,6 +122,18 @@ function uniGlobal(): UniGlobal {
   return u;
 }
 
+/** 选择文件用到的全局 `uni` 面：只关心两个可选 API 在不在（App 端 chooseFile 可选、老内核只有 chooseImage）。 */
+export interface PickHandle {
+  chooseFile?: unknown;
+  chooseImage?: unknown;
+}
+
+/** 取全局 uni 的选择能力句柄；`uni` 缺失时返回空对象（探测据此判 fail，而不是抛错）。 */
+export function pickHandle(): PickHandle {
+  const u = g().uni as PickHandle | undefined;
+  return u ?? {};
+}
+
 /** H5 下没有 plus：给可读提示，而不是 TypeError。 */
 export function assertAppRuntime(): PlusRuntime {
   const p = plusRuntime();

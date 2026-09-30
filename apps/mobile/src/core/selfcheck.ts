@@ -7,7 +7,7 @@
 import { keyPairFromSeed, randomBytes, sign, utf8, verify } from '@base/protocol-ts';
 
 import type { Adapters, LocalDb } from '../platform/adapter';
-import { base64ToBytes, bytesToBase64, plusRuntime } from '../platform/uni';
+import { base64ToBytes, bytesToBase64, pickHandle, plusRuntime, type PickHandle } from '../platform/uni';
 import { CommentError, sendComment } from './comment';
 import type { LocalRepo } from './repo';
 import { fetchReleaseDoc } from './update';
@@ -19,6 +19,7 @@ export interface CapabilityFlags {
   fsOk: Capability;
   dbOk: Capability;
   writeOk: Capability;
+  pickOk: Capability;
 }
 
 /** 未探测时的初值：`unknown` 不降级，功能照常尝试（spec §4）。 */
@@ -27,9 +28,10 @@ export const UNKNOWN_FLAGS: CapabilityFlags = {
   fsOk: 'unknown',
   dbOk: 'unknown',
   writeOk: 'unknown',
+  pickOk: 'unknown',
 };
 
-export const FLAG_KEYS: Array<keyof CapabilityFlags> = ['cryptoOk', 'fsOk', 'dbOk', 'writeOk'];
+export const FLAG_KEYS: Array<keyof CapabilityFlags> = ['cryptoOk', 'fsOk', 'dbOk', 'writeOk', 'pickOk'];
 
 export type CheckStatus = 'ok' | 'fail' | 'skip';
 
@@ -66,6 +68,17 @@ export function canSync(flags: CapabilityFlags): boolean {
   return flags.fsOk !== 'fail';
 }
 
+/** 选择本地文件（封面 / 附件）是否可用：只有明确 fail 才拦（spec §4）。 */
+export function canPickFile(flags: CapabilityFlags): boolean {
+  return flags.pickOk !== 'fail';
+}
+
+/** 选择文件被拦时的原位原因；可用时返回空串。详细原因在「设置 → 基座自检」。 */
+export function pickBlockedReason(flags: CapabilityFlags): string {
+  if (flags.pickOk === 'fail') return '当前环境不支持选择文件，无法设置封面 / 附件（设置 → 基座自检 可看原因）';
+  return '';
+}
+
 /** 自检事件的 target_id：它进节点事件表，但不进任何客户端评论列表（spec §7）。 */
 export const SELFCHECK_TARGET = 'selfcheck';
 
@@ -98,13 +111,13 @@ interface ProbeBase {
 /** 需要本地库与节点地址的条目：降级模式下不跑，直接标 fail。 */
 interface LocalProbe extends ProbeBase {
   scope: 'local';
-  run: (c: CheckContext, plus: PlusHandle | undefined) => Promise<string>;
+  run: (c: CheckContext, plus: PlusHandle | undefined, pick: PickHandle) => Promise<string>;
 }
 
 /** 不依赖本地库的条目：降级模式下仍能跑。 */
 interface StandaloneProbe extends ProbeBase {
   scope: 'standalone';
-  run: (plus: PlusHandle | undefined) => Promise<string>;
+  run: (plus: PlusHandle | undefined, pick: PickHandle) => Promise<string>;
 }
 
 type Probe = LocalProbe | StandaloneProbe;
@@ -115,7 +128,7 @@ const LOAD_DB_DOWN = '本地库不可用，未探测';
 const RENDER_SEGMENTS = 800;
 const B64_BYTES = 100 * 1024;
 
-/** 12 条探测（spec §3）。顺序即自检页的展示顺序。 */
+/** 14 条探测（spec §3）。顺序即自检页的展示顺序。 */
 const PROBES: Probe[] = [
   {
     id: 'crypto.sqlite_random',
@@ -124,7 +137,7 @@ const PROBES: Probe[] = [
     affects: '发表评论、身份生成',
     flag: 'cryptoOk',
     scope: 'local',
-    async run(c) {
+    async run(c, _plus, _pick) {
       const rows = await c.db.select('SELECT hex(randomblob(32)) AS b');
       const hex = String(rows[0]?.b ?? '');
       // SQLite 的 hex() 输出**大写**（真机 randomblob(32) → 64 个大写字符）；此处只判形态，大小写都合法。
@@ -139,7 +152,7 @@ const PROBES: Probe[] = [
     affects: '发表评论、身份生成',
     flag: 'cryptoOk',
     scope: 'local',
-    async run() {
+    async run(_plus, _pick) {
       // 走真实链路：App 端 randomBytes 的兜底源就是启动预填的那个池
       const b = randomBytes(32);
       if (b.length !== 32) throw new Error(`取到 ${b.length} 字节，期望 32`);
@@ -154,7 +167,7 @@ const PROBES: Probe[] = [
     affects: '发表评论、升级验签',
     flag: 'cryptoOk',
     scope: 'standalone',
-    async run() {
+    async run(_plus, _pick) {
       // 固定种子：只验算法链路自洽，不消耗随机池（自检不能破坏被测对象）
       const kp = keyPairFromSeed(FIXED_SEED);
       const msg = utf8('selfcheck');
@@ -169,7 +182,7 @@ const PROBES: Probe[] = [
     affects: '同步 pack、封面缓存',
     flag: 'fsOk',
     scope: 'local',
-    async run(c) {
+    async run(c, _plus, _pick) {
       const path = `${c.workDir}/${PROBE_DIR}/probe.bin`;
       // 不能用 randomBytes：App 端它会走随机池，1 MiB 会把池抽干
       const data = new Uint8Array(1 << 20);
@@ -194,7 +207,7 @@ const PROBES: Probe[] = [
     affects: '缓存清理、断点',
     flag: 'fsOk',
     scope: 'local',
-    async run(c) {
+    async run(c, _plus, _pick) {
       const path = `${c.workDir}/${PROBE_DIR}/meta.bin`;
       const data = new Uint8Array([1, 2, 3, 4, 5, 6, 7]);
       await c.adapters.fs.writeFile(path, data);
@@ -216,7 +229,7 @@ const PROBES: Probe[] = [
     affects: 'applyPack 原子性',
     flag: 'dbOk',
     scope: 'local',
-    async run(c) {
+    async run(c, _plus, _pick) {
       await c.db.execute('CREATE TABLE IF NOT EXISTS selfcheck_probe(k TEXT)');
       const before = Number((await c.db.select('SELECT count(*) AS n FROM selfcheck_probe'))[0]?.n ?? 0);
       let failed = false;
@@ -241,7 +254,7 @@ const PROBES: Probe[] = [
     affects: '离线读书',
     flag: 'dbOk',
     scope: 'local',
-    async run(c) {
+    async run(c, _plus, _pick) {
       const packId = await c.repo.getConfig('pack_id');
       if (!packId) throw new ProbeSkip('本地尚无 pack（未同步过）');
       const path = `${c.workDir}/pack-${packId}.sqlite`;
@@ -262,7 +275,7 @@ const PROBES: Probe[] = [
     name: '节点读接口可访问',
     affects: '评论列表',
     scope: 'local',
-    async run(c) {
+    async run(c, _plus, _pick) {
       if (!c.nodeBaseUrl) throw new ProbeSkip('未配置节点地址');
       const res = await c.adapters.http.get(`${c.nodeBaseUrl}/v1/comment?limit=1`);
       if (res.status !== 200) throw new Error(`GET /v1/comment 返回 HTTP ${res.status}`);
@@ -275,7 +288,7 @@ const PROBES: Probe[] = [
     name: '升级文档拉取并验签',
     affects: '升级提示',
     scope: 'local',
-    async run(c) {
+    async run(c, _plus, _pick) {
       if (!c.nodeBaseUrl) throw new ProbeSkip('未配置节点地址');
       const pubHex = await c.repo.getConfig('pubkey_hex');
       if (!pubHex) throw new ProbeSkip('未配置节点公钥');
@@ -291,7 +304,7 @@ const PROBES: Probe[] = [
     affects: '发表评论',
     flag: 'writeOk',
     scope: 'local',
-    async run(c) {
+    async run(c, _plus, _pick) {
       if (!c.nodeBaseUrl) throw new ProbeSkip('未配置节点地址');
       // 走真实发送链路：身份 → 签名 → POST /v1/event，正是 0.4.1 修坏过的那条。
       // 用 sendComment（纯发送）而不是 postComment：探针不得把 selfcheck 事件写进用户待发队列。
@@ -314,7 +327,7 @@ const PROBES: Probe[] = [
     name: '外部链接打开能力',
     affects: '升级下载',
     scope: 'standalone',
-    async run(plus) {
+    async run(plus, _pick) {
       if (typeof plus?.runtime?.openURL !== 'function') throw new Error('plus.runtime.openURL 不存在');
       return 'plus.runtime.openURL 可用';
     },
@@ -325,7 +338,7 @@ const PROBES: Probe[] = [
     name: '长正文分段与 base64 往返',
     affects: '阅读器、封面',
     scope: 'standalone',
-    async run() {
+    async run(_plus, _pick) {
       const body = Array.from({ length: RENDER_SEGMENTS }, (_, i) => `p${i}${'x'.repeat(60)}`).join('\n\n');
       const segs = body.split('\n\n').length;
       if (segs !== RENDER_SEGMENTS) throw new Error(`分段数不符：${segs}`);
@@ -339,6 +352,30 @@ const PROBES: Probe[] = [
       return `${utf8(body).length} 字节正文分 ${segs} 段；${bin.length} 字节 base64 往返一致`;
     },
   },
+  {
+    id: 'pick.choose_file',
+    group: '文件选择',
+    name: 'uni.chooseFile 存在',
+    affects: '选图片 / 附件',
+    flag: 'pickOk',
+    scope: 'standalone',
+    async run(_plus, pick) {
+      if (typeof pick.chooseFile !== 'function') throw new Error('uni.chooseFile 不存在（App 端为可选 API）');
+      return 'uni.chooseFile 可用';
+    },
+  },
+  {
+    id: 'pick.album',
+    group: '文件选择',
+    name: 'uni.chooseImage 存在',
+    affects: '选图片 / 附件（App 支）',
+    flag: 'pickOk',
+    scope: 'standalone',
+    async run(_plus, pick) {
+      if (typeof pick.chooseImage !== 'function') throw new Error('uni.chooseImage 不存在（App 端为可选 API）');
+      return 'uni.chooseImage 可用';
+    },
+  },
 ];
 
 export const DEFAULT_TIMEOUT_MS = 5000;
@@ -348,6 +385,8 @@ export interface SelfCheckOptions {
   timeoutMs?: number;
   /** plus 句柄；默认取 platform/uni 的 plusRuntime()，Node 测试传假对象 */
   plus?: PlusHandle | undefined;
+  /** 选择能力句柄；默认取 platform/uni 的 pickHandle()，Node 测试传假对象 */
+  pick?: PickHandle;
 }
 
 class ProbeTimeout extends Error {}
@@ -392,16 +431,17 @@ async function settle(
 export async function runSelfCheck(ctx: CheckContext | null, o: SelfCheckOptions = {}): Promise<SelfCheckReport> {
   const timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const plus = 'plus' in o ? o.plus : plusRuntime();
+  const pick = o.pick ?? pickHandle();
 
   const items: CheckResult[] = [];
   for (const p of PROBES) {
     const base = { id: p.id, group: p.group, name: p.name, affects: p.affects };
     if (p.scope === 'standalone') {
-      items.push(await settle(base, () => p.run(plus), timeoutMs));
+      items.push(await settle(base, () => p.run(plus, pick), timeoutMs));
     } else if (ctx === null) {
       items.push({ ...base, status: 'fail', detail: LOAD_DB_DOWN });
     } else {
-      items.push(await settle(base, () => p.run(ctx, plus), timeoutMs));
+      items.push(await settle(base, () => p.run(ctx, plus, pick), timeoutMs));
     }
   }
 
@@ -411,6 +451,7 @@ export async function runSelfCheck(ctx: CheckContext | null, o: SelfCheckOptions
     fsOk: [],
     dbOk: [],
     writeOk: [],
+    pickOk: [],
   };
   PROBES.forEach((p, i) => {
     if (p.flag) byFlag[p.flag].push(items[i].status);

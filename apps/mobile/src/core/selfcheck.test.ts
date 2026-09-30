@@ -4,8 +4,10 @@ import { keyPairFromSeed, signRelease, utf8, type ReleaseDoc } from '@base/proto
 
 import {
   UNKNOWN_FLAGS,
+  canPickFile,
   canPostComment,
   canSync,
+  pickBlockedReason,
   postBlockedReason,
   runSelfCheck,
   type CheckContext,
@@ -32,7 +34,7 @@ describe('能力标志与降级判定', () => {
   });
 
   it('全 ok 不降级', () => {
-    const all = { cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'ok' } as const;
+    const all = { cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'ok', pickOk: 'ok' } as const;
     expect(canPostComment(all)).toBe(true);
     expect(canSync(all)).toBe(true);
     expect(postBlockedReason(all)).toBe('');
@@ -43,6 +45,8 @@ const NODE = 'http://node.test';
 const ISSUER_SEED = '11'.repeat(32);
 const ISSUER_PUB = keyPairFromSeed(ISSUER_SEED).pubHex;
 const FAKE_PLUS: PlusHandle = { runtime: { version: '0.5.0', openURL: () => undefined } };
+/** 两条选择 API 都在的假句柄（App 端形态）；测试只用其「是不是函数」 */
+const FAKE_PICK = { chooseFile: () => undefined, chooseImage: () => undefined };
 
 const RELEASE: ReleaseDoc = signRelease(
   {
@@ -84,6 +88,8 @@ const ALL_IDS = [
   'net.event_write',
   'net.open_url',
   'render.memory',
+  'pick.choose_file',
+  'pick.album',
 ];
 
 function makeEnv(o: { withPack?: boolean } = {}) {
@@ -120,12 +126,12 @@ function makeEnv(o: { withPack?: boolean } = {}) {
 describe('runSelfCheck', () => {
   it('用例 1：全可用时 12 条为 ok，标志全 ok，且不留探测残留', async () => {
     const env = makeEnv({ withPack: true });
-    const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS });
+    const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS, pick: FAKE_PICK });
 
     expect(r.degraded).toBe(false);
     expect(r.items.map((i) => i.id)).toEqual(ALL_IDS);
-    expect(r.items.map((i) => i.status)).toEqual(new Array(12).fill('ok'));
-    expect(r.flags).toEqual({ cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'ok' });
+    expect(r.items.map((i) => i.status)).toEqual(new Array(14).fill('ok'));
+    expect(r.flags).toEqual({ cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'ok', pickOk: 'ok' });
     // 污染控制：probe.bin / meta.bin 已删，只剩 pack 文件；事务探测未留行
     expect([...env.fs.files.keys()]).toEqual(['/work/pack-p1.sqlite']);
     expect(await env.ctx.db.select('SELECT count(*) AS n FROM selfcheck_probe')).toEqual([{ n: 0 }]);
@@ -136,12 +142,12 @@ describe('runSelfCheck', () => {
     env.http.post = async () => {
       throw new Error('网络不可达');
     };
-    const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS });
+    const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS, pick: FAKE_PICK });
 
     const p10 = r.items.find((i) => i.id === 'net.event_write');
     expect(p10?.status).toBe('skip');
     expect(p10?.detail).toBe('节点不可达，未探测');
-    expect(r.flags).toEqual({ cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'unknown' });
+    expect(r.flags).toEqual({ cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'unknown', pickOk: 'ok' });
     // unknown 不降级 → 发表可用 → 离线入队可用（本册 §7）
     expect(canPostComment(r.flags)).toBe(true);
     // 探针不污染队列：sendComment 是纯发送，不入队
@@ -169,7 +175,7 @@ describe('runSelfCheck', () => {
 
     const timedOut = r.items.filter((i) => i.detail.includes('超时')).map((i) => i.id);
     expect(timedOut).toEqual(['net.tls_get', 'net.release_verify']);
-    expect(r.items).toHaveLength(12);
+    expect(r.items).toHaveLength(14);
     expect(r.flags.cryptoOk).toBe('ok');
   });
 
@@ -186,7 +192,8 @@ describe('runSelfCheck', () => {
     const skipped = r.items.find((i) => i.id === 'crypto.sqlite_random');
     expect(skipped?.status).toBe('fail');
     expect(skipped?.detail).toBe('本地库不可用，未探测');
-    expect(r.flags).toEqual({ cryptoOk: 'fail', fsOk: 'fail', dbOk: 'fail', writeOk: 'fail' });
+    // 降级模式未传 pick，Node 下 pickHandle() 回空对象 → 两条 pick.* 探测 fail
+    expect(r.flags).toEqual({ cryptoOk: 'fail', fsOk: 'fail', dbOk: 'fail', writeOk: 'fail', pickOk: 'fail' });
   });
 
   it('用例 6：本地无 pack 时第 7 条为 skip，dbOk 仍为 ok', async () => {
@@ -195,5 +202,36 @@ describe('runSelfCheck', () => {
 
     expect(r.items.find((i) => i.id === 'db.pack')?.status).toBe('skip');
     expect(r.flags.dbOk).toBe('ok');
+  });
+});
+
+describe('选择文件能力（pickOk）', () => {
+  it('unknown 不降级、ok 照常、仅 fail 拦下', () => {
+    expect(canPickFile(UNKNOWN_FLAGS)).toBe(true);
+    expect(canPickFile({ ...UNKNOWN_FLAGS, pickOk: 'ok' })).toBe(true);
+    expect(canPickFile({ ...UNKNOWN_FLAGS, pickOk: 'fail' })).toBe(false);
+  });
+
+  it('pickBlockedReason 只在 fail 时给出含「选择」的原因', () => {
+    expect(pickBlockedReason({ ...UNKNOWN_FLAGS, pickOk: 'fail' })).toContain('选择');
+    expect(pickBlockedReason(UNKNOWN_FLAGS)).toBe('');
+    expect(pickBlockedReason({ ...UNKNOWN_FLAGS, pickOk: 'ok' })).toBe('');
+  });
+
+  it('两条 pick.* 探测进场；缺 chooseImage 时 pickOk 降级为 fail', async () => {
+    const r = await runSelfCheck(null, { plus: FAKE_PLUS, pick: { chooseFile: () => undefined } });
+    const ids = r.items.map((i) => i.id);
+    expect(ids).toContain('pick.choose_file');
+    expect(ids).toContain('pick.album');
+    expect(r.items.find((i) => i.id === 'pick.choose_file')?.status).toBe('ok');
+    expect(r.items.find((i) => i.id === 'pick.album')?.status).toBe('fail');
+    expect(r.flags.pickOk).toBe('fail');
+  });
+
+  it('两条选择 API 都缺 ⇒ fail；都在 ⇒ ok', async () => {
+    const empty = await runSelfCheck(null, { plus: FAKE_PLUS, pick: {} });
+    expect(empty.flags.pickOk).toBe('fail');
+    const full = await runSelfCheck(null, { plus: FAKE_PLUS, pick: FAKE_PICK });
+    expect(full.flags.pickOk).toBe('ok');
   });
 });
