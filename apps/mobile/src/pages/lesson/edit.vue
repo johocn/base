@@ -63,30 +63,42 @@
     <view class="section">
       <view class="shead">
         <text class="label">载体清单</text>
-        <text class="add" @click="addCarrier">+ 添加载体</text>
+        <text class="add" @click="openPicker">+ 添加载体</text>
       </view>
       <text v-if="form.children.length === 0" class="hint">还没有载体；空课时也会在课程页占一行的位次</text>
       <view v-for="(c, i) in form.children" :key="i" class="card">
         <view class="chead">
-          <text class="label">第 {{ i + 1 }} 项</text>
+          <text class="label">第 {{ i + 1 }} 项 · {{ c.kind }}</text>
           <view>
             <text class="act" @click="move(i, -1)">上移</text>
             <text class="act" @click="move(i, 1)">下移</text>
             <text class="del" @click="removeChild(i)">删除</text>
           </view>
         </view>
+        <text class="val">{{ carrierTitle(c.itemId) }}</text>
+        <text class="hint">{{ c.itemId }}</text>
+      </view>
+      <view v-if="pickOpen" class="card">
+        <text class="label">选择载体</text>
+        <input v-model="pickKeyword" class="input" placeholder="搜索标题或 item_id" @input="refresh" />
         <view class="chips">
+          <text class="chip" :class="pickKind === '' ? 'chip-on' : ''" @click="setPickKind('')">全部</text>
           <text
             v-for="k in CARRIER_KINDS"
             :key="k"
             class="chip"
-            :class="c.kind === k ? 'chip-on' : ''"
-            @click="c.kind = k"
+            :class="pickKind === k ? 'chip-on' : ''"
+            @click="setPickKind(k)"
           >{{ k }}</text>
         </view>
-        <input v-model="c.itemId" class="input" placeholder="载体的 item_id，如 article/xxxx" />
+        <text v-if="candidates.length === 0" class="hint">本机还没有可选的条目，先同步内容包</text>
+        <view v-for="c in candidates" :key="c.itemId" class="row" @click="chooseCarrier(c)">
+          <text class="val">{{ c.title }}</text>
+          <text class="hint">{{ c.kind }} · {{ c.itemId }}</text>
+        </view>
+        <text class="add" @click="pickOpen = false">收起</text>
       </view>
-      <text class="hint">顺序即课时页里的展示顺序；kind 必须是 article / quiz / video / audio 之一</text>
+      <text class="hint">顺序即课时页里的展示顺序；kind 由候选行带入，不再手填</text>
     </view>
 
     <text v-if="error" class="error">{{ error }}</text>
@@ -103,8 +115,10 @@ import { computed, ref } from 'vue';
 
 import { DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO } from '../../core/attrs';
 import { uploadBlob } from '../../core/blob';
-import { loadContainerForm, saveContainer, startNewLesson, type ChildRow, type ContainerForm } from '../../core/course-edit';
+import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
+import { loadContainerForm, saveContainer, startNewLesson, type ContainerForm } from '../../core/course-edit';
 import { recordEditFailure } from '../../core/editlog';
+import type { LocalRepo } from '../../core/repo';
 import { UNKNOWN_FLAGS, canPickFile, pickBlockedReason, type CapabilityFlags } from '../../core/selfcheck';
 import { bootstrap, type AppContext } from '../../platform';
 import { pickLocalFile, type PickedFile } from '../../platform/uni';
@@ -118,6 +132,16 @@ const durationMin = ref('');
 const busy = ref(false);
 const error = ref('');
 const notice = ref('');
+
+/** 载体选择面板：关键词 + kind 过滤 + 候选列表 */
+const pickOpen = ref(false);
+const pickKeyword = ref('');
+const pickKind = ref('');
+const candidates = ref<CarrierCandidate[]>([]);
+/** 本机条目标题缓存（itemId → title || itemId），供清单行只读回显 */
+const carrierTitles = new Map<string, string>();
+/** 本机仓库（选择候选与标题缓存都要用），bootstrap 后才有值 */
+let pickRepo: LocalRepo | null = null;
 
 /** 能力标志：启动时只有 cryptoOk / pickOk 有值，其余 unknown（unknown 不降级，照常尝试） */
 const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
@@ -135,6 +159,8 @@ onLoad(async (query) => {
     ctx = await bootstrap();
     caps.value = ctx.capabilities;
     const repo = ctx.repo;
+    pickRepo = repo;
+    for (const it of await repo.listItems()) carrierTitles.set(it.itemId, it.title || it.itemId);
     if (lessonId !== '') {
       form.value = await loadContainerForm(repo, lessonId, 'lesson');
       durationMin.value = form.value.durationSec > 0 ? String(Math.round(form.value.durationSec / 60)) : '';
@@ -223,10 +249,37 @@ function removeAttachment(i: number) {
   form.value.attachments.splice(i, 1);
 }
 
-/** 新载体行的 item_id 允许先留空再填；空 id 在提交时会被拦下（不当成「静默丢弃」）。 */
-function addCarrier() {
-  const row: ChildRow = { kind: 'article', itemId: '' };
-  form.value.children.push(row);
+/** 按当前 kind 过滤与关键词刷新候选；repo 未就绪时置空（不报错）。 */
+async function refresh() {
+  if (!pickRepo) {
+    candidates.value = [];
+    return;
+  }
+  const kinds = pickKind.value === '' ? CARRIER_KINDS : [pickKind.value];
+  candidates.value = await listCarrierCandidates(pickRepo, kinds, pickKeyword.value);
+}
+
+async function openPicker() {
+  pickOpen.value = true;
+  await refresh();
+}
+
+/** 标题回显：命中本机条目缓存优先，查不到回落 item_id。 */
+function carrierTitle(itemId: string): string {
+  return carrierTitles.get(itemId) ?? itemId;
+}
+
+/** 点选候选：同 item_id 已在清单里则只关面板（去重），否则带入 kind 与 item_id 后关面板。 */
+function chooseCarrier(c: CarrierCandidate) {
+  if (!form.value.children.some((x) => x.itemId === c.itemId)) {
+    form.value.children.push({ kind: c.kind, itemId: c.itemId });
+  }
+  pickOpen.value = false;
+}
+
+function setPickKind(k: string) {
+  pickKind.value = k;
+  void refresh();
 }
 
 function move(i: number, d: number) {
