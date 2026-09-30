@@ -3567,20 +3567,20 @@ git push origin master
 
 | # | 项 | 结果 |
 | --- | --- | --- |
-| 1 | Task 1 提交哈希（`protocol/tag.go` + 测试） | |
-| 2 | Task 2–3 提交哈希（`tag_links` 表与 `store/tag.go`、`GovernorSet`） | |
-| 3 | Task 4–5 提交哈希（`type=tag` 分支与端到端、导入回填） | |
-| 4 | Task 6 提交哈希（`edit` 载体系与 `links_json`） | |
-| 5 | Task 7 提交哈希（手机端派生表） | |
-| 6 | Task 8–9 提交哈希（`core/tags.ts`、`submit.ts` 扩 `tag` 与 `links_json`） | |
-| 7 | Task 10 提交哈希（标签三页与内容页入口） | |
-| 8 | Task 11 提交哈希（版本 `0.14.0`/`19`、README 与册子回填） | |
-| 9 | 全量门禁实况 | |
-| 10 | 节点二进制（字节数 / sha256 / 探活） | |
-| 11 | APK（字节数 / sha256 / 证书 SHA1） | |
-| 12 | 线上验证（`/v1/release`、APK 200、`verifyRelease`） | |
-| 13 | 真机验收七条（人工） | |
-| 14 | 与计划的差异笔数 | |
+| 1 | Task 1 提交哈希（`protocol/tag.go` + 测试） | `ea4254f`（`internal/protocol/tag.go` 三元组编码/解码/形态判定 + `internal/protocol/tag_test.go`）。`go test ./internal/protocol/ -count=1` ok |
+| 2 | Task 2–3 提交哈希（`tag_links` 表与 `store/tag.go`、`GovernorSet`） | `50c285f`（`internal/store/tag.go`：DDL + `UpsertTagSubmission` + `replaceTagLinksTx` + `MaterializeTagSegments` + `ListTagLinks` / `ListTagsOf` + `tag_test.go`，物化 `segments` 行与 `tag_links` **同事务**） + `1cce179`（`internal/store` 的 `GovernorSet()` = #23 名册 ∪ 各圈 `DeriveSeats().Governors` 去重并集 + 单测） |
+| 3 | Task 4–5 提交哈希（`type=tag` 分支与端到端、导入回填） | `8b1e495`（`internal/httpapi/submit.go` 的 `type=tag` 分支、`tag_not_governor` / `tag_target_tagged` / `tag_target_not_found` / `tag_links_invalid`、`checkTagTargetsExist`、`content_hash` 走 `store.SegmentsContentHash(MaterializeTagSegments(...))` + `tag_test.go`） + `59848d1`（`ImportPack` 后处理 `backfillTagLinksTx` 幂等回填 + A 导出→B 导入逐行一致与重复导出字节一致的端到端；`packexport` / `internal/importer` **生产代码零改动**） |
+| 4 | Task 6 提交哈希（`edit` 载体系与 `links_json`） | `7a17e7a`（`governColumnMigrations` 幂等补列 `govern_proposals.links_json TEXT NOT NULL DEFAULT ''`、`editTagItemTx` 生效时全量覆盖 `tag_links` + 物化行 + 重算哈希且 `author_id`/`author_sig` 不动、`internal/httpapi/govern.go` 的 `edit` 由「写死 `articles`」改为**按载体系分流**且载体校验挪到 `GetItem` 之后） |
+| 5 | Task 7 提交哈希（手机端派生表） | `a0d2f8d`（`apps/mobile/src/core/`：`types.ts` 加 `TagLinkRow` 与 `MySubmissionRow.type` 加 `'tag'`、`repo.ts` 加 `tag_links` 表与 `idx_tag_links_target` + `listTagLinks` / `listTagLinksOfTargets` + `applyPack` 墓碑与重建、`fakes.ts` 的 `MemoryRepo` 同步，**另含 `submit.ts` 的 `SubmitDraft.type` 一行拓宽**——见更正 5） |
+| 6 | Task 8–9 提交哈希（`core/tags.ts`、`submit.ts` 扩 `tag` 与 `links_json`） | `156cc06`（**Task 9 Step 1–5**：`my_submissions.links_json` 列 + `ensureSubmissionColumns` + `submit.ts` 的 `TAG_KIND_RANK` / `sortTagLinks` / `materializeTagText` / `buildTagPayload` / `contentHashOf` 的 tag 分支 / `validateDraft` / `buildSubmitBody` / `writeLedger` / `runFlushSubmissions` + `submit.test.ts` 追加 2 项） + `9d070ed`（**Task 8 + Task 9 Step 6**：`core/tags.ts` 11 个导出 + `tags.test.ts` 15 项）——两 Task 次序互换的实情见更正 6 |
+| 7 | Task 10 提交哈希（标签三页与内容页入口） | `a153a96`（`pages/tag/list.vue`、`detail.vue`、`apply.vue` 三新页 + `pages.json` 注册（**未动 tabBar**）+ `mine.vue` 加「标签」组 + `course/detail.vue` 课程与课时标签区（`pendingOf` 仅治理人、课时区 `.stop`）+ `article/article.vue` 标签区 + `comment/comment.vue` 只读 `attachTags` + `myitems/myitems.vue` 的 `tag` 行隐藏「修改/重投更新」） |
+| 8 | Task 11 提交哈希（版本 `0.14.0`/`19`、README 与册子回填） | `4c4fd3d`（`apps/mobile/src/manifest.json` → `"versionName":"0.14.0"` / `"versionCode":19`、`docs/README.md` 第 62 行状态与第 38 行计划登记、`specs/2026-09-29-base-tagging-design.md` 插入 `§0.2 执行期口径回填` 六条） |
+| 9 | 全量门禁实况 | Go（cwd `e:\code\base`）：`go build ./...` / `go vet ./...` / `go test ./... -count=1` **全包 ok（exit 0）**。mobile（cwd `apps/mobile`）：`npx tsc --noEmit` 无输出、`npx vitest run` **19 文件 / 195 项全绿**、`npm run build:h5` 与 `npm run build:app` 均 `DONE Build complete`。两条发布前硬检查（**用 Grep 工具，未用 `Select-String`**）：① `pages/**/*.vue` 模板内 `\{\{[^}]*\.value` → **0 处**；② `dist/build/app/app-service.js` 内 `\.value\.value` → **0 处** |
+| 10 | 节点二进制（字节数 / sha256 / 探活） | 交叉编译 `$env:GOOS="linux"; $env:GOARCH="amd64"; go build -o based-linux-amd64 ./cmd/based` 产 **21736332 字节 / sha256 `9489ee3b2cfbb10a4e3388f6b9e79716423f78eae9db8180dda907e7023bde40`**；旧件 21686122 字节 / `d0a1c9ae…206920` 已备份为 `/opt/base/based.bak-0.13.1`（sha 与备份一致）。替换：`scp` 至 `/opt/base/based-0.14.0` 后 `cp` 报 `Text file busy`——查明第三个服务 `accept-node-1.service`（:8090，数据目录 `/opt/accept/node1`）也持有 `/opt/base/based`，遂改用 `mv -f /opt/base/based-0.14.0 /opt/base/based && chmod 0755` 原子替换（**不动验收节点运行实例**），再 `systemctl restart base` + `systemctl restart base-cache` ⇒ 两服务 `active`、线上 sha 与本地一致。探活（本地写 `.sh` → `scp` → `ssh me "sh /tmp/probe.sh"`，避开 PowerShell 5.1 引号 mangling）：`sqlite_master` 有 `tag_links` 且 DDL 与 §3.2 一致、有 `idx_tag_links_target`、`PRAGMA table_info(govern_proposals)` 含 `links_json TEXT NOT NULL DEFAULT ''`；`POST http://127.0.0.1:8081/v1/submit`（`systemctl cat base` 实测端口为 **8081**，非计划写的 8080——8080 是 `python3` 静态服务）`type=tag` 与 `type=article` 均 **400**（既有鉴权拒绝，非 404 / 500）；`GET /v1/release` 经 nginx 80 → 200 |
+| 11 | APK（字节数 / sha256 / 证书 SHA1） | 云打包 `D:\HBuilderX\cli.exe pack …--androidpacktype 3` 成功（云端证书）。产物 **27424106 字节 / sha256 `108b1163bec50364cd38dfa36aeeaf75178da446340fa452ad2d07157d0b9030`**，存 `apps/mobile/dist/release/apk/base-0.14.0.apk`；证书 SHA1（`D:\HBuilderX\plugins\amazon-corretto\bin\keytool.exe -printcert -jarfile`，**只用指纹判断**）**`19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`**，与 0.6.0–0.13.1 一致 ⇒ 可覆盖安装。打包源码树为 `4c4fd3d`（`git log` 核对：Task 7–11 的 `a0d2f8d` / `156cc06` / `9d070ed` / `a153a96` / `4c4fd3d` 均为其祖先） |
+| 12 | 线上验证（`/v1/release`、APK 200、`verifyRelease`） | `scp` APK → `/opt/appdl/base-0.14.0.apk`（27424106 字节，与本地一致）；`/opt/appdl/index.html` **整页重写**并 `scp`，`grep '0\.13\.[0-9]'` **无命中**、指向 `./base-0.14.0.apk`（其中的 `serve.py` 与历史 APK 未动）。`based release -version-name 0.14.0 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.14.0.apk -apk-file /opt/appdl/base-0.14.0.apk -notes 统一标签体系：治理人打标_待补标签_标签页_改标走提案 -out /opt/base-cache/data/release.json`（`-min-version-name` **沿用线上原值 `0.8.0`**，不动强制更新水位）。`GET /v1/release` → **200**，`version_name=0.14.0` / `min_version_name=0.8.0` / `issuer=base-node-1` / `apk_size=27424106` / `apk_sha256=108b1163…d0b9030` / `issued_at=2026-09-30T00:37:24Z`，与本地逐字一致；`HEAD /dl/base-0.14.0.apk` → **200**、`Content-Length=27424106`。`verifyRelease`：用**临时 vitest 用例**（`apps/mobile/src/core/_tmp_release_verify.test.ts`，实跑后**已删除**）拉线上文档以节点公钥 `48c33db9cf859e107fe89651d15fc5faaa8b16ffbb7d4b483aa167a0cff824f4` 验签 → **`verifyRelease = true`**（`0.14.0` / `27424106`），1 passed |
+| 13 | 真机验收七条（人工） | **待人工**（七条见 Task 12 Step 6）。0.8.0 与 0.12.0–0.13.1 的同类验收在历史上亦为人工项 |
+| 14 | 与计划的差异笔数 | **8 条**（更正 1–8，见下节）：Task 2 两处、Task 4 两处、Task 7 一处、Task 8/9 次序一处、Task 8 用例笔误一处、Task 12 Step 1 替换命令一处。另有**三处执行期已注册的口径细化**（Task 11 已回填册子 §0.2，非新差异）：`ListUntagged` 无调用点作废、`tagColumnMigrations` 不必要、`0.13.1` 已占用致本册实发 `0.14.0`/`19` |
 
 ### 更正（执行期与计划的差异）
 
@@ -3629,4 +3629,10 @@ git push origin master
 计划写的是：上述两条期望值（Step 1 代码块）。
 实际怎么做的：**实现逐字不动**（`tagsOf` 的升序实现与 `repo.ts` 的 `ORDER BY tag_id ASC`、节点 `store.ListTagsOf` 三方一致），只把这两处期望值校正为实际（正确）值，并在用例内注明依据（提交 `9d070ed`）。
 依据：第 2 条有节点侧硬证据——`internal/store/tag_test.go:182` 明确断言 `[]string{"tag/乙/一/一", "tag/甲/一/一"}`，即计划测试的字面量本身写反；第 1 条是计划测试与计划实现互斥，且 `untaggedTargets` 的返回值只被 `new Set(...)` 消费，序不影响任何行为。两处均属**计划笔误**，非契约分歧。
+
+**更正 8（Task 12 Step 1 · 二进制替换命令在本节点不可用）**
+现象：按 Step 1 的 `cp /opt/base/based-0.14.0 /opt/base/based` 执行报 `cp: cannot create regular file '/opt/base/based': Text file busy`；且 `systemctl is-active base base-cache` 两个 unit 名下**并未解释成因**——真正持有该文件的进程不在计划列举的两个 service 里。
+计划写的是：`ssh me "cp /opt/base/based /opt/base/based.bak-0.13.1 && cp /opt/base/based-0.14.0 /opt/base/based && systemctl restart base && systemctl restart base-cache && systemctl is-active base base-cache"`；回滚同样是 `cp /opt/base/based.bak-0.13.1 /opt/base/based && systemctl restart …`。
+实际怎么做的：先 `ss -ltnp` + `ps` 定位到第三个单元 `accept-node-1.service`（`:8090`，数据目录 `/opt/accept/node1`，跑的是**同一个** `/opt/base/based`）也在运行该 inode；为避免停掉验收节点，改用 `mv -f /opt/base/based-0.14.0 /opt/base/based && chmod 0755`（`mv` 是 unlink + rename，不写被占用的 inode）原子替换，随后只 `systemctl restart base` 与 `base-cache`（`accept-node-1` **不重启**，仍跑旧 inode 直到其下次重启）。回滚同理应改用 `mv -f /opt/base/based.bak-0.13.1 /opt/base/based`。
+依据：本册只改 `base` / `base-cache` 两个服务的语义（`tag_links`、`type=tag`、`edit` 分流），与验收节点无关；**不得**为换二进制去停一个与本册无关的服务。计划自己也提示了「该节点上可能有并行线留下的未被引用的历史二进制副本」——但本例的占用者是**在跑的 unit**，故这条提示不足以覆盖，需补记。
 
