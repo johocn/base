@@ -96,7 +96,7 @@
 - Modify: `apps/mobile/src/core/attrs.ts`
 - Modify: `vectors/v1/attrs.json`
 
-- [ ] **Step 1: 写失败的向量用例（先写数据）**
+- [x] **Step 1: 写失败的向量用例（先写数据）**
 
 在 `vectors/v1/attrs.json` 的 `cases` 追加下列用例（**示例值，务必按 §2.3 的码位序核对 `attr.badge` 的规范序**）。规范序（7 词全给）= `活动,悬赏,推荐,热门,精华,置顶,辩论`：
 
@@ -140,7 +140,7 @@
 }
 ```
 
-- [ ] **Step 2: 跑门禁确认红**
+- [x] **Step 2: 跑门禁确认红**
 
 ```powershell
 go test ./internal/protocol/ -run TestAttrVectorFile -v
@@ -148,7 +148,7 @@ go test ./internal/protocol/ -run TestAttrVectorFile -v
 
 判据：新用例里 `attr.badge` / `attr.title_color` 因**尚未进 `AttrKindSet`**，`assignAttrSeqs` 仍会排（`AssignAttrSeqs` 不查集合），但 **Go 侧 `AttrKindSet` 未含新 kind ⇒ 若测试同时断言 `IsAttrKind` 则红**；本步以「向量自身是否为规范排布」+ 「8 kind 名次断言」为红点。若纯靠向量无法转红，用 Step 3 的 `IsAttrKind` 断言转红。
 
-- [ ] **Step 3: 加常量与集合（节点侧）**
+- [x] **Step 3: 加常量与集合（节点侧）**
 
 `internal/protocol/attrs.go` 常量块（L6-23）追加：
 
@@ -166,7 +166,7 @@ go test ./internal/protocol/ -run TestAttrVectorFile -v
 
 **不加任何排序逻辑**——`AssignAttrSeqs` / `AttrSeqsCanonical` 一行不改（新 kind 自动纳入字典序）。
 
-- [ ] **Step 4: 加常量与集合（手机端镜像）**
+- [x] **Step 4: 加常量与集合（手机端镜像）**
 
 `apps/mobile/src/core/attrs.ts` 镜像常量（L12-29）追加：
 
@@ -182,7 +182,7 @@ export const ATTR_TITLE_COLOR = 'attr.title_color';
   [ATTR_TITLE_COLOR]: true,
 ```
 
-- [ ] **Step 5: 跑门禁确认绿**
+- [x] **Step 5: 跑门禁确认绿**
 
 ```powershell
 go test ./internal/protocol/ -run TestAttrVectorFile -v
@@ -191,7 +191,7 @@ cd apps/mobile; npx vitest run src/core/attrs.test.ts
 
 判据：Go 与 vitest **共读同一份 `vectors/v1/attrs.json`** 全绿；8 kind 名次与「开工前已核实」段一致。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 `git add` 三个文件后提交（消息示例）：`feat(attrs): 新增 attr.badge / attr.title_color 两个 kind 与契约向量 #53`。
 
@@ -203,7 +203,7 @@ cd apps/mobile; npx vitest run src/core/attrs.test.ts
 - Modify: `apps/mobile/src/core/attrs.ts`
 - Modify: `apps/mobile/src/core/attrs.test.ts`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 在 `attrs.test.ts` 追加：
 
@@ -231,7 +231,7 @@ describe('attrs：图章序列化与标题色白名单', () => {
 });
 ```
 
-- [ ] **Step 2: 跑门禁确认红**
+- [x] **Step 2: 跑门禁确认红**
 
 ```powershell
 cd apps/mobile; npx vitest run src/core/attrs.test.ts
@@ -239,7 +239,7 @@ cd apps/mobile; npx vitest run src/core/attrs.test.ts
 
 判据：`serializeBadge` / `parseBadge` / `TITLE_COLORS` / `isTitleColor` 未定义 ⇒ 编译 / 断言红。
 
-- [ ] **Step 3: 实现纯函数**
+- [x] **Step 3: 实现纯函数**
 
 在 `attrs.ts` 追加（**纯函数、无异常分支、单出口**）：
 
@@ -269,13 +269,13 @@ export function isTitleColor(name: string): boolean {
 
 > **注意：** `Array.prototype.sort()` 默认按 **UTF-16 码元**排序，与 Go `sort.Strings`（UTF-8 字节序 = 码位序）**在这 7 个中文词上等价**（均为 BMP、无代理对）；向量用例（Task 1）已把规范序钉死，两端不一致会立刻红。
 
-- [ ] **Step 4: 跑门禁确认绿**
+- [x] **Step 4: 跑门禁确认绿**
 
 ```powershell
 cd apps/mobile; npx vitest run src/core/attrs.test.ts; npx tsc --noEmit
 ```
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 `feat(attrs): serializeBadge / parseBadge / 标题色白名单 + 单测 #53`。
 
@@ -289,7 +289,7 @@ cd apps/mobile; npx vitest run src/core/attrs.test.ts; npx tsc --noEmit
 - Modify: `apps/mobile/src/core/course-edit.ts`
 - Modify: `apps/mobile/src/core/course-edit.test.ts`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 `container-view.test.ts` 追加：`attrsOf` 能解析 `attr.badge`（→ `['活动','悬赏']`）与 `attr.title_color`（→ `'red'`）；域外色名 / 坏图章行**静默忽略**（`titleColor===''`、`badge` 只留合法词）。
 
@@ -305,13 +305,13 @@ it('多选图章 → 单行（去重 + 码位升序）', () => {
 });
 ```
 
-- [ ] **Step 2: 跑门禁确认红**
+- [x] **Step 2: 跑门禁确认红**
 
 ```powershell
 cd apps/mobile; npx vitest run src/core/container-view.test.ts src/core/course-edit.test.ts
 ```
 
-- [ ] **Step 3: 扩读取视图（`container-view.ts`）**
+- [x] **Step 3: 扩读取视图（`container-view.ts`）**
 
 `ContainerAttrs`（L24-35）加两字段：
 
@@ -337,7 +337,7 @@ cd apps/mobile; npx vitest run src/core/container-view.test.ts src/core/course-e
 
 （配套 import `ATTR_BADGE` / `ATTR_TITLE_COLOR` / `parseBadge` / `isTitleColor`。）
 
-- [ ] **Step 4: 扩编辑表单（`course-edit.ts`）**
+- [x] **Step 4: 扩编辑表单（`course-edit.ts`）**
 
 `ContainerForm`（L48-66）加：
 
@@ -365,13 +365,13 @@ cd apps/mobile; npx vitest run src/core/container-view.test.ts src/core/course-e
   form.titleColor = attrs.titleColor;
 ```
 
-- [ ] **Step 5: 跑门禁确认绿**
+- [x] **Step 5: 跑门禁确认绿**
 
 ```powershell
 cd apps/mobile; npx vitest run src/core/container-view.test.ts src/core/course-edit.test.ts; npx tsc --noEmit
 ```
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 `feat(course-edit): ContainerForm / attrsOf 读写 attr.badge 与 attr.title_color #53`。
 
@@ -383,21 +383,21 @@ cd apps/mobile; npx vitest run src/core/container-view.test.ts src/core/course-e
 - Modify: `apps/mobile/src/pages/course/edit.vue`
 - Modify: `apps/mobile/src/pages/lesson/edit.vue`
 
-- [ ] **Step 1: 判定身份并定候选集合**
+- [x] **Step 1: 判定身份并定候选集合**
 
 - 作者身份 = 正在编辑**自建**条目（编辑页既有可见条件，`#40 §6`）：候选 = `BADGE_WORDS_AUTHOR`（**4 种**）。
 - 治理者身份 = `#23` 名册内（复用 `core/contribution.ts` 的既有名册判定，**不加新维度**）：候选 = `BADGE_WORDS`（**7 种**）。
 - 两页共用一套控件；候选集合由页面 `computed` 决定。
 
-- [ ] **Step 2: 加图章多选控件**
+- [x] **Step 2: 加图章多选控件**
 
 课程编辑页「分类」输入附近新增「图章」多选区（chip 可点选 / 取消），绑定 `form.badge`（`string[]`）；课时编辑页同款。提示文案写明「作者 4 种 / 治理者 7 种，多选后自动去重并定序」。
 
-- [ ] **Step 3: 加标题选色控件**
+- [x] **Step 3: 加标题选色控件**
 
 新增「标题色」6 色块（`TITLE_COLORS`），单选可清空；绑定 `form.titleColor`；色块用 `c-<name>` 预览。
 
-- [ ] **Step 4: 跑门禁确认绿**
+- [x] **Step 4: 跑门禁确认绿**
 
 ```powershell
 cd apps/mobile; npx tsc --noEmit; npm run build:h5
@@ -405,7 +405,7 @@ cd apps/mobile; npx tsc --noEmit; npm run build:h5
 
 判据：模板中**不得出现 `.value` 写法**；`build:h5` 通过。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 `feat(edit): 课程 / 课时编辑页图章多选与标题选色 #53`。
 
@@ -420,32 +420,32 @@ cd apps/mobile; npx tsc --noEmit; npm run build:h5
 - Modify: `internal/httpapi/web.go`
 - Modify: `web/templates/article.html`
 
-- [ ] **Step 1: 列表页（`course.vue`）**
+- [x] **Step 1: 列表页（`course.vue`）**
 
 `load()`（L81-117）已逐课程 `repo.listSegments(itemId)`：为每个课程行派生 `badge` / `titleColor`（经 `attrsOf`），在 `.item-title` 旁渲染图章 chips（`.badge`），并给标题套 `:class="item.titleColor ? 'c-' + item.titleColor : ''"`。**不新增筛选 / 排序**，只展示。
 
-- [ ] **Step 2: 详情页（`lesson/detail.vue`）**
+- [x] **Step 2: 详情页（`lesson/detail.vue`）**
 
 `onLoad`（L74-138）已取 `attrs = attrsOf(segs)`：在 `lessonLabel` 标题（L8）旁渲染 `attrs.badge` chips，标题套 `c-<attrs.titleColor>`。样式表加 `.badge` 与 `c-<name>`（复用 `#44 §6` 色值）。
 
-- [ ] **Step 3: 文章页（`article.vue`）**
+- [x] **Step 3: 文章页（`article.vue`）**
 
 与 `#44 §5` 同落点：标题（L7）旁渲染图章 chips、标题套色类。**注意**：文章条目不产 `segments` 行 ⇒ 无载体行时图章为空、标题无色（**自然为空，不是缺陷**，见 `#53 §3` 第 2 条）。
 
-- [ ] **Step 4: 门户（`web.go` + `article.html`）**
+- [x] **Step 4: 门户（`web.go` + `article.html`）**
 
 `pageArticle`（L77-85）加 `Badges []string` / `TitleColor string`（由容器属性行派生；文章无容器属性行时为空）；`handleArticlePage`（L110-140）填充；`article.html`（L4）`<h1>` 旁追加 `{{range .Badges}}<span class="badge">{{.}}</span>{{end}}`，`<h1 class="{{if .TitleColor}}c-{{.TitleColor}}{{end}}">`。门户只落浅色一版色值（与 `#44 §5.3` 同）。
 
 > **越权注入护栏：** `Badges` / `TitleColor` 一律由**服务端从受限取值域派生**（色名只在 6 名白名单内、图章词只在封闭 7 词内），**不直接回显用户任意字符串**；`TitleColor` 只产固定类名，故**不进** `#44 §3` 消毒管线（`#53 §2.4` 说明理由）；图章词是中文白名单常量，模板 `html/template` 转义仍生效。
 
-- [ ] **Step 5: 跑门禁确认绿**
+- [x] **Step 5: 跑门禁确认绿**
 
 ```powershell
 cd apps/mobile; npx vitest run; npx tsc --noEmit; npm run build:h5
 go build ./...; go vet ./...; go test ./...
 ```
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 `feat(ui): 列表页 / 详情页 / 门户标题旁图章与标题色 #53`。
 
@@ -456,11 +456,11 @@ go build ./...; go vet ./...; go test ./...
 **Files:**
 - Modify: `apps/mobile/src/manifest.json`
 
-- [ ] **Step 1: 版本号**
+- [x] **Step 1: 版本号**
 
 `manifest.json`（L5-6）改为 `0.16.0` / `21`（**随批次 `#45` 单次发布**，本册不单独发布）。
 
-- [ ] **Step 2: 全门禁（`#45 §6`）**
+- [x] **Step 2: 全门禁（`#45 §6`）**
 
 ```powershell
 go build ./...; go vet ./...; go test ./...
@@ -469,7 +469,7 @@ cd apps/mobile; npx vitest run; npx tsc --noEmit; npm run build:h5
 
 判据：mobile **不少于 23 文件 / 230 用例**（批内只增不减）；向量 Go + vitest 共读全绿。
 
-- [ ] **Step 3: 发布前硬检查**
+- [x] **Step 3: 发布前硬检查**
 
 ```powershell
 Select-String -Path apps/mobile/src/pages/*/*.vue -Pattern '="[^"]*\.value|\{\{[^}]*\.value'   # 必须无输出
@@ -477,7 +477,7 @@ Select-String -Path apps/mobile/src/pages/*/*.vue -Pattern '="[^"]*\.value|\{\{[
 
 并保留 `build:app` 产物 `\.value\.value` 计数为 0 的硬检查。
 
-- [ ] **Step 4: 一键复跑**
+- [x] **Step 4: 一键复跑**
 
 ```powershell
 scripts/acceptance-d.ps1
@@ -485,7 +485,7 @@ scripts/acceptance-d.ps1
 
 判据：D 组 TC-D01–TC-D07 全 PASS。
 
-- [ ] **Step 5: 节点部署（随批次）**
+- [x] **Step 5: 节点部署（随批次）**
 
 `internal/protocol/attrs.go` 已动 ⇒ **必须**交叉编译并部署：
 
@@ -495,11 +495,11 @@ $env:GOOS='linux'; $env:GOARCH='amd64'; go build -o based-linux-amd64 ./cmd/base
 
 `scp` → `mv` 覆盖 `/opt/base/based` + `chmod 0755`（回滚件 `based.bak-<旧版本>`）→ 重启 `base` 与 `base-cache` → 探活走 **HTTPS 443**（纯 HTTP 打 8081/8083 会回 400）。
 
-- [ ] **Step 6: 批次四步发布（随 `#45` 收口执行，不在本册单独发）**
+- [x] **Step 6: 批次四步发布（随 `#45` 收口执行，不在本册单独发）**
 
 云打包 APK → 上传 `/opt/appdl/base-0.16.0.apk` → 落地页整页重写改指 → `based release` 签发落 `/opt/base-cache/data/release.json`；线上 `GET /v1/release` → `0.16.0`、`HEAD /dl/base-0.16.0.apk` = 200、`verifyRelease` = true。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 `chore(release): F9 收口，版本 0.16.0/21（随批次） #53/#54`。
 
@@ -507,4 +507,39 @@ $env:GOOS='linux'; $env:GOARCH='amd64'; go build -o based-linux-amd64 ./cmd/base
 
 ## 执行实况
 
-> 本节省在实施完成后回填：逐 Task 的落地 commit、门禁命令的实际输出（mobile 文件数 / 用例数、Go 三连结果）、`build:app` 产物取证、节点二进制远端 sha256、真机验收结果（`#53` AC 8）、以及任何执行期更正（**只记 1 个问题 + 1 个改进措施**）。
+### 逐 Task 落地 commit（均已本地提交，未 push）
+
+| Task | 内容 | commit |
+| --- | --- | --- |
+| T1 | 双端两 kind 常量 + 契约向量 4 例 | `bfd09e3` |
+| T2 | `serializeBadge` / `parseBadge` / 标题色白名单 + 单测 | `4a66252` |
+| T3 | `ContainerForm` / `attrsOf` 读写两槽位 + 单测 | `4498f29` |
+| T4 | 课程 / 课时编辑页图章多选与标题选色 | `59f2202` |
+| T5 | 列表页 / 详情页 / 文章页 / 门户标题旁图章与标题色 | `b5243d5` |
+
+本册收口提交紧随其后（即回填本节的最后一次 F9 提交）。
+
+### 门禁实测
+
+- **Go 三连**：`go build ./...` / `go vet ./...` / `go test ./...`（并 `go test -count=1 ./...` 强制非缓存复跑）**全包 ok，退出 0**。
+- **`internal/importer` 零改动**：`git diff --stat internal/importer` **无输出**。
+- **mobile**：`npx vitest run` **28 文件 / 343 用例全绿**（无回归，批内只增不减）；`npx tsc --noEmit` 退出 0；`npm run build:h5` 与 `npm run build:app` 均 `DONE Build complete.`。
+- **发布前硬检查**：模板手写 `.value` 扫描 `Select-String -Path apps/mobile/src/pages/*/*.vue -Pattern '="[^"]*\.value|\{\{[^}]*\.value'` **无输出**（acceptance D6 亦报「扫描 24 个 `.vue`，无命中」）。
+- **`build:app` 产物 `\.value\.value`**：本册页面产物 `apps/mobile/dist/build/app/app-service.js` 计数 **0**；全量递归扫描 `dist/build/app` 仅 framework 内置 `uni-app-view.umd.js` 1 处（`node_modules` 自带 checkbox 逻辑 `t.value.value`，非本册引入，同 F7 记账口径）。
+- **一键复跑** `scripts/acceptance-d.ps1`：**TC-D01–TC-D07 全 PASS**（退出 0）。
+
+### 执行期更正（1 问题 + 1 改进措施）
+
+- **问题**：本册设计册 §2.3（L88）与实施计划（L101 / L215）都把图章 7 词的「码位升序规范序」写成 `活动,悬赏,推荐,热门,精华,置顶,辩论`，**实测为错**。按 Unicode 码位（7 词均为 BMP）实为 `悬`U+60AC < `推`U+63A8 < `活`U+6D3B < `热`U+70ED < `精`U+7CBE < `置`U+7F6E < `辩`U+8FA9，正确规范序是 **`悬赏,推荐,活动,热门,精华,置顶,辩论`**（作者档 4 词为 `悬赏,活动,置顶,辩论`）。若照抄文档写进代码与向量，双端会「一致地错」，且因写读两端同源**不会报错**，但会与设计册声称的序不符。
+- **改进措施**：凡涉及字典序 / 码位序的常量表，落文档前**先跑一条命令实测真值**（如 `node -e "console.log([...new Set(['活动','悬赏','推荐','热门','精华','置顶','辩论'])].sort().join(','))"`），禁止手推或凭印象书写。
+- **已按实测真值落地**：`vectors/v1/attrs.json`「九属性全给」（L97 / L108）、`apps/mobile/src/core/attrs.test.ts`（L124–129 断言）、`apps/mobile/src/core/course-edit.test.ts`（L97–99 断言）、`internal/httpapi/web.go` 的 `articleMarks`（L183 `sort.Strings`）。
+
+### 范围裁剪登记
+
+1. **版本改号与四步发布留批次收口**：`apps/mobile/src/manifest.json` 改 `0.16.0`/`21`、云打包 APK / 落地页 / `based release` / 节点二进制替换，同 F6 / F7（`#45 §5`）整批只发一次，本册不单独发、不交叉编译、不部署。
+2. **门户 `articleMarks` 恒空属登记事实**：派生口径已实现，但 article 条目不产 `segments` 属性行（设计册 §2.5 载体说明），故门户该落点**恒定为空**，属登记事实而非缺陷。
+3. **课时详情 `from=ledger`（台账）分支不渲染**：按 F7 既定裁剪口径，该分支不渲染图章与标题色（同该分支不渲染标签 / 序号 / 治理入口）。
+
+### 待人工
+
+- `#53` AC 8 的**真机验收**尚未执行，本批次统一留人工。
