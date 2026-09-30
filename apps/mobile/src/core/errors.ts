@@ -14,6 +14,8 @@ const SERVER_ERROR_TEXT: Record<string, string> = {
   item_type_unsupported: '载体只能是文章或题库',
   item_type_mismatch: '载体与 id 前缀不一致',
   item_id_taken: '该条目已被他人创建',
+  blob_too_large: '上传块超过 8 MiB',
+  bad_multipart: '上传格式错误（需 multipart/form-data 且含字段 file）',
   author_id_forbidden: '请求体不得携带身份字段',
   author_sig_invalid: '作者归属签名验证失败',
   identity_unregistered: '身份未在本节点登记，请稍后重试',
