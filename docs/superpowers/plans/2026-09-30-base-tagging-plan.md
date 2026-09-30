@@ -3616,3 +3616,9 @@ git push origin master
 实际怎么做的：在 `submit.ts` 只改 `SubmitDraft.type` 一行（`'article' | 'quiz'` → `'article' | 'quiz' | 'tag'`），随 Task 7 一并提交；Task 9 此步遂为既有事实，其余不动。
 依据：类型拓宽是 Task 7 自身语义（台账 `type` 含 `tag`）的**直接、不可分割的后果**，延后只会让「每个 Task 结束即门禁全绿」这一纪律破功；只挪一行、不引入任何运行期语义变化，也不改变 Task 9 的其余契约。
 
+**更正 6（Task 8 / Task 9 · 两 Task 互为前置，执行次序互换）**
+现象：计划把 Task 8（`core/tags.ts`）排在 Task 9（`submit.ts` 扩 `tag` 载体）之前，但两者**互为前置**，按计划次序任一个都无法单独门禁全绿：Task 8 的 `tags.test.ts` 断言 `submitTag` 的请求体键序含 `links`、台账行 `type === 'tag'`——这些全由 Task 9 的 `submit.ts` 载体提供（`enqueueOrSend` 的 `links` 字段、`buildTagPayload`、`writeLedger` 的 `links_json`），Task 9 未落地时 Task 8 必红；而 Task 9 Step 6 又要改 Task 8 才创建的 `core/tags.ts`。
+计划写的是：Task 8 全量（含 Step 5 提交）→ Task 9 全量（Step 1–7，其 Step 6 改 `tags.ts`）。
+实际怎么做的：**次序互换并拆分落点**——先执行 Task 9 的 Step 1–5（台账 `links_json` 列 + `ensureSubmissionColumns` + `submit.ts` 载体 + `submit.test.ts` 两条用例），提交 `156cc06`（文件同计划，**不含 `tags.ts`**，该文件此轮尚未创建）；Step 6（`tags.ts` 的三段本地校验与 `TAG_SEGMENT_MAX_RUNES`）**随 Task 8 周期一并落地**，于是 Task 8 的提交含 `tags.ts` + `tags.test.ts`。
+依据：Step 6 的全部内容都在 `tags.ts` 内，它天然属于 Task 8 的产物；把它留在 Task 9 会让 Task 9 的提交无法独立门禁（缺 `tags.ts`），反之并入 Task 8 则两个提交都各自全绿。契约、用例语义与最终文件内容**均未变**，只是两批改动的归属与提交次序调整。
+
