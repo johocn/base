@@ -4,7 +4,7 @@ import { deriveIdentityId, sha256Hex, utf8, verifyAuthorSig, type Json } from '@
 
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { IDENTITY_REGISTERED_KEY } from './comment';
-import { buildArticlePayload, buildQuizPayload, contentHashOf, enqueueOrSend, flushSubmissions, newItemID, submitItem, type SubmitDraft, type SubmitOptions } from './submit';
+import { buildArticlePayload, buildQuizPayload, buildTagPayload, contentHashOf, enqueueOrSend, flushSubmissions, newItemID, submitItem, type SubmitDraft, type SubmitOptions } from './submit';
 import { buildQuestionJSON } from './quizdoc';
 import { decodeUtf8 } from './sync';
 
@@ -172,7 +172,7 @@ describe('台账状态机与补发', () => {
     http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
     for (const id of ['article/one', 'article/two', 'article/three']) {
       await repo.saveSubmission({
-        itemId: id, type: 'article', title: id, bodyMd: '正文', questionJson: '',
+        itemId: id, type: 'article', title: id, bodyMd: '正文', questionJson: '', linksJson: '',
         state: 'pending', reason: null, created: 0, queuedAt: `2026-09-28T00:00:0${id.slice(-1) === 'e' ? 1 : id.slice(-1) === 'o' ? 2 : 3}Z`, sentAt: '',
       });
     }
@@ -191,7 +191,7 @@ describe('台账状态机与补发', () => {
     http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
     http.postRoutes.set(`${BASE}/v1/submit`, json({ created: true }));
     await repo.saveSubmission({
-      itemId: 'article/one', type: 'article', title: '甲', bodyMd: '正文', questionJson: '',
+      itemId: 'article/one', type: 'article', title: '甲', bodyMd: '正文', questionJson: '', linksJson: '',
       state: 'pending', reason: null, created: 0, queuedAt: '2026-09-28T00:00:01Z', sentAt: '',
     });
     const [a, b] = await Promise.all([flushSubmissions(o), flushSubmissions(o)]);
@@ -206,5 +206,45 @@ describe('台账状态机与补发', () => {
     expect((err as Error).message).toBe('未配置节点地址，无法投稿');
     expect(await flushSubmissions(o)).toEqual({ sent: 0, failed: 0, remaining: 0, error: '' });
     expect(await repo.listSubmissions()).toHaveLength(0);
+  });
+});
+
+describe('标签载体', () => {
+  it('键序固定为 type→item_id→title→links→author_sig，且 content_hash 走物化文本', () => {
+    const draft: SubmitDraft = {
+      itemId: 'tag/甲/第一章/第一节', type: 'tag', title: '甲 · 第一章 · 第一节', bodyMd: '', questionJson: '',
+      links: [
+        { tagId: 'tag/甲/第一章/第一节', targetId: 'course/c1/lesson/l1', kind: 'lesson' },
+        { tagId: 'tag/甲/第一章/第一节', targetId: 'course/c1', kind: 'course' },
+      ],
+    };
+    // 物化序 = kind 固定序（course < lesson）→ target 升序，与节点 store.MaterializeTagSegments 同构
+    expect(contentHashOf(draft)).toBe(sha256Hex(utf8('course\tcourse/c1\nlesson\tcourse/c1/lesson/l1\n')));
+    const wire = decodeUtf8(buildTagPayload(draft.itemId, draft.title, draft.links!, 'ff'.repeat(64)));
+    expect(wire).toBe(
+      '{"type":"tag","item_id":"tag/甲/第一章/第一节","title":"甲 · 第一章 · 第一节",' +
+        '"links":[{"target_id":"course/c1","kind":"course"},{"target_id":"course/c1/lesson/l1","kind":"lesson"}],' +
+        '"author_sig":"' + 'ff'.repeat(64) + '"}',
+    );
+  });
+
+  it('断网入队 → 台账存下 links_json → 补发时草稿可完整重建', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    const state = gateSubmit(http); // 与既有用例同一开关
+    await enqueueOrSend(o, {
+      itemId: 'tag/甲/第一章/第一节', type: 'tag', title: '甲 · 第一章 · 第一节', bodyMd: '', questionJson: '',
+      links: [{ tagId: 'tag/甲/第一章/第一节', targetId: 'course/c1', kind: 'course' }],
+    });
+    const row = await repo.getSubmission('tag/甲/第一章/第一节');
+    expect(row?.type).toBe('tag');
+    expect(row?.linksJson).toBe('[{"target_id":"course/c1","kind":"course"}]');
+
+    state.offline = false;
+    http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'tag/甲/第一章/第一节', created: false }));
+    const res = await flushSubmissions(o);
+    expect(res.sent).toBe(1);
+    const wire = JSON.parse(decodeUtf8(http.posted.at(-1)!.body)) as { links: unknown };
+    expect(wire.links).toEqual([{ target_id: 'course/c1', kind: 'course' }]);
   });
 });

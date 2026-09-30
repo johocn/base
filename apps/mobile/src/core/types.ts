@@ -115,6 +115,8 @@ export interface MySubmissionRow {
   bodyMd: string;
   /** 题库 JSON 字符串（article 行为空串） */
   questionJson: string;
+  /** 标签关联的 JSON 文本（`[{target_id,kind}]`）；非 tag 载体恒为空串。补发要从它重建草稿。 */
+  linksJson: string;
   state: 'pending' | 'sent' | 'failed';
   /** `state='failed'` 时的用户可读原因（错误码映射后的中文）；可空 */
   reason: string | null;

@@ -13,7 +13,7 @@ import { signRequestHeaders, type Identity } from './identity';
 import { parseQuestionDoc } from './quiz';
 import type { LocalRepo } from './repo';
 import { decodeUtf8 } from './sync';
-import type { MySubmissionRow } from './types';
+import type { MySubmissionRow, TagLinkRow } from './types';
 
 /** 与 `core/comment.ts` 同一组依赖（同一套 `ensureRegistered`，本册不另立会话模块）。 */
 export type SubmitOptions = CommentOptions;
@@ -26,6 +26,8 @@ export interface SubmitDraft {
   bodyMd: string;
   /** quiz 专有；article 恒为空串 */
   questionJson: string;
+  /** tag 专有：本次直打要建立的关联集（其余载体不传）。 */
+  links?: TagLinkRow[];
 }
 
 /** 发表失败的用户可读错误。码沿用评论队列的词汇，避免两套同义词。 */
@@ -44,8 +46,31 @@ export function newItemID(type: 'article' | 'quiz'): string {
   return `${type}/${bytesToHex(randomBytes(8))}`;
 }
 
-/** `content_hash` 与 #25 §2.2 同一口径：article 取 `body_md`、quiz 取 `question_json` 的 UTF-8 字节 sha256。 */
+/** kind 固定序：与 `core/tags.ts` 的 `TAG_KIND_ORDER`、节点 `store.tagKindRank` 同序。 */
+const TAG_KIND_RANK: Record<string, number> = { course: 0, lesson: 1, article: 2, comment: 3 };
+
+/** 按 (kind 固定序, target_id 升序) 排序——物化与请求体都用这一份。 */
+function sortTagLinks(links: TagLinkRow[]): TagLinkRow[] {
+  return [...links].sort((a, b) => {
+    const d = (TAG_KIND_RANK[a.kind] ?? 99) - (TAG_KIND_RANK[b.kind] ?? 99);
+    if (d !== 0) return d;
+    return a.targetId < b.targetId ? -1 : a.targetId > b.targetId ? 1 : 0;
+  });
+}
+
+/** 物化文本：`"<kind>\t<target_id>\n"`——与节点 `store.MaterializeTagSegments` 逐字同构。 */
+export function materializeTagText(links: TagLinkRow[]): string {
+  return sortTagLinks(links)
+    .map((l) => `${l.kind}\t${l.targetId}\n`)
+    .join('');
+}
+
+/** `content_hash` 与 #25 §2.2 同一口径：article 取 `body_md`、quiz 取 `question_json`、tag 取物化 segments 的 UTF-8 字节 sha256。 */
 export function contentHashOf(draft: SubmitDraft): string {
+  if (draft.type === 'tag') {
+    // 容器口径（#14 §3.3）：哈希只看物化的 segments 行，与 article/quiz 的「取正文」口径不同。
+    return sha256Hex(utf8(materializeTagText(draft.links ?? [])));
+  }
   return sha256Hex(utf8(draft.type === 'quiz' ? draft.questionJson : draft.bodyMd));
 }
 
@@ -77,6 +102,19 @@ export function buildQuizPayload(itemId: string, title: string, questionJson: st
   );
 }
 
+/** `tag` 请求体字节。键序固定：type → item_id → title → links → author_sig。 */
+export function buildTagPayload(itemId: string, title: string, links: TagLinkRow[], authorSig: string): Uint8Array {
+  return utf8(
+    JSON.stringify({
+      type: 'tag',
+      item_id: itemId,
+      title,
+      links: sortTagLinks(links).map((l) => ({ target_id: l.targetId, kind: l.kind })),
+      author_sig: authorSig,
+    }),
+  );
+}
+
 /** 本地校验；`ok=false` 时 `message` 即可直接展示的提示。 */
 export interface DraftValidation {
   ok: boolean;
@@ -89,6 +127,12 @@ export interface DraftValidation {
  * 长度上限与控制字符一律交服务端裁决（本册 §2.3 的同一口径）。
  */
 export function validateDraft(draft: SubmitDraft): DraftValidation {
+  if (draft.type === 'tag') {
+    // 三段的逐段文案（「请填写章」）在 `core/tags.ts` 的 submitTag 里给；这里只兜「有目标」这条兜底，
+    // 节点还会做完整的形态 + 存在性 + 资格校验（册子 §3.4）。
+    if ((draft.links ?? []).length === 0) return { ok: false, message: '缺少打标目标' };
+    return { ok: true, message: '' };
+  }
   if (draft.title.trim() === '') return { ok: false, message: '请填写标题' };
   if (draft.type === 'quiz') {
     if (parseQuestionDoc(draft.questionJson) === null) return { ok: false, message: '题组内容不合法：每题需题干、至少 2 个选项并选定正确项' };
@@ -122,6 +166,7 @@ export function buildSubmitBody(draft: SubmitDraft, ident: Identity): Uint8Array
   const title = draft.title.trim();
   const contentHash = contentHashOf(draft);
   const sig = localStep('签名', () => sign(ident.seedHex, utf8(authorSignBytes(draft.itemId, contentHash, ident.id))));
+  if (draft.type === 'tag') return buildTagPayload(draft.itemId, title, draft.links ?? [], sig);
   return draft.type === 'quiz'
     ? buildQuizPayload(draft.itemId, title, draft.questionJson, sig)
     : buildArticlePayload(draft.itemId, title, draft.bodyMd, sig);
@@ -197,6 +242,7 @@ async function writeLedger(o: SubmitOptions, draft: SubmitDraft, patch: Partial<
     title: draft.title.trim(),
     bodyMd: draft.type === 'article' ? draft.bodyMd : '',
     questionJson: draft.type === 'quiz' ? draft.questionJson : '',
+    linksJson: draft.type === 'tag' ? JSON.stringify(sortTagLinks(draft.links ?? []).map((l) => ({ target_id: l.targetId, kind: l.kind }))) : '',
     state: 'pending',
     reason: null,
     created: prev?.created ?? 0,
@@ -285,6 +331,7 @@ async function runFlushSubmissions(o: SubmitOptions): Promise<FlushSubmissionsRe
       title: row.title,
       bodyMd: row.bodyMd,
       questionJson: row.questionJson,
+      links: row.type === 'tag' ? decodeLedgerLinks(row.itemId, row.linksJson) : undefined,
     };
     try {
       const r = await submitItem(o, draft);
@@ -304,4 +351,16 @@ async function runFlushSubmissions(o: SubmitOptions): Promise<FlushSubmissionsRe
     }
   }
   return { sent, failed, remaining, error };
+}
+
+/** 台账 `links_json` → 草稿 `links`；空串或解析失败按空数组（节点会拒，不会写出错数据）。 */
+function decodeLedgerLinks(tagId: string, raw: string): TagLinkRow[] {
+  if (raw === '') return [];
+  try {
+    const arr = JSON.parse(raw) as Array<{ target_id?: string; kind?: string }>;
+    if (!Array.isArray(arr)) return [];
+    return arr.map((l) => ({ tagId, targetId: String(l.target_id ?? ''), kind: String(l.kind ?? '') }));
+  } catch {
+    return [];
+  }
 }
