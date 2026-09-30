@@ -167,3 +167,46 @@ F3 ──> F4 ──> F5 ──> F6 ──> F7 ──> F9 ──> 单次发布 0
 3. **F5 的三端一致与 XSS**：门户用 `template.HTML` 关转义，消毒是唯一出口；新增任何属性前必须先加负例用例。
 4. **F7 的范围蔓延**：用户原话里的「<10 人创建人自授权 / ≥10 人投票」在多处代码里**并不存在**对应的拒绝状态。本批次只登记为现状口径说明（名册上限即 10），**不新造闸门**，否则会破 `#25` / `#27` 的既有契约。
 5. **单次发布的收敛成本**：批内任何一个 F 条未收口都会阻塞发布。故每份计划必须自带「可独立验证」的 AC，任一条未过即在该条计划内解决，不带入发布。
+
+---
+
+## 9. 执行实况（批次收口）
+
+执行方式：**子代理驱动**（每个 Task 一个全新子代理，Task 间做核对复查）。批内六条（F3+F4 `#47`、F5 `#48`、F6 `#50`、F7 `#52`、F9 `#54`）各自 Task 全部落地并逐一 commit + push，收口集中在 REL。
+
+### 1. 批内提交链（全部已 push 到 `master`）
+
+- F3+F4 `#47` → F5 `#48` → F6 `#50` → F7 `#52` → F9 `#54`；F9 六个 Task 的提交链为 `bfd09e3`(T1) → `4a66252`(T2) → `4498f29`(T3) → `59f2202`(T4) → `b5243d5`(T5) → `2cd83b6`(T6)，`1a3bacb..2cd83b6 HEAD -> master` 已推送。完整度见各计划「执行实况」。
+
+### 2. 门禁实况（收口时全量复跑）
+
+- 节点侧：`go build ./...` / `go vet ./...` / `go test ./...` **全绿**；`git diff --stat internal/importer` 无输出（导入器未动，符合 F6 册子约束）。
+- 手机端：`npx vitest run` **28 文件 / 343 用例全绿**（基线 23 文件 / 230 用例）；`npx tsc --noEmit` 退出 0；`npm run build:h5` 与 `npm run build:app` 均 DONE。
+- 发布前硬检查：模板 `.value` 扫描（`grep -nE '="[^"]*\.value|\{\{[^}]*\.value' apps/mobile/src/pages/*/*.vue`）**无输出**；`build:app` 产物 `app-service.js` 的 `\.value\.value` 计数 = 0（框架 vendor `uni-app-view.umd.js` 有 1 处，按 F7 口径独立记账）。
+- 一键复跑：`scripts/acceptance-d.ps1` 的 TC-D01–TC-D07 **全 PASS**。
+
+### 3. 发布产物（`0.16.0` / `21`）
+
+| 项 | 值 |
+| --- | --- |
+| 版本改号 | `apps/mobile/src/manifest.json` → `versionName 0.16.0` / `versionCode 21` |
+| APK | **27439912 字节** / sha256 `05233b8c56c11c3eb8d8abd2d53004a1fd9df977722bf7a2d4022278eea2f28b` |
+| 证书 SHA1 | `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.6.0–0.15.0 一致，可覆盖安装） |
+| 上传 | `/opt/appdl/base-0.16.0.apk`，远端 sha256 与本地逐字一致 |
+| 落地页 | `/opt/appdl/index.html` 整页重写改指 0.16.0；实测线上入口为 **`http://118.190.217.242/dl/`**（`location /dl/` → appdl 静态服务），页内仅含 `base-0.16.0.apk`，无 `0.15.0` 残留 |
+| release 文档 | `/opt/base-cache/data/release.json`（`based release -version-name 0.16.0 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.16.0.apk -apk-file /opt/appdl/base-0.16.0.apk -out …`，`BASE_SIGN_KEY` 从 `/opt/base/base.secret.env` 载入未打印）；`/opt/base/data/release.json` 不存在（无游离副本） |
+| 节点二进制 | **21813946 字节** / sha256 `0bb8a50dc88e07525ed01f7c963711d345ec45545eb0b130028469524908e000`；`mv` 原子替换 `/opt/base/based` + `chmod 0755`，旧件（21771639 字节 / `84b9738c…`）备份为 `/opt/base/based.bak-pre-0.16.0`；`base` 与 `base-cache` 重启后均 `active`，`ExecStart` 同指该二进制 |
+
+### 4. 线上验证
+
+`GET http://118.190.217.242/v1/release` → `version_name=0.16.0`、`min_version_name=0.8.0`、`apk_size=27439912`、`apk_sha256` 与本地逐字一致、`issuer=base-node-1`；`HEAD http://118.190.217.242/dl/base-0.16.0.apk` → `200` 且 `Content-Length=27439912` 与本地一致；只读探活 `/v1/comment` → 200、`/v1/proposal` → 200、`POST /v1/blob` → 400（非 404，新路由在线且无回归）、`/v1/blobzzz` → 404（反向对照）。
+
+### 5. 执行期更正
+
+1. **落地页线上入口**：§5 只写「落地页整页重写」，实测用户可见入口是 **`/dl/`**（nginx `location /dl/` → `127.0.0.1:8080` 的 appdl 静态服务，docroot `/opt/appdl`）——`location /` 反代的是缓存节点的**站点内容目录**，不是下载页。故验证一律以 `/dl/index.html` 为准。
+2. **443 与 80 的 `/v1/release` 不同源**：`https://118.190.217.242/v1/release` 由 `base.service` 直供，回 `{"error":"本节点无升级信息"}`（源节点不落 release.json）；`http://118.190.217.242/v1/release` 经 nginx `location /` → `8083`（缓存节点）才回 `0.16.0`。§5 的「探活走 HTTPS 443」适用于节点路由存在性探活，**发布文档校验必须走 80**。
+3. **证书指纹取证**：本机无 `keytool` / `apksigner`，改用 HBuilderX 自带 JRE 的 `D:\HBuilderX\plugins\amazon-corretto\bin\keytool.exe -printcert -jarfile <apk>` 读 v1 签名指纹。
+
+### 6. 未实测（待人工）
+
+见 `docs/README.md` §5「待人工」：`#47` 的 F3 真机复现与三结局判读 + F4 载体点选、`#48` 的 AC 1–8 三端渲染、`#50` 的 F6 分类分组、`#52` 的 F7「我创建的」（含 F2/F8 可见性）、`#54` 的 F9 图章与标题高亮；以及客户端 `verifyRelease` 对线上文档的实测验签（需真机执行）。
