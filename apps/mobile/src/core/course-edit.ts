@@ -9,6 +9,7 @@
 import {
   ATTR_ATTACHMENT,
   ATTR_BODY_MD,
+  ATTR_CATEGORY,
   ATTR_COVER,
   ATTR_DIFFICULTY,
   ATTR_DURATION,
@@ -61,6 +62,8 @@ export interface ContainerForm {
   attachments: AttachmentRow[];
   /** 仅课时：Markdown 正文 → `attr.body_md`；course 恒忽略 */
   bodyMd: string;
+  /** 仅课程：分类 slug；空则不产 `attr.category` 行（lesson 恒忽略） */
+  category: string;
   /** 子项清单，按展示顺序；写入时 seq 从 1 起连续 */
   children: ChildRow[];
 }
@@ -78,6 +81,7 @@ export function emptyContainerForm(type: ContainerType, itemId: string): Contain
     durationSec: 0,
     attachments: [],
     bodyMd: '',
+    category: '',
     children: [],
   };
 }
@@ -98,10 +102,12 @@ export function startNewLesson(courseId: string): ContainerForm {
  */
 export function buildContainerSegments(form: ContainerForm): SubmitSegmentRow[] {
   const lines: AttrLine[] = [];
+  const category = form.category.trim();
   if (form.cover !== '') lines.push({ kind: ATTR_COVER, text: form.cover });
   if (form.instructor !== '') lines.push({ kind: ATTR_INSTRUCTOR, text: form.instructor });
   if (form.difficulty !== '') lines.push({ kind: ATTR_DIFFICULTY, text: form.difficulty });
   if (form.durationSec > 0) lines.push({ kind: ATTR_DURATION, text: String(Math.trunc(form.durationSec)) });
+  if (form.type === 'course' && category !== '') lines.push({ kind: ATTR_CATEGORY, text: category });
   for (const a of form.attachments) {
     if (a.blobId !== '') lines.push({ kind: ATTR_ATTACHMENT, text: `${a.blobId}\t${a.name}` });
   }
@@ -127,6 +133,7 @@ export async function loadContainerForm(repo: LocalRepo, itemId: string, type: C
   form.durationSec = attrs.duration;
   form.attachments = attrs.attachments.map((a) => ({ blobId: a.blobId, name: a.name }));
   form.bodyMd = type === 'lesson' ? attrs.bodyMd : '';
+  form.category = type === 'course' ? attrs.category : '';
   form.children = childrenRowsOf(segs).map((r) => ({ kind: r.kind, itemId: r.text }));
   return form;
 }

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { ATTR_ATTACHMENT, ATTR_BODY_MD, ATTR_COVER, ATTR_DIFFICULTY, ATTR_DURATION, ATTR_INSTRUCTOR } from './attrs';
+import {
+  ATTR_ATTACHMENT,
+  ATTR_BODY_MD,
+  ATTR_CATEGORY,
+  ATTR_COVER,
+  ATTR_DIFFICULTY,
+  ATTR_DURATION,
+  ATTR_INSTRUCTOR,
+} from './attrs';
 import { attrsOf, childCounts, childrenRowsOf, digestOf, firstLine, lessonDigest } from './container-view';
 import type { SegmentRow } from './types';
 
@@ -29,14 +37,28 @@ describe('attrsOf：解析 seq<0 属性行', () => {
         { blobId: 'ffffffffffffffffffffffffffffffff', name: '附录.pdf' },
       ],
       bodyMd: '# 讲稿\n\n正文\n',
+      category: '',
     });
   });
 
   it('无属性 → 全空；未知 kind 与坏形状静默忽略', () => {
-    expect(attrsOf([])).toEqual({ cover: '', instructor: '', difficulty: '', duration: 0, attachments: [], bodyMd: '' });
+    expect(attrsOf([])).toEqual({
+      cover: '',
+      instructor: '',
+      difficulty: '',
+      duration: 0,
+      attachments: [],
+      bodyMd: '',
+      category: '',
+    });
     const got = attrsOf([seg(-1, 'attr.unknown', 'x'), seg(-2, ATTR_ATTACHMENT, '没有制表符'), seg(-3, ATTR_DURATION, 'soon')]);
     expect(got.attachments).toEqual([]);
     expect(got.duration).toBe(0);
+  });
+
+  it('解析 attr.category：有该行取 text，无该行得空串', () => {
+    expect(attrsOf([seg(-1, ATTR_CATEGORY, 'math')]).category).toBe('math');
+    expect(attrsOf([seg(-1, ATTR_COVER, 'x')]).category).toBe('');
   });
 });
 

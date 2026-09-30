@@ -7,6 +7,7 @@
 import {
   ATTR_ATTACHMENT,
   ATTR_BODY_MD,
+  ATTR_CATEGORY,
   ATTR_COVER,
   ATTR_DIFFICULTY,
   ATTR_DURATION,
@@ -32,11 +33,13 @@ export interface ContainerAttrs {
   attachments: AttachmentVM[];
   /** 仅课时有：`attr.body_md` 的 Markdown 源；空串 = 未设置 */
   bodyMd: string;
+  /** 仅课程有：分类 slug；空串 = 未设置 */
+  category: string;
 }
 
 /** 空属性集（新建表单的初值，也是 `attrsOf` 的基底）。 */
 export function emptyAttrs(): ContainerAttrs {
-  return { cover: '', instructor: '', difficulty: '', duration: 0, attachments: [], bodyMd: '' };
+  return { cover: '', instructor: '', difficulty: '', duration: 0, attachments: [], bodyMd: '', category: '' };
 }
 
 /**
@@ -65,6 +68,9 @@ export function attrsOf(segs: SegmentRow[]): ContainerAttrs {
       }
       case ATTR_BODY_MD:
         out.bodyMd = s.text;
+        break;
+      case ATTR_CATEGORY:
+        out.category = s.text;
         break;
       case ATTR_ATTACHMENT: {
         const i = s.text.indexOf('\t');

@@ -63,6 +63,29 @@ describe('buildContainerSegments：表单 → 行集（本册 §4.1）', () => {
     expect(rows.some((r) => r.kind === 'attr.body_md')).toBe(false);
   });
 
+  it('course 且 category 非空 ⇒ 产 attr.category 行，落 body_md 与 cover 之间', () => {
+    const rows = buildContainerSegments(
+      lessonForm({ type: 'course', itemId: 'course/c1', category: 'math', instructor: '李老师', difficulty: 'basic', durationSec: 3600, attachments: [] }),
+    );
+    expect(rows.filter((r) => r.seq < 0)).toEqual([
+      { seq: -1, kind: 'attr.category', text: 'math' },
+      { seq: -2, kind: 'attr.cover', text: '00112233445566778899aabbccddeeff' },
+      { seq: -3, kind: 'attr.difficulty', text: 'basic' },
+      { seq: -4, kind: 'attr.duration', text: '3600' },
+      { seq: -5, kind: 'attr.instructor', text: '李老师' },
+    ]);
+  });
+
+  it('category 空串 ⇒ 不产该行', () => {
+    const rows = buildContainerSegments(lessonForm({ type: 'course', itemId: 'course/c1', category: '' }));
+    expect(rows.some((r) => r.kind === 'attr.category')).toBe(false);
+  });
+
+  it('lesson 即使填了 category 也不产该行（课程专用）', () => {
+    const rows = buildContainerSegments(lessonForm({ category: 'math' }));
+    expect(rows.some((r) => r.kind === 'attr.category')).toBe(false);
+  });
+
   it('空字段不产行；时长非正数不产行；纯空表单得空行集', () => {
     expect(buildContainerSegments(emptyContainerForm('course', 'course/c1'))).toEqual([]);
     const rows = buildContainerSegments(lessonForm({ durationSec: 0, attachments: [], digest: '', children: [] }));
@@ -91,7 +114,23 @@ describe('loadContainerForm：从本地包回填', () => {
       cover: '00112233445566778899aabbccddeeff', instructor: '', difficulty: '', durationSec: 0,
       attachments: [], bodyMd: '# 讲稿',
       children: [{ kind: 'article', itemId: 'course/c1/lesson/l1/article/a1' }],
+      category: '',
     });
+  });
+
+  it('回填 attr.category：有该行取 slug，缺失得空串', async () => {
+    const repo = new MemoryRepo();
+    await repo.applyPack({
+      version: 1, packId: 'p2', updatedAt: '2026-09-30T00:00:00Z', articles: [], quizzes: [], tombstones: [],
+      items: [
+        { itemId: 'course/c1', source: 'course', type: 'course', title: '数学', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '' },
+      ],
+      segments: [
+        { itemId: 'course/c1', seq: -1, kind: 'attr.category', text: 'math', contentHash: 'h' },
+      ],
+    });
+    expect((await loadContainerForm(repo, 'course/c1', 'course')).category).toBe('math');
+    expect((await loadContainerForm(new MemoryRepo(), 'course/none', 'course')).category).toBe('');
   });
 
   it('条目不存在也不抛：得空表单（保留给定 itemId 与 type）', async () => {
