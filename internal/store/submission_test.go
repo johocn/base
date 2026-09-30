@@ -195,3 +195,71 @@ func TestUpsertSubmissionRejectsUnknownType(t *testing.T) {
 		t.Fatal("未支持的 type 应报错")
 	}
 }
+
+// 容器投稿：新建 → created=true；本人重投 → created=false 且行集被整体替换。
+func TestUpsertSegmentSubmissionLifecycle(t *testing.T) {
+	st := openTemp(t)
+	segs := []Segment{
+		{ItemID: "course/c1", Seq: -1, Kind: "attr.cover", Text: "00112233445566778899aabbccddeeff"},
+		{ItemID: "course/c1", Seq: 0, Kind: "digest", Text: "简介\n"},
+		{ItemID: "course/c1", Seq: 1, Kind: "lesson", Text: "course/c1/lesson/l1"},
+	}
+	created, err := st.UpsertSegmentSubmission(SegmentSubmission{
+		ItemID: "course/c1", Type: "course", Title: "甲课", Segments: segs, AuthorID: "aa", AuthorSig: "ff",
+	})
+	if err != nil || !created {
+		t.Fatalf("新建: created=%v err=%v", created, err)
+	}
+	it, ok, err := st.GetItem("course/c1")
+	if err != nil || !ok {
+		t.Fatalf("GetItem: ok=%v err=%v", ok, err)
+	}
+	if it.AuthorID != "aa" || it.AuthorSig != "ff" || it.SQLiteTable != "segments" || it.Type != "course" {
+		t.Fatalf("items 行不对: %+v", it)
+	}
+	if want := SegmentsContentHash(segs); it.ContentHash != want {
+		t.Fatalf("content_hash=%s want=%s", it.ContentHash, want)
+	}
+	got, err := st.ListSegments("course/c1")
+	if err != nil || len(got) != 3 {
+		t.Fatalf("segments 行数 %d err=%v", len(got), err)
+	}
+	if got[0].Seq != -1 || got[2].Seq != 1 {
+		t.Fatalf("segments 未按 seq 升序: %+v", got)
+	}
+
+	// 重投：整体替换（旧 seq=1 行消失）
+	created2, err := st.UpsertSegmentSubmission(SegmentSubmission{
+		ItemID: "course/c1", Type: "course", Title: "甲课改", AuthorID: "aa", AuthorSig: "ee",
+		Segments: []Segment{{ItemID: "course/c1", Seq: -2, Kind: "attr.instructor", Text: "李老师"}},
+	})
+	if err != nil || created2 {
+		t.Fatalf("重投: created=%v err=%v", created2, err)
+	}
+	got2, _ := st.ListSegments("course/c1")
+	if len(got2) != 1 || got2[0].Seq != -2 {
+		t.Fatalf("重投未整体替换: %+v", got2)
+	}
+}
+
+// 空归属存量条目也拒（沿用 #25 口径）；他人条目同样拒，且两者都不得写入。
+func TestUpsertSegmentSubmissionTaken(t *testing.T) {
+	st := openTemp(t)
+	legacy := []Segment{{ItemID: "course/c2", Seq: 1, Kind: "lesson", Text: "course/c2/lesson/l1"}}
+	if err := st.UpsertSegmentItem(SegmentItem{
+		ItemID: "course/c2", Source: "course", Type: "course", Title: "存量", Segments: legacy,
+	}); err != nil {
+		t.Fatalf("UpsertSegmentItem: %v", err)
+	}
+	_, err := st.UpsertSegmentSubmission(SegmentSubmission{
+		ItemID: "course/c2", Type: "course", Title: "认领", AuthorID: "aa", AuthorSig: "ff",
+		Segments: []Segment{{ItemID: "course/c2", Seq: 0, Kind: "digest", Text: "x"}},
+	})
+	if !errors.Is(err, ErrItemTaken) {
+		t.Fatalf("空归属条目应拒: err=%v", err)
+	}
+	got, _ := st.ListSegments("course/c2")
+	if len(got) != 1 || got[0].Seq != 1 || got[0].Text != "course/c2/lesson/l1" {
+		t.Fatalf("拒绝时不得写入: %+v", got)
+	}
+}
