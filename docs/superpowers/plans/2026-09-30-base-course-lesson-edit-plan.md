@@ -4383,6 +4383,65 @@ git commit -m "chore(release): 课程与课时编辑落 0.15.0/20 并回填文�
 
 ## 执行实况
 
-（执行期填写：每个 Task 的实际 commit、门禁输出摘要、执行期更正条目、发布产物校验值。）
+执行方式：**子代理驱动**（每个 Task 一个全新子代理，Task 间由主线做核对复查；Task 1–14 结束即 commit + push，节点部署与发布集中在 Task 15）。基线 `0.14.0` / `19`，本册整体 +1 = `0.15.0` / `20`。
+
+### 1. 提交清单（全部已 push 到 `master`）
+
+| 步骤 | commit | 内容 |
+| --- | --- | --- |
+| 立稿 | `65f33c2` | 本计划落库；并把册子 §10 的 `versionCode` 由 18 更正为 20 |
+| Task 1 | `1b9988b` | `protocol/attrs.go` + `attrs_vector_test.go` + `vectors/v1/attrs.json` |
+| Task 2 | `b3a99d7` | `store/submission.go` 的 `SegmentSubmission` + `UpsertSegmentSubmission` |
+| Task 3 | `e277e5b` | `/v1/submit` 扩 `course\|lesson` 容器分支与三区间校验；补 `item_segments_invalid` 文案 |
+| Task 4 | `1746907` | `httpapi/blob.go` 的 `POST /v1/blob`；`authenticate` 体上限参数化 + `requireAuthLimit` |
+| Task 5 | `41d0cdb` | 三处重建路径保留 `seq<0` 属性行（`importer` 两处 + `store/tag.go` 一处） |
+| Task 6 | `ef58105` | 导入器跳过投稿域容器并产 warning（`Result.Warnings` / `VideoResult.Warnings`） |
+| Task 7 | `34aece0` | `core/attrs.ts`（共读契约向量）+ `tsconfig` 补 `node` types |
+| Task 8 | `66f1a88` | `core/container-view.ts` + 单测 |
+| Task 9 | `e633fe5` | `core/blob.ts`（multipart 拼装 + 上传/取回）+ `core/errors.ts` 补两码 |
+| Task 10 | `212c76f` | `submit.ts` / `types.ts` / `repo.ts` 扩容器；`my_submissions.segments_json` |
+| Task 11 | `c9bc23e` | `core/course-edit.ts`（表单 ↔ 行集 ↔ 台账） |
+| Task 12 | `d755493` | `pages/course/edit.vue`；`platform/uni.ts` 加 `pickLocalFile()`；注册页面 |
+| Task 13 | `5adec95` | `pages/lesson/edit.vue`；注册页面 |
+| 清理 | `a01da20` | 清掉两张编辑页未使用的 `DIFFICULTY_ADVANCED` 引入 |
+| Task 14 | `8f969d3` | `pages/lesson/detail.vue`（新增）+ `pages/course/detail.vue`（重写）+ `course.vue` 新建入口 |
+| Task 15 | `422fcf9` | 版本 `0.15.0` / `20`；README `#40` 改口径 + 新增 `#41` + §5 两段；册子 §0.2 执行期更正 |
+
+工作区自始至终另有 `.gitignore` 的未提交改动与未跟踪的 `based-linux-amd64`（构建产物）——**全程未 add、未提交**。
+
+### 2. 门禁实况
+
+- 节点侧（每个 Go Task 后各跑一次，最终一次全量）：`go build ./...`、`go vet ./...`、`go test ./...` **全部通过，无 FAIL**。
+- 手机端（每个 TS/Vue Task 后各跑一次）：`npx vitest run`、`npx tsc --noEmit`、`npm run build:h5` **全部通过**。最终态 **23 个测试文件 / 229 个用例全绿**（基线 19 文件 / 178 用例）。
+- 发布前模板硬检查（#31 更正 14 的教训）：`grep -nE '="[^"]*\.value|\{\{[^}]*\.value' apps/mobile/src/pages/*/*.vue` → **无输出**。
+
+### 3. 部署与发布产物
+
+| 项 | 值 |
+| --- | --- |
+| 节点二进制 | **21771765 字节** / sha256 `7c2fb7abea19c19f159b95cee87287595d6828cd41445b0dd48f8f5627278596` |
+| 替换前远端二进制 | 21736332 字节 / `7cefae47…`，已备份为 `/opt/base/based.bak-0.14.0` |
+| 服务状态 | `base` = active、`base-cache` = active（两单元共用 `/opt/base/based`） |
+| 只读探活 | `/v1/comment` → 200；`/v1/proposal` → 200；`POST /v1/blob` → **400**（对照 `/v1/blobzzz` → 404、`GET /v1/blob` → 405，证明新路由确已上线） |
+| APK | **27431470 字节** / sha256 `7f18ed1c089e464f3ce6dd71db9f17cc2a4625408199b019ebeda194b1710bc7` |
+| 证书 SHA1 | `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.6.0–0.14.0 一致，可覆盖安装） |
+| 线上 `/v1/release` | `version_name=0.15.0`、`apk_size=27431470`、sha256 与本地逐字一致、`min_version_name=0.8.0`、`issuer=base-node-1`、`issued_at=2026-09-30T11:38:15Z` |
+| 线上 `/dl/base-0.15.0.apk` | `HEAD` → 200，`Content-Length` 与本地一致；落地页只出现 `0.15.0` |
+
+### 4. 执行期更正（均在对应文档或代码中已收口）
+
+1. **Task 8 读序口径**：计划稿的 `attrsOf` 按 `seq` **升序**读属性行，与 `assignAttrSeqs` 的产出顺序（`seq` **降序** = 附件按 text 升序占递减 `seq`）不自洽，实现改为 `seq` 降序读。已回填册子 §0.2。
+2. **Task 12/13 死引入**：两张编辑页 import 了未使用的 `DIFFICULTY_ADVANCED`，执行期清掉（`a01da20`）。已回填册子 §0.2。
+3. **Task 5 测试前置**：`TestReplaceTagLinksKeepsNonChildRows` 需先调一次 `UpsertTagSubmission` 占住 author——`UpsertSegmentItem` 不写 `author_id`，空归属 ≠ 指定作者会撞 `ErrItemTaken`。**仅测试修正，生产代码未动。**
+4. **Task 9 文件表漏列**：计划 Files 表只列 `blob.ts` / `blob.test.ts`，但步骤正文要求同步补 `core/errors.ts` 两条码表；按步骤正文执行。
+5. **Task 12 `pages.json` 描述**：计划 Step 3 文字误把课时编辑页一并算进本 Task，实际只插 `pages/course/edit`（课时编辑页归 Task 13），与计划 JSON 块一致。
+6. **Task 15 部署口径三处实测更正**：① `cp` 覆盖运行中二进制会 `Text file busy`，改用 `mv` 原子替换 + `chmod 755`（scp 落地件为 0644，否则 `203/EXEC`）；② `based release` 实测必填 `-version-name` / `-min-version-name` / `-apk-url` / `-apk-file` 且需 `BASE_SIGN_KEY`（从 `/opt/base/base.secret.env` 载入，未打印密钥）；③ 本机 `curl.exe` 的 DNS 解析异常（IP 直连正常），APK 下载校验改用 `Invoke-WebRequest`。
+7. **Task 15 `/v1/blob` 探活判据**：计划预期 400 `bad_multipart`，实测回的是 400 `auth_missing_header`——鉴权先于 multipart 解析。判据等价（**不是 404**），并补了 `/v1/blobzzz` → 404 的反向对照。
+
+### 5. 未实测（待人工）
+
+1. `#41` 真机 7 条验收：课程新建 → 加两课 → 编辑课时正文 → 课程页看清单与「第 N 讲」→ 点进课时页看正文 / 载体 / 附件 → 断网保存后联网自动补发**仅一条** → 编辑入口只在本人建的容器上可见。
+2. 客户端 `verifyRelease` 对线上文档的实测验签（需真机执行）。
+3. 课时页附件的「另存」在真机上的落盘与 `openDocument` 打开效果。
 
 ---
