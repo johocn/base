@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -27,6 +28,10 @@ const (
 	itemTypeQuiz    = "quiz"
 	itemTypeTag     = "tag"
 
+	// 容器形态（本册 §4.1）：course/<cid> 与 course/<cid>/lesson/<lid>。
+	itemTypeCourse = "course"
+	itemTypeLesson = "lesson"
+
 	// maxTitleRunes 是标题的 rune 上限（册子 §2.1）。
 	maxTitleRunes = 200
 )
@@ -42,6 +47,79 @@ func splitSubmitItemID(itemID, typ string) (slug, code string) {
 		return "", "item_type_mismatch"
 	}
 	return rest, ""
+}
+
+// containerShapeOf 解析容器 item_id 形态：course/<cid> → course；course/<cid>/lesson/<lid> → lesson。
+// 各段都须是合法 slug；其余一律不识别（本册 §4.1，无顶层 lesson 命名空间）。
+func containerShapeOf(itemID string) (shape string, ok bool) {
+	parts := strings.Split(itemID, "/")
+	switch len(parts) {
+	case 2:
+		if parts[0] == itemTypeCourse && protocol.ValidSlug(parts[1]) {
+			return itemTypeCourse, true
+		}
+	case 4:
+		if parts[0] == itemTypeCourse && protocol.ValidSlug(parts[1]) &&
+			parts[2] == itemTypeLesson && protocol.ValidSlug(parts[3]) {
+			return itemTypeLesson, true
+		}
+	}
+	return "", false
+}
+
+// childKindsByContainer 是容器清单行（seq>=1）的合法 kind 取值域（本册 §2.1 铁律 3）。
+var childKindsByContainer = map[string]map[string]bool{
+	itemTypeCourse: {itemTypeLesson: true},
+	itemTypeLesson: {
+		itemTypeArticle: true, "video": true, "audio": true, itemTypeQuiz: true,
+	},
+}
+
+// submitSegment 是一条待落库的容器行（本册 §4.1）：seq<0 属性行、seq=0 简介、seq>=1 子项。
+type submitSegment struct {
+	Seq  int    `json:"seq"`
+	Kind string `json:"kind"`
+	Text string `json:"text"`
+}
+
+// validateSubmitSegments 按册子 §2.1 的三区间铁律校验容器行集，返回可落库的行。
+// 归一化失败一律假（调用方回 item_segments_invalid）：
+//  1. seq<0 只放属性行（kind 须是 protocol.IsAttrKind），且**必须**是 AssignAttrSeqs 的规范排布；
+//  2. seq=0 只放一行 digest；
+//  3. seq>=1 只放本容器允许的子项 kind（课程只收 lesson，课时只收 article/video/audio/quiz）；
+//  4. seq 不得重复。
+func validateSubmitSegments(itemID, typ string, in []submitSegment) ([]store.Segment, bool) {
+	ordered := append([]submitSegment{}, in...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Seq < ordered[j].Seq })
+	childKinds := childKindsByContainer[typ]
+	attrs := []protocol.AttrSlot{}
+	out := make([]store.Segment, 0, len(ordered))
+	for i, s := range ordered {
+		if i > 0 && s.Seq == ordered[i-1].Seq {
+			return nil, false
+		}
+		switch {
+		case s.Seq < 0:
+			if !protocol.IsAttrKind(s.Kind) {
+				return nil, false
+			}
+			attrs = append(attrs, protocol.AttrSlot{Seq: s.Seq, Kind: s.Kind, Text: s.Text})
+		case s.Seq == 0:
+			if s.Kind != protocol.DigestKind {
+				return nil, false
+			}
+		default:
+			if !childKinds[s.Kind] {
+				return nil, false
+			}
+		}
+		out = append(out, store.Segment{ItemID: itemID, Seq: s.Seq, Kind: s.Kind, Text: s.Text})
+	}
+	// 属性行必须与导出端逐字节同构，否则双端 content_hash 会静默漂移（本册 §8 风险 2）。
+	if !protocol.AttrSeqsCanonical(attrs) {
+		return nil, false
+	}
+	return out, true
 }
 
 // validItemTitle 按册子 §2.1：去首尾空白后 rune 长度 1..200，且不含控制字符（U+0000–U+001F、U+007F）。
@@ -88,6 +166,7 @@ type submitReq struct {
 	QuestionJSON string          `json:"question_json"`
 	AuthorSig    string          `json:"author_sig"`
 	Links        []submitLink    `json:"links"`
+	Segments     []submitSegment `json:"segments"`
 	AuthorID     json.RawMessage `json:"author_id"`
 }
 
@@ -110,18 +189,39 @@ func (s *Server) handleSubmitPost(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthErr(w, http.StatusBadRequest, "author_id_forbidden")
 		return
 	}
-	if req.Type != itemTypeArticle && req.Type != itemTypeQuiz && req.Type != itemTypeTag {
+	if req.Type != itemTypeArticle && req.Type != itemTypeQuiz && req.Type != itemTypeTag &&
+		req.Type != itemTypeCourse && req.Type != itemTypeLesson {
 		s.writeAuthErr(w, http.StatusBadRequest, "item_type_unsupported")
 		return
 	}
-	if req.Type == itemTypeTag {
+	var containerSegs []store.Segment
+	switch req.Type {
+	case itemTypeTag:
 		if _, _, _, ok := protocol.ParseTagItemID(req.ItemID); !ok {
 			s.writeAuthErr(w, http.StatusBadRequest, "item_id_invalid")
 			return
 		}
-	} else if _, code := splitSubmitItemID(req.ItemID, req.Type); code != "" {
-		s.writeAuthErr(w, http.StatusBadRequest, code)
-		return
+	case itemTypeCourse, itemTypeLesson:
+		shape, ok := containerShapeOf(req.ItemID)
+		if !ok {
+			s.writeAuthErr(w, http.StatusBadRequest, "item_id_invalid")
+			return
+		}
+		if shape != req.Type {
+			s.writeAuthErr(w, http.StatusBadRequest, "item_type_mismatch")
+			return
+		}
+		segs, ok := validateSubmitSegments(req.ItemID, req.Type, req.Segments)
+		if !ok {
+			s.writeAuthErr(w, http.StatusBadRequest, "item_segments_invalid")
+			return
+		}
+		containerSegs = segs
+	default:
+		if _, code := splitSubmitItemID(req.ItemID, req.Type); code != "" {
+			s.writeAuthErr(w, http.StatusBadRequest, code)
+			return
+		}
 	}
 	title := strings.TrimSpace(req.Title)
 	if !validItemTitle(req.Title) {
@@ -163,10 +263,14 @@ func (s *Server) handleSubmitPost(w http.ResponseWriter, r *http.Request) {
 	}
 	// content_hash 一律由服务端算（册子 §2.2）：请求体带的那个已在上文被忽略。
 	var contentHash string
-	if req.Type == itemTypeTag {
+	switch req.Type {
+	case itemTypeTag:
 		// 容器口径（#14 §3.3）：哈希只看物化的 segments 行——与 #25 的 article/quiz 口径不同。
 		contentHash = store.SegmentsContentHash(store.MaterializeTagSegments(req.ItemID, tagLinks))
-	} else {
+	case itemTypeCourse, itemTypeLesson:
+		// 容器口径（本册 §2.3）：按 seq 升序拼 "<kind>\t<text>\n"。
+		contentHash = store.SegmentsContentHash(containerSegs)
+	default:
 		contentHash = submissionContentHash(req.Type, req.BodyMD, req.QuestionJSON)
 	}
 
@@ -211,12 +315,18 @@ func (s *Server) handleSubmitPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var created bool
-	if req.Type == itemTypeTag {
+	switch req.Type {
+	case itemTypeTag:
 		_, err = s.st.UpsertTagSubmission(store.TagSubmission{
 			TagID: req.ItemID, Title: title, Links: tagLinks,
 			AuthorID: actor, AuthorSig: req.AuthorSig,
 		})
-	} else {
+	case itemTypeCourse, itemTypeLesson:
+		created, err = s.st.UpsertSegmentSubmission(store.SegmentSubmission{
+			ItemID: req.ItemID, Type: req.Type, Title: title, Segments: containerSegs,
+			AuthorID: actor, AuthorSig: req.AuthorSig,
+		})
+	default:
 		created, err = s.st.UpsertSubmission(store.Submission{
 			ItemID: req.ItemID, Type: req.Type, Title: title,
 			BodyMD: req.BodyMD, QuestionJSON: req.QuestionJSON,
