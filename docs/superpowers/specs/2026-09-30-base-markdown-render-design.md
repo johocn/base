@@ -100,7 +100,7 @@
 
 ### 5.2 编辑端（工具栏 + 实时预览）
 
-- 落点：`pages/lesson/edit.vue` 的正文 `<textarea>`（`pages/course/edit.vue` 与 `article` 编辑器同改，若其正文输入同源）。
+- 落点：`pages/lesson/edit.vue` 的正文 `<textarea>` 与**文章投稿编辑器 `pages/submit/submit.vue`** 的正文 `<textarea>`（两者同源，同为 `body_md` 源文本，一并改造）；`pages/course/edit.vue` **无正文输入**（课程级不吃 `attr.body_md`，`buildContainerSegments` 对 `course` 不产该行），不纳入。（2026-09-30 立计划时核实回填：原文括注写「`pages/course/edit.vue` 与 `article` 编辑器同改，若其正文输入同源」，与代码不符，据实更正。）
 - 工具栏：段落级按钮（标题 / 引用 / 有序与无序列表 / 分隔线）与行内按钮（粗 / 斜 / 行内代码 / 链接）+ **7 个色块按钮**（选色后包裹当前选区或插入空标记并把光标夹在中间）。
 - 实时预览：编辑区下方 `<rich-text>`，`computed` 直接跑 `renderMarkdown(form.bodyMd)`，随输入更新。
 - 工具栏与预览**不改保存口径**：`attr.body_md` 存的仍是源文本，入队的仍是源文本（`#29` / `#41` 的 `my_submissions` 流程零改动）。
