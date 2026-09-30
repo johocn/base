@@ -125,7 +125,8 @@ export const SCHEMA_SQL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_segments_item ON segments(item_id)`,
   `CREATE TABLE IF NOT EXISTS my_submissions(
      item_id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, body_md TEXT NOT NULL,
-     question_json TEXT NOT NULL, links_json TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, reason TEXT, created INTEGER NOT NULL,
+     question_json TEXT NOT NULL, links_json TEXT NOT NULL DEFAULT '', segments_json TEXT NOT NULL DEFAULT '',
+     state TEXT NOT NULL, reason TEXT, created INTEGER NOT NULL,
      queued_at TEXT NOT NULL, sent_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS idx_my_submissions_queued ON my_submissions(queued_at)`,
   `CREATE TABLE IF NOT EXISTS groups(
@@ -165,6 +166,9 @@ export async function ensureSubmissionColumns(db: LocalDb): Promise<void> {
   const cols = new Set((await db.select(`PRAGMA table_info(my_submissions)`)).map((r) => String(r.name)));
   if (!cols.has('links_json')) {
     await db.execute(`ALTER TABLE my_submissions ADD COLUMN links_json TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!cols.has('segments_json')) {
+    await db.execute(`ALTER TABLE my_submissions ADD COLUMN segments_json TEXT NOT NULL DEFAULT ''`);
   }
 }
 
@@ -506,17 +510,18 @@ export class SqlRepo implements LocalRepo {
 
   async saveSubmission(row: MySubmissionRow): Promise<void> {
     await this.db.execute(
-      `INSERT INTO my_submissions(item_id,type,title,body_md,question_json,links_json,state,reason,created,queued_at,sent_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO my_submissions(item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(item_id) DO UPDATE SET type=excluded.type,title=excluded.title,body_md=excluded.body_md,
-         question_json=excluded.question_json,links_json=excluded.links_json,state=excluded.state,reason=excluded.reason,
+         question_json=excluded.question_json,links_json=excluded.links_json,segments_json=excluded.segments_json,
+         state=excluded.state,reason=excluded.reason,
          created=excluded.created,queued_at=excluded.queued_at,sent_at=excluded.sent_at`,
-      [row.itemId, row.type, row.title, row.bodyMd, row.questionJson, row.linksJson, row.state, row.reason, row.created, row.queuedAt, row.sentAt],
+      [row.itemId, row.type, row.title, row.bodyMd, row.questionJson, row.linksJson, row.segmentsJson, row.state, row.reason, row.created, row.queuedAt, row.sentAt],
     );
   }
 
   async listSubmissions(state?: 'pending' | 'sent' | 'failed'): Promise<MySubmissionRow[]> {
-    const cols = `item_id,type,title,body_md,question_json,links_json,state,reason,created,queued_at,sent_at`;
+    const cols = `item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at`;
     const rows = state
       ? await this.db.select(`SELECT ${cols} FROM my_submissions WHERE state=? ORDER BY queued_at ASC`, [state])
       : await this.db.select(`SELECT ${cols} FROM my_submissions ORDER BY queued_at ASC`);
@@ -525,7 +530,7 @@ export class SqlRepo implements LocalRepo {
 
   async getSubmission(itemId: string): Promise<MySubmissionRow | null> {
     const rows = await this.db.select(
-      `SELECT item_id,type,title,body_md,question_json,links_json,state,reason,created,queued_at,sent_at FROM my_submissions WHERE item_id=?`,
+      `SELECT item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at FROM my_submissions WHERE item_id=?`,
       [itemId],
     );
     return rows.length > 0 ? toMySubmissionRow(rows[0]) : null;
@@ -642,13 +647,17 @@ function toDmKeyRow(r: Record<string, unknown>): DmKeyRow {
 
 function toMySubmissionRow(r: Record<string, unknown>): MySubmissionRow {
   const state = String(r.state);
+  const raw = String(r.type);
+  const type: MySubmissionRow['type'] =
+    raw === 'quiz' || raw === 'tag' || raw === 'course' || raw === 'lesson' ? raw : 'article';
   return {
     itemId: String(r.item_id),
-    type: String(r.type) === 'quiz' ? 'quiz' : String(r.type) === 'tag' ? 'tag' : 'article',
+    type,
     title: String(r.title ?? ''),
     bodyMd: String(r.body_md ?? ''),
     questionJson: String(r.question_json ?? ''),
     linksJson: String(r.links_json ?? ''),
+    segmentsJson: String(r.segments_json ?? ''),
     state: state === 'sent' ? 'sent' : state === 'failed' ? 'failed' : 'pending',
     reason: toNullableString(r.reason),
     created: Number(r.created ?? 0),

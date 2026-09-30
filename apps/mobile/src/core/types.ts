@@ -109,14 +109,17 @@ export interface CommentOutRow {
 export interface MySubmissionRow {
   /** `<type>/<slug>`，与节点侧同一 id */
   itemId: string;
-  type: 'article' | 'quiz' | 'tag';
+  /** course / lesson 是容器（本册 §2.3）；其余不变 */
+  type: 'article' | 'quiz' | 'tag' | 'course' | 'lesson';
   title: string;
-  /** 文章正文（quiz 行为空串） */
+  /** 文章正文（quiz / 容器行为空串） */
   bodyMd: string;
-  /** 题库 JSON 字符串（article 行为空串） */
+  /** 题库 JSON 字符串（其余为空串） */
   questionJson: string;
   /** 标签关联的 JSON 文本（`[{target_id,kind}]`）；非 tag 载体恒为空串。补发要从它重建草稿。 */
   linksJson: string;
+  /** 容器行集 JSON 文本（`[{seq,kind,text}]`，按 seq 升序）；非容器载体恒为空串。补发要从它重建行集（本册 §4.1）。 */
+  segmentsJson: string;
   state: 'pending' | 'sent' | 'failed';
   /** `state='failed'` 时的用户可读原因（错误码映射后的中文）；可空 */
   reason: string | null;

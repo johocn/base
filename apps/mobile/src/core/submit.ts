@@ -7,6 +7,7 @@
 import { authorSignBytes, bytesToHex, randomBytes, sha256Hex, sign, utf8 } from '@base/protocol-ts';
 
 import type { Adapters } from '../platform/adapter';
+import { segmentsContentHash, type SubmitSegmentRow } from './attrs';
 import { CommentError, ensureRegistered, type CommentErrorCode, type CommentOptions } from './comment';
 import { errorCodeOf, errorText } from './errors';
 import { signRequestHeaders, type Identity } from './identity';
@@ -18,16 +19,21 @@ import type { MySubmissionRow, TagLinkRow } from './types';
 /** 与 `core/comment.ts` 同一组依赖（同一套 `ensureRegistered`，本册不另立会话模块）。 */
 export type SubmitOptions = CommentOptions;
 
+/** 容器载体的两种类型（本册 §2.3）。 */
+export type ContainerSubmitType = 'course' | 'lesson';
+
 /** 一条待投内容：与台账行的可编辑字段一一对应。 */
 export interface SubmitDraft {
   itemId: string;
-  type: 'article' | 'quiz' | 'tag';
+  type: 'article' | 'quiz' | 'tag' | ContainerSubmitType;
   title: string;
   bodyMd: string;
-  /** quiz 专有；article 恒为空串 */
+  /** quiz 专有；其余恒为空串 */
   questionJson: string;
   /** tag 专有：本次直打要建立的关联集（其余载体不传）。 */
   links?: TagLinkRow[];
+  /** course / lesson 专有：完整 segments 行集（含 seq<0 属性行与 seq>=1 清单行，本册 §4.1）。 */
+  segments?: SubmitSegmentRow[];
 }
 
 /** 发表失败的用户可读错误。码沿用评论队列的词汇，避免两套同义词。 */
@@ -42,8 +48,13 @@ export class SubmitError extends Error {
 }
 
 /** 生成一个新条目的 id：`<type>/<16 位 hex>`（恒满足 `[a-z0-9][a-z0-9-]{0,63}`，本册 §3）。 */
-export function newItemID(type: 'article' | 'quiz'): string {
+export function newItemID(type: 'article' | 'quiz' | 'course'): string {
   return `${type}/${bytesToHex(randomBytes(8))}`;
+}
+
+/** 课时 id：`course/<cid>/lesson/<16 位 hex>`——课时不独立存在，必须挂在课程下（本册 §6）。 */
+export function newLessonID(courseId: string): string {
+  return `${courseId}/lesson/${bytesToHex(randomBytes(8))}`;
 }
 
 /** kind 固定序：与 `core/tags.ts` 的 `TAG_KIND_ORDER`、节点 `store.tagKindRank` 同序。 */
@@ -70,6 +81,10 @@ export function contentHashOf(draft: SubmitDraft): string {
   if (draft.type === 'tag') {
     // 容器口径（#14 §3.3）：哈希只看物化的 segments 行，与 article/quiz 的「取正文」口径不同。
     return sha256Hex(utf8(materializeTagText(draft.links ?? [])));
+  }
+  if (draft.type === 'course' || draft.type === 'lesson') {
+    // 容器口径（本册 §2.3）：哈希看**完整行集**，含 seq<0 属性行——与 #37 的 tag 口径同源。
+    return segmentsContentHash(draft.segments ?? []);
   }
   return sha256Hex(utf8(draft.type === 'quiz' ? draft.questionJson : draft.bodyMd));
 }
@@ -115,6 +130,25 @@ export function buildTagPayload(itemId: string, title: string, links: TagLinkRow
   );
 }
 
+/** `course` / `lesson` 请求体字节。键序固定：type → item_id → title → segments → author_sig。 */
+export function buildContainerPayload(
+  type: ContainerSubmitType,
+  itemId: string,
+  title: string,
+  segments: SubmitSegmentRow[],
+  authorSig: string,
+): Uint8Array {
+  return utf8(
+    JSON.stringify({
+      type,
+      item_id: itemId,
+      title,
+      segments: [...segments].sort((a, b) => a.seq - b.seq).map((s) => ({ seq: s.seq, kind: s.kind, text: s.text })),
+      author_sig: authorSig,
+    }),
+  );
+}
+
 /** 本地校验；`ok=false` 时 `message` 即可直接展示的提示。 */
 export interface DraftValidation {
   ok: boolean;
@@ -131,6 +165,11 @@ export function validateDraft(draft: SubmitDraft): DraftValidation {
     // 三段的逐段文案（「请填写章」）在 `core/tags.ts` 的 submitTag 里给；这里只兜「有目标」这条兜底，
     // 节点还会做完整的形态 + 存在性 + 资格校验（册子 §3.4）。
     if ((draft.links ?? []).length === 0) return { ok: false, message: '缺少打标目标' };
+    return { ok: true, message: '' };
+  }
+  if (draft.type === 'course' || draft.type === 'lesson') {
+    // 容器只拦「客户端一定判断得了」的这一条：标题非空。行集的三区间铁律交服务端裁决（本册 §4.1）。
+    if (draft.title.trim() === '') return { ok: false, message: '请填写标题' };
     return { ok: true, message: '' };
   }
   if (draft.title.trim() === '') return { ok: false, message: '请填写标题' };
@@ -167,6 +206,9 @@ export function buildSubmitBody(draft: SubmitDraft, ident: Identity): Uint8Array
   const contentHash = contentHashOf(draft);
   const sig = localStep('签名', () => sign(ident.seedHex, utf8(authorSignBytes(draft.itemId, contentHash, ident.id))));
   if (draft.type === 'tag') return buildTagPayload(draft.itemId, title, draft.links ?? [], sig);
+  if (draft.type === 'course' || draft.type === 'lesson') {
+    return buildContainerPayload(draft.type, draft.itemId, title, draft.segments ?? [], sig);
+  }
   return draft.type === 'quiz'
     ? buildQuizPayload(draft.itemId, title, draft.questionJson, sig)
     : buildArticlePayload(draft.itemId, title, draft.bodyMd, sig);
@@ -178,11 +220,7 @@ function mapSubmitFailure(status: number, raw: string, itemId: string): SubmitEr
   if (status === 429 || code === 'item_rate_limited') {
     return new SubmitError('rate_limited', errorText(code, '提交过于频繁，请稍后再试'));
   }
-  let message = errorText(code, `提交失败（HTTP ${status}）`);
-  // `course/` 前缀单独补一句（本册 §6.2）
-  if (code === 'item_id_invalid' && itemId.startsWith('course/')) {
-    message = `${message}；投稿不能指定课程，请改用运营导入`;
-  }
+  const message = errorText(code, `提交失败（HTTP ${status}）`);
   // 4xx（除 429）= 永久失败；5xx = 节点侧问题，视为暂时（本计划口径填空 4）
   return new SubmitError(status >= 400 && status < 500 ? 'rejected' : 'server', message);
 }
@@ -236,6 +274,7 @@ export async function submitItem(o: SubmitOptions, draft: SubmitDraft): Promise<
  */
 async function writeLedger(o: SubmitOptions, draft: SubmitDraft, patch: Partial<MySubmissionRow>): Promise<void> {
   const prev = await o.repo.getSubmission(draft.itemId);
+  const isContainer = draft.type === 'course' || draft.type === 'lesson';
   await o.repo.saveSubmission({
     itemId: draft.itemId,
     type: draft.type,
@@ -243,6 +282,7 @@ async function writeLedger(o: SubmitOptions, draft: SubmitDraft, patch: Partial<
     bodyMd: draft.type === 'article' ? draft.bodyMd : '',
     questionJson: draft.type === 'quiz' ? draft.questionJson : '',
     linksJson: draft.type === 'tag' ? JSON.stringify(sortTagLinks(draft.links ?? []).map((l) => ({ target_id: l.targetId, kind: l.kind }))) : '',
+    segmentsJson: isContainer ? JSON.stringify([...(draft.segments ?? [])].sort((a, b) => a.seq - b.seq)) : '',
     state: 'pending',
     reason: null,
     created: prev?.created ?? 0,
@@ -332,6 +372,7 @@ async function runFlushSubmissions(o: SubmitOptions): Promise<FlushSubmissionsRe
       bodyMd: row.bodyMd,
       questionJson: row.questionJson,
       links: row.type === 'tag' ? decodeLedgerLinks(row.itemId, row.linksJson) : undefined,
+      segments: row.type === 'course' || row.type === 'lesson' ? decodeLedgerSegments(row.segmentsJson) : undefined,
     };
     try {
       const r = await submitItem(o, draft);
@@ -360,6 +401,18 @@ function decodeLedgerLinks(tagId: string, raw: string): TagLinkRow[] {
     const arr = JSON.parse(raw) as Array<{ target_id?: string; kind?: string }>;
     if (!Array.isArray(arr)) return [];
     return arr.map((l) => ({ tagId, targetId: String(l.target_id ?? ''), kind: String(l.kind ?? '') }));
+  } catch {
+    return [];
+  }
+}
+
+/** 台账 `segments_json` → 草稿 `segments`；空串或解析失败按空数组（节点会拒，不会写出错数据）。 */
+function decodeLedgerSegments(raw: string): SubmitSegmentRow[] {
+  if (raw === '') return [];
+  try {
+    const arr = JSON.parse(raw) as Array<{ seq?: number; kind?: string; text?: string }>;
+    if (!Array.isArray(arr)) return [];
+    return arr.map((s) => ({ seq: Number(s.seq ?? 0), kind: String(s.kind ?? ''), text: String(s.text ?? '') }));
   } catch {
     return [];
   }

@@ -4,7 +4,7 @@ import { deriveIdentityId, sha256Hex, utf8, verifyAuthorSig, type Json } from '@
 
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { IDENTITY_REGISTERED_KEY } from './comment';
-import { buildArticlePayload, buildQuizPayload, buildTagPayload, contentHashOf, enqueueOrSend, flushSubmissions, newItemID, submitItem, type SubmitDraft, type SubmitOptions } from './submit';
+import { buildArticlePayload, buildContainerPayload, buildQuizPayload, buildTagPayload, contentHashOf, enqueueOrSend, flushSubmissions, newItemID, submitItem, type SubmitDraft, type SubmitOptions } from './submit';
 import { buildQuestionJSON } from './quizdoc';
 import { decodeUtf8 } from './sync';
 
@@ -49,7 +49,7 @@ function articleDraft(over: Partial<SubmitDraft> = {}): SubmitDraft {
 
 describe('投稿载荷', () => {
   it('newItemID：<type>/<16 位 hex>，恒满足 [a-z0-9][a-z0-9-]{0,63}', () => {
-    for (const type of ['article', 'quiz'] as const) {
+    for (const type of ['article', 'quiz', 'course'] as const) {
       for (let i = 0; i < 20; i++) {
         const id = newItemID(type);
         expect(id.startsWith(`${type}/`)).toBe(true);
@@ -142,13 +142,102 @@ describe('台账状态机与补发', () => {
     expect(srv.message).toBe('提交失败（HTTP 500）');
   });
 
-  it('course/ 前缀：错误码提示后另加一句「不能指定课程」', async () => {
-    const { http, repo, o } = fixture();
-    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
-    http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8(JSON.stringify({ code: 'item_id_invalid' })) });
-    const r = await enqueueOrSend(o, articleDraft({ itemId: 'course/c1' }));
-    expect(r.ledgerState).toBe('failed');
-    expect((await repo.getSubmission('course/c1'))!.reason).toBe('条目 id 不合法；投稿不能指定课程，请改用运营导入');
+  describe('容器载体（course / lesson）', () => {
+    const containerDraft = (over: Partial<SubmitDraft> = {}): SubmitDraft => ({
+      itemId: 'course/c1',
+      type: 'course',
+      title: '甲课',
+      bodyMd: '',
+      questionJson: '',
+      segments: [
+        { seq: -1, kind: 'attr.cover', text: '00112233445566778899aabbccddeeff' },
+        { seq: 0, kind: 'digest', text: '简介' },
+        { seq: 1, kind: 'lesson', text: 'course/c1/lesson/l1' },
+      ],
+      ...over,
+    });
+
+    it('载荷键序固定为 type→item_id→title→segments→author_sig，且 segments 按 seq 升序', () => {
+      const wire = decodeUtf8(
+        buildContainerPayload(
+          'course',
+          'course/c1',
+          '甲课',
+          [
+            { seq: 1, kind: 'lesson', text: 'course/c1/lesson/l1' },
+            { seq: -1, kind: 'attr.cover', text: '00112233445566778899aabbccddeeff' },
+          ],
+          'ff'.repeat(64),
+        ),
+      );
+      expect(wire).toBe(
+        '{"type":"course","item_id":"course/c1","title":"甲课",' +
+          '"segments":[{"seq":-1,"kind":"attr.cover","text":"00112233445566778899aabbccddeeff"},' +
+          '{"seq":1,"kind":"lesson","text":"course/c1/lesson/l1"}],' +
+          '"author_sig":"' +
+          'ff'.repeat(64) +
+          '"}',
+      );
+    });
+
+    it('content_hash 走容器口径（与节点 store.SegmentsContentHash 同构）', () => {
+      expect(contentHashOf(containerDraft())).toBe(
+        sha256Hex(utf8('attr.cover\t00112233445566778899aabbccddeeff\ndigest\t简介\nlesson\tcourse/c1/lesson/l1\n')),
+      );
+    });
+
+    it('首投：作者签名可被节点按同一字节重建验证', async () => {
+      const { http, o } = fixture();
+      http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+      http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'course/c1', created: true }));
+
+      await submitItem(o, containerDraft());
+      const sent = JSON.parse(decodeUtf8(http.posted[1]!.body)) as Record<string, Json>;
+      const pub = registeredPub(http);
+      const authorId = (JSON.parse(decodeUtf8(http.posted[0]!.body)) as { id: string }).id;
+      expect(verifyAuthorSig(pub, 'course/c1', contentHashOf(containerDraft()), authorId, sent.author_sig as string)).toBe(true);
+      expect((sent.segments as unknown[]).length).toBe(3);
+    });
+
+    it('断网入队 → 台账存下 segments_json → 补发时行集完整重建', async () => {
+      const { http, repo, o } = fixture();
+      http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+      const state = gateSubmit(http);
+
+      const out = await enqueueOrSend(o, containerDraft());
+      expect(out.ledgerState).toBe('pending');
+      const row = await repo.getSubmission('course/c1');
+      expect(row?.type).toBe('course');
+      expect(row?.bodyMd).toBe('');
+      expect(row?.segmentsJson).toBe(
+        '[{"seq":-1,"kind":"attr.cover","text":"00112233445566778899aabbccddeeff"},' +
+          '{"seq":0,"kind":"digest","text":"简介"},' +
+          '{"seq":1,"kind":"lesson","text":"course/c1/lesson/l1"}]',
+      );
+
+      state.offline = false;
+      http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'course/c1', created: false }));
+      expect((await flushSubmissions(o)).sent).toBe(1);
+      const wire = JSON.parse(decodeUtf8(http.posted.at(-1)!.body)) as { segments: unknown[] };
+      expect(wire.segments).toHaveLength(3);
+    });
+
+    it('本地校验：容器只拦标题为空', async () => {
+      const { http, o } = fixture();
+      const err = await enqueueOrSend(o, containerDraft({ title: '  ' })).catch((e: unknown) => e);
+      expect((err as Error).message).toBe('请填写标题');
+      expect(http.posted).toHaveLength(0);
+    });
+
+    it('非容器形态回 item_id_invalid，且不再附加「不能指定课程」', async () => {
+      const { http, repo, o } = fixture();
+      http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+      http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8(JSON.stringify({ code: 'item_id_invalid' })) });
+
+      const r = await enqueueOrSend(o, containerDraft({ itemId: 'course/c1/lesson/l1/quiz/q1' }));
+      expect(r.ledgerState).toBe('failed');
+      expect((await repo.getSubmission('course/c1/lesson/l1/quiz/q1'))!.reason).toBe('条目 id 不合法');
+    });
   });
 
   it('断网 → 入队 pending；补发成功转 sent（单向，不留 pending）', async () => {
@@ -172,7 +261,7 @@ describe('台账状态机与补发', () => {
     http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
     for (const id of ['article/one', 'article/two', 'article/three']) {
       await repo.saveSubmission({
-        itemId: id, type: 'article', title: id, bodyMd: '正文', questionJson: '', linksJson: '',
+        itemId: id, type: 'article', title: id, bodyMd: '正文', questionJson: '', linksJson: '', segmentsJson: '',
         state: 'pending', reason: null, created: 0, queuedAt: `2026-09-28T00:00:0${id.slice(-1) === 'e' ? 1 : id.slice(-1) === 'o' ? 2 : 3}Z`, sentAt: '',
       });
     }
@@ -191,7 +280,7 @@ describe('台账状态机与补发', () => {
     http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
     http.postRoutes.set(`${BASE}/v1/submit`, json({ created: true }));
     await repo.saveSubmission({
-      itemId: 'article/one', type: 'article', title: '甲', bodyMd: '正文', questionJson: '', linksJson: '',
+      itemId: 'article/one', type: 'article', title: '甲', bodyMd: '正文', questionJson: '', linksJson: '', segmentsJson: '',
       state: 'pending', reason: null, created: 0, queuedAt: '2026-09-28T00:00:01Z', sentAt: '',
     });
     const [a, b] = await Promise.all([flushSubmissions(o), flushSubmissions(o)]);
