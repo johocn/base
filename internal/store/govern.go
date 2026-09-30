@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/johocn/base/internal/protocol"
@@ -64,6 +65,7 @@ type Proposal struct {
 	Reason          string
 	Title           string // 仅 Action == GovernActionEdit 时非空
 	BodyMD          string // 仅 Action == GovernActionEdit 时非空
+	LinksJSON       string // 仅 tag 型 Action == GovernActionEdit 时非空（#37 册子 §3.5）
 	BaseContentHash string
 	CreatedAt       int64
 	ExecutedAt      int64
@@ -87,7 +89,7 @@ type ProposalView struct {
 
 // proposalColumns 的列顺序必须与 scanProposal 的 Scan 参数一一对应。
 // source_event_id 可空，故 COALESCE 成空串读回（NULL = 老路径本地写入）。
-const proposalColumns = `proposal_id,action,item_id,proposer_id,reason,title,body_md,base_content_hash,created_at,executed_at,voided_at,executed_result,COALESCE(source_event_id,''),content_version,revoked_rev`
+const proposalColumns = `proposal_id,action,item_id,proposer_id,reason,title,body_md,COALESCE(links_json,''),base_content_hash,created_at,executed_at,voided_at,executed_result,COALESCE(source_event_id,''),content_version,revoked_rev`
 
 // rowScanner 抽象 *sql.Row 与 *sql.Rows 的 Scan。
 type rowScanner interface{ Scan(dest ...any) error }
@@ -95,7 +97,7 @@ type rowScanner interface{ Scan(dest ...any) error }
 func scanProposal(sc rowScanner) (Proposal, error) {
 	var p Proposal
 	err := sc.Scan(&p.ProposalID, &p.Action, &p.ItemID, &p.ProposerID, &p.Reason, &p.Title, &p.BodyMD,
-		&p.BaseContentHash, &p.CreatedAt, &p.ExecutedAt, &p.VoidedAt, &p.ExecutedResult,
+		&p.LinksJSON, &p.BaseContentHash, &p.CreatedAt, &p.ExecutedAt, &p.VoidedAt, &p.ExecutedResult,
 		&p.SourceEventID, &p.ContentVersion, &p.RevokedRev)
 	return p, err
 }
@@ -252,9 +254,10 @@ func (s *Store) CreateProposal(p Proposal) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,base_content_hash,created_at,content_version,revoked_rev)
-		VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		p.Action, p.ItemID, p.ProposerID, p.Reason, p.Title, p.BodyMD, p.BaseContentHash, p.CreatedAt, cv, rv)
+	res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,base_content_hash,created_at,content_version,revoked_rev)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		p.Action, p.ItemID, p.ProposerID, p.Reason, p.Title, p.BodyMD, p.LinksJSON,
+		p.BaseContentHash, p.CreatedAt, cv, rv)
 	if err != nil {
 		return 0, fmt.Errorf("store: 写提案: %w", err)
 	}
@@ -489,6 +492,9 @@ func governApplyTx(tx *sql.Tx, st *Store, p Proposal) (string, error) {
 // editItemTx 执行改写（册子 §4.2）：全量覆盖 title / body_md，按 content_hash 是否变化决定归属后果。
 // 只对 article 载体成立，受理阶段已挡住其余载体（册子 §0.3）。
 func editItemTx(tx *sql.Tx, st *Store, p Proposal) (string, error) {
+	if strings.HasPrefix(p.ItemID, "tag/") {
+		return editTagItemTx(tx, p)
+	}
 	hash := protocol.SHA256Hex([]byte(p.BodyMD))
 	var oldHash string
 	if err := tx.QueryRow(`SELECT content_hash FROM items WHERE item_id=?`, p.ItemID).Scan(&oldHash); err != nil {
@@ -517,4 +523,43 @@ func editItemTx(tx *sql.Tx, st *Store, p Proposal) (string, error) {
 		return "", fmt.Errorf("store: 改写 items %s: %w", p.ItemID, err)
 	}
 	return "edited_author_cleared", nil
+}
+
+// EncodeTagLinks 把关联集编成可持久化的规范 JSON（tag 型 edit 的载荷，#37 册子 §3.5）。
+func EncodeTagLinks(links []TagLink) (string, error) {
+	b, err := json.Marshal(links)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// DecodeTagLinks 解出关联集；空串按「空关联集」处理（合法：标签可以没有任何关联）。
+func DecodeTagLinks(raw string) ([]TagLink, bool) {
+	if raw == "" {
+		return []TagLink{}, true
+	}
+	var links []TagLink
+	if err := json.Unmarshal([]byte(raw), &links); err != nil {
+		return nil, false
+	}
+	return links, true
+}
+
+// editTagItemTx 执行标签条目的关联集改写（#37 册子 §3.5）：全量覆盖 → 重算物化行与 content_hash。
+// **author_id / author_sig 两列不动**——标签的归属不随关联集变化而失效（与 article 的 edit 语义不同）。
+func editTagItemTx(tx *sql.Tx, p Proposal) (string, error) {
+	links, ok := DecodeTagLinks(p.LinksJSON)
+	if !ok {
+		return "", fmt.Errorf("store: 标签提案 %d 的 links_json 不可解析", p.ProposalID)
+	}
+	hash, err := replaceTagLinksTx(tx, p.ItemID, links)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(`UPDATE items SET content_hash=?,source_rev=?,updated_at=? WHERE item_id=?`,
+		hash, hash[:16], nowUTC(), p.ItemID); err != nil {
+		return "", fmt.Errorf("store: 改写 items %s: %w", p.ItemID, err)
+	}
+	return "edited_links", nil
 }

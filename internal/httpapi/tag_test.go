@@ -232,3 +232,98 @@ func TestSubmitTagRejectsTitleMismatchAndBadLinks(t *testing.T) {
 		t.Fatalf("kind 不一致 code=%d out=%s", code, out)
 	}
 }
+
+// seedTagForEdit 造一条「治理人甲直打、只关联 course/c1」的标签，返回其 tag_id。
+func seedTagForEdit(t *testing.T, n *submitNode, gov1 string) string {
+	t.Helper()
+	if err := n.seedItem(t, "course/c1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.seedItem(t, "course/c2"); err != nil {
+		t.Fatal(err)
+	}
+	tagID, _ := protocol.TagItemID("甲", "第一章", "第一节")
+	body := tagSubmitBody(t, gov1, "甲", "第一章", "第一节",
+		[]map[string]string{{"target_id": "course/c1", "kind": "course"}})
+	if code, out := sendAuth(t, signedRequest(t, gov1, http.MethodPost, n.public+"/v1/submit", string(body))); code != 200 {
+		t.Fatalf("直打失败 code=%d out=%s", code, out)
+	}
+	return tagID
+}
+
+// editTagProposalBody 造一份 tag 型 edit 提案体（links 载荷，不涉 body_md）。
+func editTagProposalBody(t *testing.T, tagID string, links []map[string]string) string {
+	t.Helper()
+	return proposalBody(t, "edit", tagID, map[string]any{"edit": map[string]any{"links": links}})
+}
+
+// 册子 §3.5：tag 型 edit 走 links[] 载荷，生效后关联集全量覆盖、author 不动。
+func TestProposalEditTagCarrier(t *testing.T) {
+	n := newSubmitNode(t)
+	gov1 := seedGovernor(t, n)  // testSeed：名册内
+	gov2 := seedGovernor2(t, n) // tagGov2Seed：名册内
+	tagID := seedTagForEdit(t, n, gov1)
+
+	// 治理人乙（非作者）提 edit：关联集改为 c1+c2
+	body := editTagProposalBody(t, tagID, []map[string]string{
+		{"target_id": "course/c1", "kind": "course"},
+		{"target_id": "course/c2", "kind": "course"},
+	})
+	code, out := sendAuth(t, signedRequest(t, gov2, http.MethodPost, n.public+"/v1/proposal", body))
+	if code != http.StatusCreated {
+		t.Fatalf("tag 型 edit 受理 code=%d out=%s", code, out)
+	}
+	if out["action"] != "edit" || out["item_id"] != tagID || out["threshold"] != float64(2) ||
+		out["status"] != "pending" || out["vote_count"] != float64(1) {
+		t.Fatalf("受理响应不对: %v", out)
+	}
+	pid, _ := out["proposal_id"].(string)
+
+	// 第 2 票（门槛 2）→ 同一事务内生效
+	vc, vout := sendAuth(t, signedRequest(t, gov1, http.MethodPost, n.public+"/v1/proposal/"+pid+"/vote", ""))
+	if vc != http.StatusOK || vout["status"] != "effective" || vout["vote_count"] != float64(2) {
+		t.Fatalf("投票生效 code=%d out=%s", vc, vout)
+	}
+	if got := n.tagLinkCount(t, tagID); got != 2 {
+		t.Fatalf("生效后 tag_links 行数 = %d，want 2（全量覆盖）", got)
+	}
+	// 归属两列不动：提案只改关联集，author 不属于签名失效的范围
+	it, ok, err := n.st.GetItem(tagID)
+	if err != nil || !ok {
+		t.Fatalf("GetItem ok=%v err=%v", ok, err)
+	}
+	wantID, _ := identityFromSeed(t, gov1)
+	if it.AuthorID != wantID || it.AuthorSig == "" {
+		t.Fatalf("归属两列不得变化: %+v", it)
+	}
+}
+
+// 册子 §3.5：tag 型 edit 的载荷只有 links[]，body_md / title 给了即拒，且不落库。
+func TestProposalEditTagRejectsBodyMD(t *testing.T) {
+	n := newSubmitNode(t)
+	gov1 := seedGovernor(t, n)
+	gov2 := seedGovernor2(t, n)
+	tagID := seedTagForEdit(t, n, gov1)
+
+	cases := []struct {
+		name  string
+		extra map[string]any
+	}{
+		{"带 body_md", map[string]any{"body_md": "正文"}},
+		{"带 title", map[string]any{"title": "甲 · 第一章 · 第一节"}},
+	}
+	for _, c := range cases {
+		body := proposalBody(t, "edit", tagID, map[string]any{"edit": c.extra})
+		code, out := sendAuth(t, signedRequest(t, gov2, http.MethodPost, n.public+"/v1/proposal", body))
+		if code != http.StatusBadRequest || out["code"] != "proposal_edit_invalid" {
+			t.Fatalf("%s: code=%d out=%s，want 400 proposal_edit_invalid", c.name, code, out)
+		}
+	}
+	if _, ok, _ := n.st.GetProposal(1); ok {
+		t.Fatal("拒绝时不得落库")
+	}
+	if got := n.tagLinkCount(t, tagID); got != 1 {
+		t.Fatalf("拒绝时 tag_links 不得变化: 行数 = %d", got)
+	}
+}
+

@@ -190,6 +190,7 @@ var schemaStatements = []string{
 		reason            TEXT    NOT NULL DEFAULT '',
 		title             TEXT    NOT NULL DEFAULT '',
 		body_md           TEXT    NOT NULL DEFAULT '',
+		links_json        TEXT    NOT NULL DEFAULT '', -- #37 册子 §3.5：tag 型 edit 的载荷（links[] 的规范 JSON）
 		base_content_hash TEXT    NOT NULL,
 		created_at        INTEGER NOT NULL,
 		executed_at       INTEGER NOT NULL DEFAULT 0,
@@ -257,6 +258,7 @@ var governColumnMigrations = []struct{ table, column, ddl string }{
 	{"govern_proposals", "content_version", `ALTER TABLE govern_proposals ADD COLUMN content_version INTEGER NOT NULL DEFAULT 0`},
 	{"govern_proposals", "revoked_rev", `ALTER TABLE govern_proposals ADD COLUMN revoked_rev INTEGER NOT NULL DEFAULT 0`},
 	{"govern_votes", "source_event_id", `ALTER TABLE govern_votes ADD COLUMN source_event_id TEXT`},
+	{"govern_proposals", "links_json", `ALTER TABLE govern_proposals ADD COLUMN links_json TEXT NOT NULL DEFAULT ''`},
 }
 
 // migrate 执行 schemaStatements 之后的幂等迁移。

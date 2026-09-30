@@ -89,6 +89,8 @@ type proposalEditReq struct {
 	Title string `json:"title"`
 	// BodyMD 用指针以区分「键缺失」（400）与「空串」（合法：本册不设内容下限）。
 	BodyMD *string `json:"body_md"`
+	// Links 是 tag 型 edit 的载荷（#37 册子 §3.5）；article 型不适用，给了即拒。
+	Links []submitLink `json:"links"`
 }
 
 type proposalReq struct {
@@ -124,16 +126,11 @@ func (s *Server) handleProposalPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	title, bodyMD := "", ""
-	if req.Action == store.GovernActionEdit {
-		if req.Edit == nil || req.Edit.BodyMD == nil || !validItemTitle(req.Edit.Title) {
-			s.writeAuthErr(w, http.StatusBadRequest, "proposal_edit_invalid")
-			return
-		}
-		title, bodyMD = strings.TrimSpace(req.Edit.Title), *req.Edit.BodyMD
-		if len(title)+len(bodyMD) > maxSubmitBytes {
-			s.writeAuthErr(w, http.StatusRequestEntityTooLarge, "proposal_too_large")
-			return
-		}
+	var linksJSON string
+	// edit 的载荷**存在性**在此判定；载荷内容按载体系分流（在 GetItem 之后，册子 §3.5）。
+	if req.Action == store.GovernActionEdit && req.Edit == nil {
+		s.writeAuthErr(w, http.StatusBadRequest, "proposal_edit_invalid")
+		return
 	}
 	if !s.proposalLimiterByID.allow(actor) || !s.governLimiterByIP.allow(clientIP(r)) {
 		s.writeAuthErr(w, http.StatusTooManyRequests, "govern_rate_limited")
@@ -157,10 +154,35 @@ func (s *Server) handleProposalPost(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthErr(w, http.StatusBadRequest, "item_state_mismatch")
 		return
 	}
-	// edit 只对 article 载体成立（册子 §0.3）：body_md 与 sha256(body_md) 只存在于 articles。
-	if req.Action == store.GovernActionEdit && it.SQLiteTable != "articles" {
-		s.writeAuthErr(w, http.StatusBadRequest, "proposal_edit_invalid")
-		return
+	// edit 的载荷按载体系分流（#37 册子 §3.5）：article 走 title+body_md，tag 走 links[]。
+	if req.Action == store.GovernActionEdit {
+		switch {
+		case it.SQLiteTable == "articles":
+			if req.Edit.BodyMD == nil || !validItemTitle(req.Edit.Title) {
+				s.writeAuthErr(w, http.StatusBadRequest, "proposal_edit_invalid")
+				return
+			}
+			title, bodyMD = strings.TrimSpace(req.Edit.Title), *req.Edit.BodyMD
+			if len(title)+len(bodyMD) > maxSubmitBytes {
+				s.writeAuthErr(w, http.StatusRequestEntityTooLarge, "proposal_too_large")
+				return
+			}
+		case it.Type == itemTypeTag:
+			// tag 型：title 由 item_id 重建故不收；body_md 不适用，给了即拒。
+			links, ok := normalizeSubmitTagLinks(req.Edit.Links)
+			if !ok || req.Edit.BodyMD != nil || strings.TrimSpace(req.Edit.Title) != "" {
+				s.writeAuthErr(w, http.StatusBadRequest, "proposal_edit_invalid")
+				return
+			}
+			linksJSON, err = store.EncodeTagLinks(links)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		default:
+			s.writeAuthErr(w, http.StatusBadRequest, "proposal_edit_invalid")
+			return
+		}
 	}
 	roster, rosterOK := s.governRoster()
 	if rosterOK && !roster[actor] {
@@ -169,7 +191,7 @@ func (s *Server) handleProposalPost(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.st.CreateProposal(store.Proposal{
 		Action: req.Action, ItemID: req.ItemID, ProposerID: actor,
-		Reason: reason, Title: title, BodyMD: bodyMD,
+		Reason: reason, Title: title, BodyMD: bodyMD, LinksJSON: linksJSON,
 		BaseContentHash: it.ContentHash, CreatedAt: time.Now().UnixMilli(),
 	})
 	if err != nil {
