@@ -3098,6 +3098,25 @@ git push origin master
 | M11 | **0.13.1 补丁**：手机端发起提案并投票，票满门槛后卡片状态变「已生效」，且受审动作**真的发生**（`remove` → 该条目在课程页消失；`edit` → 标题/正文已改） | AC 11（事件路径生效闭环） |
 | M12 | **0.13.1 补丁**：治理卡片显示「水位 vN / revM」（不再恒 0；`content_version`/`revoked_rev` 由 `/v1/proposal` 下发） | 更正 45 ⑧ |
 
+### 真机验收实况（2026-09-30）
+
+环境：远端隔离节点 `/opt/accept/node1`（`accept-node-1.service`，回环 8090，明文 HTTP）；H5 腿经 nginx **临时** `location /accept/` 反代（验完已还原配置并停服务，全程 `base`/`base-cache` active、生产零改动）；驱动 Playwright + uni-app H5（harness 注入等价 `window.plus`，业务/密码学/网络代码原样运行），证据（截图 / 逐字文案 / sqlite 与 curl 原始返回）在 `e:\code\accept-ui`。
+
+| # | 结论 | 依据 |
+|---|---|---|
+| M1 | PASS | 非成员读封闭圈：UI「圈子不存在或你没有读权」、匿名 404 `group_read_denied`；创建者正常可见 |
+| M2 | PASS | 开放圈匿名 200（`encrypted:0`）；陌生身份「自助加入」后 epoch 前推、名单含本人、立即可读 |
+| M3 | **BLOCKED（见缺口）** | 封闭圈节点侧恒为单成员 ⇒ 无法构造「移出后其余成员无码获新钥」；仅取到被移出者侧提示原文「小组密钥已更新，请向创建者索取新邀请码。」 |
+| M4 | PASS（偏差） | 封闭圈 m=11 不可构造（同缺口），改用**开放圈 m=11**（语义同构）：k=3 ⇒ 1 签时原位提示「需 2 名签名（移出成员），当前 1 名」，第 2 名治者代签后提交成功，`member_ids` 11→10、epoch 11→12 |
+| M5 | PASS | 开放圈 m=3：1 治者发起时原位提示「需 2 名签名（解散圈子），当前 1 名」，2 名成员代签后成功，`member_ids_json = []` |
+| M9 | PASS | 封闭圈探针 `AC9-明文探针-…` 在 `base.db`/`-wal`/`-shm` 与 `blobs/*` 全量搜索 0 命中，且密文确实落库（`payload_cid` + 106 字节二进制密文）；正对照（`group_id`、组名）均命中 |
+| M8 | 待人工 | 需真机 + 0.9.3 老客户端（本机无 adb/设备）；服务端侧 `TestGroupReadLegacyRowDefaultsEncrypted`、`TestRosterV2V1EncryptedDefault` 已绿 |
+| M10 | 待人工 | 需第二节点（缓存节点）+ 客户端解密 |
+
+**验收发现的缺口（本轮只记不改）**：封闭圈在节点侧**恒为单成员**——客户端 `acceptInvite` 全程离线只写本机（[group.ts](../../../apps/mobile/src/core/group.ts#L196-L232)），应用内无「添加成员」入口（`group.vue` 只有 移出/退出/改名/解散），而节点对封闭圈 `sub=join` 一律 403 `group_invite_required`（[group.go](../../../internal/httpapi/group.go#L435-L446)）、封闭圈读权只认 `groups.member_ids`。实测：第二身份粘邀请码入组后 `member_ids_json` 仍只有创建者、其签名读 404 `group_read_denied`；库中 7 个封闭圈 `members` 全为 1。后果：封闭圈形态下 AC 4 / AC 5 与 AC 6 在当前客户端不可达。
+
+**另记一条开放圈现象**：开放圈「自助加入」会把 epoch 前推却**不发新钥**，此后圈内新消息普遍「（无法解密）」、发送方报「本地缺少 epoch N 的组密钥」。
+
 ---
 
 ## 执行实况（实施后回填）
