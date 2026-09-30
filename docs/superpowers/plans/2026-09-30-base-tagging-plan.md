@@ -3610,3 +3610,9 @@ git push origin master
 实际怎么做的：复用既有等价物 `newSubmitNode`（返回 `*submitNode{st,public}`，已登记 `testSeed`）、`registerSeed`、`signedRequest`/`sendAuth`，错误码断言改回同包风格 `out["code"] != "…"`；缺的 helper 全部在 `tag_test.go` 内补齐（含两个 64-hex 测试 seed 常量）；名册内身份用「登记 + 走 `POST /v1/submit` 投 200 字 article」造，不直写库；`signedRequest` 调用处把 `[]byte` 显式转 `string`（提交 `8b1e495`）。
 依据：该附注本身就是计划预留的口径；`store.ArticleMinRunes` 未导出，同包测试只能写字面量 200。非测试代码零新增导出，契约未变。
 
+**更正 5（Task 7 · `SubmitDraft.type` 的拓宽被错划到 Task 9）**
+现象：Task 7 Step 1 给 `MySubmissionRow.type` 加 `'tag'` 后，`submit.ts` 的 `runFlushSubmissions` 里 `const draft: SubmitDraft = { … type: row.type … }` 立即报 `TS2322`（`'tag'` 不可赋给 `'article' | 'quiz'`）；即 Task 7 的「`tsc` 无输出」门禁**跨到了 Task 9 才成立**，Task 7 单独执行时必红。
+计划写的是：Task 7（计划表第 64 行与本 Task Files 段）只列 `types.ts` / `repo.ts` / `fakes.ts` 三文件，`SubmitDraft.type` 的拓宽归 Task 9 Step 5。
+实际怎么做的：在 `submit.ts` 只改 `SubmitDraft.type` 一行（`'article' | 'quiz'` → `'article' | 'quiz' | 'tag'`），随 Task 7 一并提交；Task 9 此步遂为既有事实，其余不动。
+依据：类型拓宽是 Task 7 自身语义（台账 `type` 含 `tag`）的**直接、不可分割的后果**，延后只会让「每个 Task 结束即门禁全绿」这一纪律破功；只挪一行、不引入任何运行期语义变化，也不改变 Task 9 的其余契约。
+
