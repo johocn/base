@@ -1,3 +1,4 @@
+import { attrsOf } from './container-view';
 import type { ItemRow, SegmentRow } from './types';
 
 export interface CourseTree {
@@ -61,4 +62,49 @@ export function lessonOfCarrier(itemId: string): string {
     return parts.slice(0, 4).join('/');
   }
   return '';
+}
+
+/** 分组读取产物：一个分类（slug + 组标题 + 其下课程）。 */
+export interface CategoryGroup {
+  slug: string;
+  title: string;
+  courses: ItemRow[];
+}
+
+const CATEGORY_PREFIX = 'category/';
+
+/**
+ * 课程分组读取（册子 #49 §3）：以课程自身 `attr.category` 为分组依据（组 slug）。
+ * 组标题优先取**已存在的** `category/<slug>` 容器的 `title`，容器不存在（或 title 为空）回落 slug 本身。
+ * 导入器产 `category/<slug>` 清单行在**读取分组时忽略**；`attr.category` 缺失的课程不落任何组，进 `unclassified`。
+ * **只读**：不写库、不改清单、不发请求。纯函数、无 IO。
+ */
+export function groupCoursesByCategory(
+  items: ItemRow[],
+  segsByItemId: Map<string, SegmentRow[]>,
+): { groups: CategoryGroup[]; unclassified: ItemRow[] } {
+  const titleBySlug = new Map<string, string>();
+  for (const cat of splitCategories(items)) {
+    if (cat.itemId.startsWith(CATEGORY_PREFIX)) {
+      titleBySlug.set(cat.itemId.slice(CATEGORY_PREFIX.length), cat.title);
+    }
+  }
+
+  const bySlug = new Map<string, ItemRow[]>();
+  const unclassified: ItemRow[] = [];
+  for (const course of splitCourses(items).courses) {
+    const slug = attrsOf(segsByItemId.get(course.itemId) ?? []).category;
+    if (slug === '') {
+      unclassified.push(course);
+      continue;
+    }
+    const bucket = bySlug.get(slug);
+    if (bucket) bucket.push(course);
+    else bySlug.set(slug, [course]);
+  }
+
+  const groups: CategoryGroup[] = [...bySlug.keys()]
+    .sort()
+    .map((slug) => ({ slug, title: titleBySlug.get(slug) || slug, courses: bySlug.get(slug) as ItemRow[] }));
+  return { groups, unclassified };
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   childrenOf,
   coursesOfCategory,
+  groupCoursesByCategory,
   lessonOfCarrier,
   lessonNo,
   splitCategories,
@@ -158,5 +159,88 @@ describe('lessonOfCarrier', () => {
     expect(lessonOfCarrier('quiz/q1')).toBe('');
     expect(lessonOfCarrier('course/c1')).toBe('');
     expect(lessonOfCarrier('course/c1/lesson/l1')).toBe('');
+  });
+});
+
+describe('groupCoursesByCategory：分组读取（以 attr.category 为唯一依据）', () => {
+  const math: ItemRow = { ...item('category/math', 'category'), title: '数学' };
+  const physics: ItemRow = { ...item('category/physics', 'category'), title: '物理' };
+  const c1 = item('course/c1', 'course');
+  const c2 = item('course/c2', 'course');
+
+  const attrRow = (courseId: string, slug: string): SegmentRow => seg(courseId, -1, 'attr.category', slug);
+  const manifestRow = (catId: string, seq: number, courseId: string): SegmentRow =>
+    seg(catId, seq, 'course', courseId);
+  const segMap = (entries: Array<[string, SegmentRow[]]>): Map<string, SegmentRow[]> => new Map(entries);
+
+  it('按 attr.category 归组，组标题取既有 category/<slug> 容器 title；组内课程按 itemId 升序', () => {
+    const got = groupCoursesByCategory(
+      [c2, math, c1],
+      segMap([
+        ['course/c1', [attrRow('course/c1', 'math')]],
+        ['course/c2', [attrRow('course/c2', 'math')]],
+      ]),
+    );
+    expect(got.groups).toEqual([{ slug: 'math', title: '数学', courses: [c1, c2] }]);
+    expect(got.unclassified).toEqual([]);
+  });
+
+  it('无 attr.category 的课程不落任何组，进未归类（清单行也不救）', () => {
+    const got = groupCoursesByCategory(
+      [math, c1],
+      segMap([['category/math', [manifestRow('category/math', 1, 'course/c1')]]]),
+    );
+    expect(got.groups).toEqual([]);
+    expect(got.unclassified.map((i) => i.itemId)).toEqual(['course/c1']);
+  });
+
+  it('导入器清单行读取分组时忽略：冲突时 attr.category 优先且清单归属不生效', () => {
+    const got = groupCoursesByCategory(
+      [physics, math, c1],
+      segMap([
+        ['course/c1', [attrRow('course/c1', 'math')]],
+        ['category/physics', [manifestRow('category/physics', 1, 'course/c1')]],
+      ]),
+    );
+    expect(got.groups).toEqual([{ slug: 'math', title: '数学', courses: [c1] }]);
+    expect(got.unclassified).toEqual([]);
+  });
+
+  it('容器不存在时组标题回落 slug 本身', () => {
+    const got = groupCoursesByCategory([c1], segMap([['course/c1', [attrRow('course/c1', 'self')]]]));
+    expect(got.groups).toEqual([{ slug: 'self', title: 'self', courses: [c1] }]);
+  });
+
+  it('容器存在但 title 为空串时同样回落 slug', () => {
+    const empty = { ...item('category/self', 'category'), title: '' };
+    const got = groupCoursesByCategory(
+      [empty, c1],
+      segMap([['course/c1', [attrRow('course/c1', 'self')]]]),
+    );
+    expect(got.groups).toEqual([{ slug: 'self', title: 'self', courses: [c1] }]);
+  });
+
+  it('分组按 slug 升序；未归类按 itemId 升序；空组不显示', () => {
+    const czz = item('course/zz', 'course');
+    const caa = item('course/aa', 'course');
+    const cmm = item('course/mm', 'course');
+    const got = groupCoursesByCategory(
+      [cmm, czz, caa, physics, math],
+      segMap([
+        ['course/zz', [attrRow('course/zz', 'math')]],
+        ['course/aa', [attrRow('course/aa', 'physics')]],
+        ['course/mm', []],
+      ]),
+    );
+    expect(got.groups.map((g) => g.slug)).toEqual(['math', 'physics']);
+    expect(got.groups.map((g) => g.title)).toEqual(['数学', '物理']);
+    expect(got.unclassified.map((i) => i.itemId)).toEqual(['course/mm']);
+  });
+
+  it('非课程条目（文章）既不进分组也不进未归类', () => {
+    const article = item('article/a1', 'article');
+    const got = groupCoursesByCategory([article, math], segMap([]));
+    expect(got.groups).toEqual([]);
+    expect(got.unclassified).toEqual([]);
   });
 });
