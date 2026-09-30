@@ -40,6 +40,17 @@
 
 **实施前置（硬）：** 「圈子治理人」的判定依赖 **#35 Phase 1** 已落地（`groups.governors` / `seat_count`）。若 #35 未落地，本册只能以 #23 名册单源判定，**不得**自造圈子治者口径。
 
+### 0.2 2026-09-30 执行期口径回填
+
+实施计划（`plans/2026-09-30-base-tagging-plan.md`，#38）执行期与本册的六处差异，**结论按本节为准**：
+
+1. **§4 的 `ListUntagged(kind, ids)` 作废**：实施期确认它**没有任何调用点**——「待补标签」的判定完全落在客户端（`core/tags.ts` 的 `untaggedTargets(items, rows)` 用本地 `tag_links` 反查），节点侧不做、也不提供该接口。`idx_tag_links_target` 索引保留（供「这个内容有哪些标签」使用）。
+2. **§4 的 `tagColumnMigrations` 不必要**：`tag_links` 是全新表，由 `schemaStatements` 直接建；`tagColumnMigrations` 只对「给已有表补列」有意义。实施期**不新增**该常量。
+3. **§5.3 的版本号作废**：该行写的 code `18` 已被 `0.13.1` 占用。本册实际发布 **`0.14.0` / `19`**（独立发布）；四步流程不变。
+4. **§3.1 的归一化收窄**：原文「各段先 NFC 归一化、再去首尾空白」中的 **NFC 无法落地**（Go 标准库无 NFC，仓库不含 `golang.org/x/text`，不为一个归一化引入新依赖）。实施口径为「**去首尾空白（Go `strings.TrimSpace` / 客户端 `trim`）+ 归一化后非空 + ≤ 64 rune**；客户端**不**调 `String.prototype.normalize`」。其余（百分号编码、`title` 由 `item_id` 重建、不做 `slug` 校验）逐字不变。
+5. **§3.5 的改标载荷存储**：原文只写「载荷为 `links[]`」未定义存储。实施口径为**新列 `govern_proposals.links_json TEXT NOT NULL DEFAULT ''`**（走既有 `governColumnMigrations` 幂等补列），存 `links[]` 的规范 JSON；**不复用 `body_md`**（`body_md` 是 article 载体的语义，混用会让 `scanProposal` 与前端看板都需要按载体二次解释）。空串按「空关联集」解（合法）。
+6. **§4 的改动面漏了三处节点侧改动**：① `internal/httpapi/govern.go` 的 `edit` 校验必须从「写死 `it.SQLiteTable != "articles"` 就拒」改成**按载体系分流**（`articles` 走 `title`+`body_md`，`tag` 型走 `links[]`），且载体相关校验要挪到 `GetItem` **之后**；② 资格判定落在 **`internal/store` 的 `GovernorSet() map[string]bool`**（#23 名册 ∪ 各圈 `DeriveSeats().Governors` 的去重并集），`submit.go` 只调用它、不自己拼集合；③ 客户端侧新增本地列 `my_submissions.links_json`（离线标签投稿补发时重建草稿用，见本册 §5.2 的「断网入网 → 联网补发」链路）。
+
 ## 1. 目标与判定
 
 | # | 目标 | 判定 |
