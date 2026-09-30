@@ -80,6 +80,34 @@
     </view>
 
     <view class="field">
+      <text class="label">图章</text>
+      <view class="chips">
+        <text
+          v-for="w in badgeChoices"
+          :key="w"
+          class="chip"
+          :class="form.badge.includes(w) ? 'chip-on' : ''"
+          @click="toggleBadge(w)"
+        >{{ w }}</text>
+      </view>
+      <text class="hint">作者可选 4 种、治理者 7 种；可多选，保存时自动去重并按规范序落成一行</text>
+    </view>
+
+    <view class="field">
+      <text class="label">标题色</text>
+      <view class="chips">
+        <text
+          v-for="c in TITLE_COLORS"
+          :key="c"
+          class="chip swatch"
+          :class="['c-' + c, form.titleColor === c ? 'swatch-on' : '']"
+          @click="toggleTitleColor(c)"
+        >{{ titleColorLabel(c) }}</text>
+      </view>
+      <text class="hint">只改标题字色；再点一次取消</text>
+    </view>
+
+    <view class="field">
       <text class="label">时长（分钟）</text>
       <input v-model="durationMin" class="input" type="number" placeholder="可空；保存时换算成秒" />
     </view>
@@ -146,9 +174,10 @@
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, nextTick, ref } from 'vue';
 
-import { DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO } from '../../core/attrs';
+import { BADGE_WORDS, BADGE_WORDS_AUTHOR, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO, TITLE_COLORS } from '../../core/attrs';
 import { uploadBlob } from '../../core/blob';
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
+import { myIdentityId, roster } from '../../core/contribution';
 import { loadContainerForm, saveContainer, startNewLesson, type ContainerForm } from '../../core/course-edit';
 import { recordEditFailure } from '../../core/editlog';
 import { renderMarkdown } from '../../core/markdown';
@@ -226,6 +255,10 @@ const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
 const pickBlocked = computed(() => pickBlockedReason(caps.value));
 const canPick = computed(() => canPickFile(caps.value));
 
+/** 治理者身份（#23 名册内）：决定图章候选是 4 种还是 7 种 */
+const isGovernor = ref(false);
+const badgeChoices = computed(() => (isGovernor.value ? BADGE_WORDS : BADGE_WORDS_AUTHOR));
+
 /** bootstrap 上下文：日志出口要拿 `adapters.fs` 与 `opts.workDir`，故在此持有 */
 let ctx: AppContext | null = null;
 
@@ -247,6 +280,15 @@ onLoad(async (query) => {
     } else {
       error.value = '缺少课程 id，无法定位课时';
     }
+    // 治理者身份按 #23 名册实时派生；联网失败一律按作者档（4 种），不阻塞编辑
+    try {
+      const o = { adapters: ctx.opts.adapters, repo, nodeBaseUrl: ctx.opts.nodeBaseUrl };
+      const myId = await myIdentityId(o);
+      const list = await roster(o);
+      isGovernor.value = myId !== '' && list.some((c) => c.id === myId);
+    } catch {
+      isGovernor.value = false;
+    }
   } catch (e) {
     error.value = (e as Error).message;
   }
@@ -260,6 +302,25 @@ function difficultyLabel(d: string): string {
 
 function toggleDifficulty(d: string) {
   form.value.difficulty = form.value.difficulty === d ? '' : d;
+}
+
+/** 多选图章：再点一次取消（表单里存原始选择集，序列化与去重由 core 负责） */
+function toggleBadge(w: string) {
+  const cur = form.value.badge;
+  const i = cur.indexOf(w);
+  if (i >= 0) cur.splice(i, 1);
+  else cur.push(w);
+}
+
+/** 单选标题色：再点同一个取消（空串 = 不产该行） */
+function toggleTitleColor(c: string) {
+  form.value.titleColor = form.value.titleColor === c ? '' : c;
+}
+
+/** 色块文案（只影响预览显示，不参与契约） */
+function titleColorLabel(c: string): string {
+  const map: Record<string, string> = { red: '红', orange: '橙', green: '绿', blue: '蓝', purple: '紫', gray: '灰' };
+  return map[c] ?? c;
 }
 
 /** 失败落本地日志（`workDir/edit-surface.log`）；取消不落，日志写失败静默不影响主流程。 */
@@ -439,6 +500,8 @@ async function submit() {
 .chips { display: flex; flex-wrap: wrap; }
 .chip { padding: 4px 14px; border: 1px solid #dddddd; border-radius: 14px; margin: 0 10px 6px 0; color: #666666; font-size: 13px; }
 .chip-on { border-color: #2b6cb0; color: #2b6cb0; }
+.swatch { background: #fafafa; }
+.swatch-on { border-color: #2b6cb0; border-width: 2px; }
 .card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 12px; }
 .chead { display: flex; justify-content: space-between; align-items: center; }
 .row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f5f5f5; }

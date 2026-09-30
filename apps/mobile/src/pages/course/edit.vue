@@ -49,6 +49,34 @@
     </view>
 
     <view class="field">
+      <text class="label">图章</text>
+      <view class="chips">
+        <text
+          v-for="w in badgeChoices"
+          :key="w"
+          class="chip"
+          :class="form.badge.includes(w) ? 'chip-on' : ''"
+          @click="toggleBadge(w)"
+        >{{ w }}</text>
+      </view>
+      <text class="hint">作者可选 4 种、治理者 7 种；可多选，保存时自动去重并按规范序落成一行</text>
+    </view>
+
+    <view class="field">
+      <text class="label">标题色</text>
+      <view class="chips">
+        <text
+          v-for="c in TITLE_COLORS"
+          :key="c"
+          class="chip swatch"
+          :class="['c-' + c, form.titleColor === c ? 'swatch-on' : '']"
+          @click="toggleTitleColor(c)"
+        >{{ titleColorLabel(c) }}</text>
+      </view>
+      <text class="hint">只改标题字色；再点一次取消</text>
+    </view>
+
+    <view class="field">
       <text class="label">难度</text>
       <view class="chips">
         <text
@@ -119,9 +147,10 @@
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
 
-import { DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO } from '../../core/attrs';
+import { BADGE_WORDS, BADGE_WORDS_AUTHOR, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO, TITLE_COLORS } from '../../core/attrs';
 import { uploadBlob } from '../../core/blob';
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
+import { myIdentityId, roster } from '../../core/contribution';
 import { loadContainerForm, saveContainer, startNewCourse, type ChildRow, type ContainerForm } from '../../core/course-edit';
 import { splitCategories } from '../../core/course-tree';
 import { recordEditFailure } from '../../core/editlog';
@@ -157,6 +186,10 @@ const categoryCandidates = computed(() => {
   return categoryAll.value.filter((c) => c.slug.toLowerCase().includes(kw) || c.label.toLowerCase().includes(kw));
 });
 
+/** 治理者身份（#23 名册内）：决定图章候选是 4 种还是 7 种 */
+const isGovernor = ref(false);
+const badgeChoices = computed(() => (isGovernor.value ? BADGE_WORDS : BADGE_WORDS_AUTHOR));
+
 /** 能力标志：启动时只有 cryptoOk / pickOk 有值，其余 unknown（unknown 不降级，照常尝试） */
 const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
 const pickBlocked = computed(() => pickBlockedReason(caps.value));
@@ -183,6 +216,15 @@ onLoad(async (query) => {
       const slug = c.itemId.replace(/^category\//, '');
       return { slug, label: c.title || slug };
     });
+    // 治理者身份按 #23 名册实时派生；联网失败一律按作者档（4 种），不阻塞编辑
+    try {
+      const o = { adapters: ctx.opts.adapters, repo: ctx.repo, nodeBaseUrl: ctx.opts.nodeBaseUrl };
+      const myId = await myIdentityId(o);
+      const list = await roster(o);
+      isGovernor.value = myId !== '' && list.some((c) => c.id === myId);
+    } catch {
+      isGovernor.value = false;
+    }
   } catch (e) {
     error.value = (e as Error).message;
   }
@@ -197,6 +239,25 @@ function difficultyLabel(d: string): string {
 /** 再点一次取消选择（空串 = 不产该属性行） */
 function toggleDifficulty(d: string) {
   form.value.difficulty = form.value.difficulty === d ? '' : d;
+}
+
+/** 多选图章：再点一次取消（表单里存原始选择集，序列化与去重由 core 负责） */
+function toggleBadge(w: string) {
+  const cur = form.value.badge;
+  const i = cur.indexOf(w);
+  if (i >= 0) cur.splice(i, 1);
+  else cur.push(w);
+}
+
+/** 单选标题色：再点同一个取消（空串 = 不产该行） */
+function toggleTitleColor(c: string) {
+  form.value.titleColor = form.value.titleColor === c ? '' : c;
+}
+
+/** 色块文案（只影响预览显示，不参与契约） */
+function titleColorLabel(c: string): string {
+  const map: Record<string, string> = { red: '红', orange: '橙', green: '绿', blue: '蓝', purple: '紫', gray: '灰' };
+  return map[c] ?? c;
 }
 
 /** 打开本机分类候选面板（候选已在 onLoad 一次性读出，纯本机过滤） */
@@ -389,6 +450,16 @@ async function submit() {
 .chips { display: flex; flex-wrap: wrap; }
 .chip { padding: 4px 14px; border: 1px solid #dddddd; border-radius: 14px; margin: 0 10px 6px 0; color: #666666; font-size: 13px; }
 .chip-on { border-color: #2b6cb0; color: #2b6cb0; }
+.swatch { background: #fafafa; }
+.swatch-on { border-color: #2b6cb0; border-width: 2px; }
+
+/* 标题色 6 字色（复用例 #44 §6；标题色不含高亮底，故无 c-mark） */
+.c-red { color: #C53030; }
+.c-orange { color: #B7791F; }
+.c-green { color: #2F855A; }
+.c-blue { color: #2B6CB0; }
+.c-purple { color: #6B46C1; }
+.c-gray { color: #718096; }
 .card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 12px; }
 .row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f5f5f5; }
 .row-main { flex: 1; }
