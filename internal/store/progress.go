@@ -49,7 +49,7 @@ type CheckinDayRow struct {
 //
 // checkin_days 恒为 insert-or-ignore：该身份该日已有行则保留首次（§3.5 的「只增集合」）。
 // 注意**即使 progress 这行输了 LWW，checkin_days 照样要写**——打卡是**事件级**语义
-//（§3.5：某日已打卡 ⇔ 存在至少一条 day == 该日 的事件），不是寄存器级。
+// （§3.5：某日已打卡 ⇔ 存在至少一条 day == 该日 的事件），不是寄存器级。
 func (s *Store) PutProgressProjection(e ProgressEvent) error {
 	tx, err := s.db.Begin()
 	if err != nil {

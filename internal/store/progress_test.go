@@ -144,3 +144,70 @@ func TestCheckinDaysKeepsFirstEvent(t *testing.T) {
 		t.Fatalf("两个 item_id 应各一行: %+v", rows)
 	}
 }
+
+// §3.5 核心：打卡日是**独立**的只增集合，不能从折叠后的 progress 表派生。
+// 一条输掉 LWW（created_at 更早）的事件不得改写 progress 寄存器，
+// 但它携带的 day 仍必须被记进 checkin_days——否则该条目历史上的打卡日会被冲掉。
+func TestCheckinDaysRecordsLoserEventDay(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	const (
+		tLate  = int64(200)
+		tEarly = int64(100)
+	)
+	// 先投 LWW 胜者：更晚的 created_at。
+	if err := st.PutProgressProjection(ProgressEvent{
+		ID: "actor1", ItemID: "article/a", Position: 100, Done: false,
+		Day: "2026-10-01", CreatedAt: tLate, EventID: "ev9",
+	}); err != nil {
+		t.Fatalf("胜者: %v", err)
+	}
+	// 再投同一 (id,item_id) 但更早、day 不同的事件：它输掉 LWW，day 仍须被记下。
+	if err := st.PutProgressProjection(ProgressEvent{
+		ID: "actor1", ItemID: "article/a", Position: 999, Done: true,
+		Day: "2026-09-30", CreatedAt: tEarly, EventID: "ev1",
+	}); err != nil {
+		t.Fatalf("败者: %v", err)
+	}
+
+	// ① progress 仍是第一条（LWW 胜者未变）。
+	rows, err := st.ListProgressByID("actor1")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("progress 行数 err=%v rows=%+v", err, rows)
+	}
+	if rows[0].Position != 100 || rows[0].Day != "2026-10-01" || rows[0].UpdatedAt != tLate || rows[0].EventID != "ev9" {
+		t.Fatalf("LWW 胜者被败者覆盖: %+v", rows[0])
+	}
+
+	// ② checkin_days 同时存在 D1(2026-10-01) 与 D2(2026-09-30)——D2 虽输 LWW 仍被记下。
+	days, err := st.CheckinDaysOf("actor1")
+	if err != nil || len(days) != 2 {
+		t.Fatalf("应记下两个打卡日 err=%v days=%+v", err, days)
+	}
+	if days[0].Day != "2026-09-30" || days[0].FirstEventID != "ev1" {
+		t.Fatalf("D2 应被记下: %+v", days[0])
+	}
+	if days[1].Day != "2026-10-01" || days[1].FirstEventID != "ev9" {
+		t.Fatalf("D1 应被记下: %+v", days[1])
+	}
+
+	// ③ 重放败者事件幂等：寄存器不变、D2 的 first_event_id 保持不变。
+	if err := st.PutProgressProjection(ProgressEvent{
+		ID: "actor1", ItemID: "article/a", Position: 999, Done: true,
+		Day: "2026-09-30", CreatedAt: tEarly, EventID: "ev1",
+	}); err != nil {
+		t.Fatalf("重放: %v", err)
+	}
+	rows, _ = st.ListProgressByID("actor1")
+	if len(rows) != 1 || rows[0].EventID != "ev9" {
+		t.Fatalf("重放不应改变寄存器: %+v", rows)
+	}
+	days, _ = st.CheckinDaysOf("actor1")
+	if len(days) != 2 || days[0].Day != "2026-09-30" || days[0].FirstEventID != "ev1" {
+		t.Fatalf("重放不应改变打卡日: %+v", days)
+	}
+}
