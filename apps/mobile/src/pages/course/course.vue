@@ -265,7 +265,7 @@ function categoryHint(itemId: string): string {
 }
 
 function toggle(itemId: string) {
-  collapsed.value = { ...collapsed.value, [itemId]: !collapsed[itemId] };
+  collapsed.value = { ...collapsed.value, [itemId]: !collapsed.value[itemId] };
 }
 
 function openStandalone(it: ItemRow) {
