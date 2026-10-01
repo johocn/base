@@ -14,6 +14,10 @@ const SERVER_ERROR_TEXT: Record<string, string> = {
   item_type_unsupported: '载体只能是文章或题库',
   item_type_mismatch: '载体与 id 前缀不一致',
   item_id_taken: '该条目已被他人创建',
+  // 本册 §4：此前唯一落回裸兜底串的 400 码——补上等于把「无线索 400」变成可读原因。
+  item_segments_invalid: '课程 / 课时的行集不合法：请检查属性与子项清单',
+  // 本册 §4：auth_* 前缀原本一律回落「签名校验失败」，体超限需单独可读。
+  auth_body_too_large: '提交内容超过 64KB',
   blob_too_large: '上传块超过 8 MiB',
   bad_multipart: '上传格式错误（需 multipart/form-data 且含字段 file）',
   author_id_forbidden: '请求体不得携带身份字段',
