@@ -570,4 +570,126 @@
 
 ## 执行实况（执行后回填）
 
-> 执行后按本仓库惯例回填完整度与执行期更正（改动文件清单、`git diff --stat`、门禁跑分（文件数 / 用例数）、`GET /v1/directory` 抽查、seed 生效抽查、交叉编译与两单元重启探活结果、四步发布与线上核对结果、真机验收状态）。
+**状态：Task 1–9 全部执行完毕，`0.19.0`/`24` 已发布上线（2026-10-01）。** 基线 `9349f30`（#57 回填），交付 HEAD `7dadd05`。
+
+### 1. 提交序列（Task 1 → 9）
+
+| # | commit | 说明 |
+| --- | --- | --- |
+| Task 1 | `5b148c4` | `feat(store): 新增 directory_terms 表与 term_key 规范化（#58 §2.1/§2.2）` |
+| Task 2 | `86d3e0f` | `feat(store): 治理接入 directory_add 动作与门槛分档（#58 §3.1/§3.2）` |
+| Task 3 | `eddf46e` | `feat(httpapi): 新增 GET /v1/directory 公开读（#58 §4.1）` |
+| Task 4 | `a062e56` | `feat(govern): POST /v1/proposal 支持 directory_add 与事件管线扩键（#58 §3.1/§3.3）` |
+| Task 4 补 | `4a8b443` | `fix(httpapi): proposal_action_unsupported 文案补 directory_add（#58）` |
+| Task 5 | `6c3b213` | `feat(web): 门户词条「待票选」角标（#58 §5）` |
+| 清理 | `508e343` | `refactor(web): 去掉 proposalPageRow 未使用的 approved 参数（#58）` |
+| Task 6 | `c906612` | `feat(store): 存量词条幂等 seed 为 approved（#58 §2.3/AC9）` |
+| Task 7 | `16e13ba` | `feat(mobile): 新增 core/directory.ts 三态与本地缓存（#58 §4.2/§5.1）` |
+| Task 8 | `396ad60` | `feat(mobile): 目录三态展示与词条提交入口（#58 §5.2/AC1/AC2/AC6）` |
+| Task 9 | `7dadd05` | `chore(mobile): 版本落 0.19.0 / 24（#58 §7）` |
+
+Task 之间由主控 `git show <commit>` 复核实际 diff 后放行；**全程未 `git add -A`**，工作区遗留（` M .gitignore`、未跟踪 `based-linux-amd64`）未触碰、未提交。
+
+### 2. 改动文件清单与 `git diff --stat`（`9349f30..7dadd05`）
+
+```
+ apps/mobile/src/core/course-edit.ts         |   2 +-
+ apps/mobile/src/core/directory.test.ts      | 137 +++++++++    (新)
+ apps/mobile/src/core/directory.ts           | 229 +++++++++++++  (新)
+ apps/mobile/src/core/govern.test.ts         |  40 ++-
+ apps/mobile/src/core/govern.ts              |  46 ++-
+ apps/mobile/src/core/sync.ts                |  17 +-
+ apps/mobile/src/manifest.json               |   4 +-
+ apps/mobile/src/pages.json                  |   4 +
+ apps/mobile/src/pages/article/article.vue   |  45 ++-
+ apps/mobile/src/pages/course/course.vue     |  46 ++-
+ apps/mobile/src/pages/course/detail.vue     |  68 ++++-
+ apps/mobile/src/pages/course/edit.vue       |  25 +-
+ apps/mobile/src/pages/directory/apply.vue   |  77 +++++     (新)
+ apps/mobile/src/pages/lesson/detail.vue     |  64 +++-
+ internal/httpapi/authmw.go                  |   3 +-
+ internal/httpapi/directory.go               |  85 +++++     (新)
+ internal/httpapi/directory_proposal_test.go | 158 +++++++++  (新)
+ internal/httpapi/directory_test.go          | 136 +++++++++  (新)
+ internal/httpapi/govern.go                  |  85 +++++-
+ internal/httpapi/govern_event.go            |  45 ++-
+ internal/httpapi/govern_event_test.go       |  11 +-
+ internal/httpapi/server.go                  |   3 +
+ internal/httpapi/web.go                     |  43 ++-
+ internal/httpapi/web_directory_test.go      | 104 +++++++    (新)
+ internal/peersync/eventsync.go              |  60 ++--
+ internal/peersync/eventsync_test.go         |   5 +-
+ internal/store/directory.go                 | 447 ++++++++++++++++++ (新)
+ internal/store/directory_govern_test.go     | 239 +++++++++++  (新)
+ internal/store/directory_seed_test.go       | 125 +++++++++  (新)
+ internal/store/directory_test.go            | 184 +++++++++  (新)
+ internal/store/govern.go                    | 104 +++++-
+ internal/store/govern_projection.go         |   5 +-
+ internal/store/schema.go                    |  15 +
+ internal/store/store.go                     |   7 +
+ web/templates/article.html                  |   2 +-
+ web/templates/governance.html               |   3 +-
+ 36 files changed, 2578 insertions(+), 95 deletions(-)
+```
+
+零新表以外的表结构变更：仅 `directory_terms`（新表）+ `meta` 两键（`directory_version` / `directory_seeded`）；**未 bump `schema_version`、未加配置项、未新增 `source`·`type` 枚举值**。
+
+### 3. 门禁跑分
+
+- **Go**：`go build ./...` / `go vet ./...` / `go test ./... -count=1` **全绿**（9 个有测试的包：`cmd/based`、`internal/{httpapi,importer,markdown,packexport,peersync,protocol,store}`、`tools/migrate`）。
+- **手机端**：`npx vitest run` → **34 文件 / 402 用例全绿**（基线 33 / 393，本册 +1 文件 / +9 用例）；`npx tsc --noEmit` 干净；`npm run build:h5` → `DONE Build complete.`。
+- **发布前硬检查**：`Get-ChildItem apps/mobile/src/pages -Recurse -Filter *.vue | Select-String -Pattern '="[^"]*\.value|\{\{[^}]*\.value'` → **无输出**。
+
+### 4. `GET /v1/directory` 抽查
+
+`curl -s http://127.0.0.1/v1/directory?version=0` → `200`
+
+```json
+{"version":1,"approved":[{"kind":"instructor","term_key":"轮空","display_name":"轮空"}],"pending":[]}
+```
+
+`?version=1` → `200` `{"unchanged":true,"version":1}`（**未变短路生效**）；不带 `version` → 与 `version=0` 同体（匿名可读，无鉴权）。
+
+### 5. seed 生效抽查
+
+| 节点 | items | `attr.*` 段 | `directory_terms` | `directory_seeded` | `directory_version` |
+| --- | --- | --- | --- | --- | --- |
+| 源节点 `/opt/base/data/base.db` | 3 | 0 | 0 | 无（未置位） | 无 |
+| cache 节点 `/opt/base-cache/data/base.db` | 6 | 1 | 1 | `'1'` | `'1'` |
+
+cache 节点词条 `('instructor','轮空','轮空','approved')`。源节点无存量 ⇒ 不 bump 版本、不落短路键（与 Task 6 收窄口径一致，`directory_seeded` 仅在确有存量词条时写入）。
+
+### 6. 交叉编译与两单元重启探活
+
+`GOOS=linux GOARCH=amd64 go build -o based-linux-amd64 ./cmd/based`（**21908933 字节**）→ scp 至 `/opt/base/based.new` → `cp -a /opt/base/based /opt/base/based.bak-pre-0.19.0 && mv /opt/base/based.new /opt/base/based && chmod 0755` → `systemctl restart base && systemctl restart base-cache` → 两单元均 `active`。
+
+只读探活：`/v1/release` → 200、`/v1/proposal` → 200、`/v1/comment` → 200、`POST /v1/blob` → 400（在线无回归）、`/v1/blobzzz` → 404（反向对照）。
+
+### 7. 四步发布与线上核对
+
+① HBuilderX `cli pack` 云打包成功（14:24:17 提交 → 14:25:49 成功）。
+② APK 落地 `apps/mobile/dist/release/apk/base-0.19.0.apk` = **27446473 字节 / sha256 `cf34a14d270f97eaf83368d74ed57a1d5aa8647fe3fb20a2ed3f4e9c2e4d39ed`**，包内 `version.name=0.19.0 / version.code=24`，证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.6.0–0.18.0 一致 ⇒ 可覆盖安装）；上传 `/opt/appdl/base-0.19.0.apk`，**远端 sha256 逐字一致**。
+③ `/opt/appdl/index.html` 整页重写改指：`base-0.19.0.apk` 命中 1、`版本 0.19.0` 命中 1、`0.18` 残留 0（旧页备份 `index.html.bak-0.18.0`）。
+④ `based release -version-name 0.19.0 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.19.0.apk -apk-file /opt/appdl/base-0.19.0.apk -notes '...' -out /opt/base-cache/data/release.json` 成功（`apk_size=27446473`、`apk_sha256=cf34a14d…`、`public_key 48c33db9…`）；`/opt/base/data/release.json` 不存在（无游离副本）。
+
+**线上核对（公网 :80）**：
+
+| 检查 | 结果 |
+| --- | --- |
+| `GET /v1/release` | `version_name=0.19.0`、`min_version_name=0.8.0`、`apk_size=27446473`、`apk_sha256=cf34a14d…`（与本地逐字一致）、`apk_url=…/dl/base-0.19.0.apk`、`issuer=base-node-1`、`signature` 已签发 |
+| `HEAD /dl/base-0.19.0.apk` | `200` / `Content-Type: application/octet-stream` / `Content-Length: 27446473` |
+| `GET /v1/directory?version=0` | `200` + approved 数组（匿名可读） |
+| `GET /v1/directory?version=1` | `200` `{"unchanged":true,"version":1}` |
+| 远端 APK 校验 | `sha256sum /opt/appdl/base-0.19.0.apk` 与本地一致；`stat -c %s` = 27446473 |
+| `systemctl is-active base base-cache` | `active` / `active` |
+
+### 8. 真机验收状态
+
+按计划末尾「真机验收（登记不阻塞）」4 条，**待人工**：端 A 提交中文分类词条 → 端 B 投票 → 两端角标一致；离线冷启动三态；升级后存量词条不出现「待票选」；AC 1/2/3/6/7/9 对应真机项。
+
+### 9. 执行期更正（4 条）
+
+1. **Task 6 收窄 `directory_seeded` 写入时机**：计划原文为无条件落键，实改为**仅当确有存量词条（`len(seen)>0`）时**才写。理由：`seedDirectoryFromExisting` 每次 `Open` 都跑，若无条件落键，首次空库 `Open` 即置位，之后补入的存量数据永不被 seed，AC 9 测试无法通过（源节点实测即此形态）。已在 `internal/store/directory.go` 注释写明。
+2. **Task 7 收窄 `DirectorySnapshot.approved` 类型**：计划示意代码用 `Set<string>`，实改为 `Map<string,string>`——`displayOf` 契约要求 approved 侧也返回 `display_name`，`Set` 存不下。
+3. **Task 8 补 `pages.json` 路由注册**（计划漏登，必需）：新增 `{"path":"pages/directory/apply","style":{"navigationBarTitleText":"补词条"}}`，否则新页不可达。
+4. **Task 8 落点收窄两处**：① `course.vue` **不加标签 chips**——经核实该页确无标签展示（计划把 `:32-34` 误标为标签落点，实为图章）；② 标签 chip 保持「名称 · 章 · 节」三元组形态（#37 契约），仅把**名称段**换成 `displayOf('tag', …)`。另核实 §5.3 原文为「**单条目待票选词最多显示 3 个**，超出折叠为「+n」」——**只数待票选**，approved 不受限。
