@@ -16,6 +16,7 @@
           <text v-else-if="courseTags.length > 0" class="tag-note" @click="proposeTag(courseTags[0]!.tagId)">已有标签，改动需提案</text>
         </view>
         <text v-if="canEdit" class="act" @click="openEdit">编辑本课程</text>
+        <text v-if="canEdit" class="act danger" @click="removeCourse">{{ busy ? '删除中…' : '删除本课程' }}</text>
 
         <block v-if="attachments.length > 0">
           <text class="group">附件（{{ attachments.length }}）</text>
@@ -51,6 +52,7 @@ import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySn
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
 import { containerFormFromLedger } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
+import { createProposal, GovernError, listProposals } from '../../core/govern';
 import { bootstrap } from '../../platform';
 
 interface LessonVM {
@@ -77,6 +79,7 @@ const tagTitles = ref<Record<string, string>>({});
 const untagged = ref<Set<string>>(new Set());
 const governor = ref(false);
 const loaded = ref(false);
+const busy = ref(false);
 const canEdit = ref(false);
 const error = ref('');
 
@@ -262,6 +265,32 @@ function openEdit() {
   uni.navigateTo({ url: `/pages/course/edit?courseId=${encodeURIComponent(courseId.value)}` });
 }
 
+/**
+ * 创建者删除本课程（本册 §5）：复用既有 `remove` 提案通道。
+ * 节点侧若判为「无课时 / 无他人学习」，门槛降 0、立即 effective；否则回落到 3 票。
+ */
+async function removeCourse() {
+  if (busy.value) return;
+  busy.value = true;
+  error.value = '';
+  try {
+    const { opts, repo } = await bootstrap();
+    const { proposalId } = await createProposal(
+      { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl },
+      { action: 'remove', itemId: courseId.value, reason: '创建者删除' },
+    );
+    const fresh = (await listProposals({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl })).find(
+      (p) => p.proposalId === proposalId,
+    );
+    uni.showToast({ title: fresh?.status === 'effective' ? '已删除' : '已提交，需 3 票', icon: 'none' });
+    setTimeout(() => uni.navigateBack(), 600);
+  } catch (e) {
+    error.value = e instanceof GovernError ? e.message : (e as Error).message;
+  } finally {
+    busy.value = false;
+  }
+}
+
 function openTag(tagId: string) {
   uni.navigateTo({ url: `/pages/tag/detail?tagId=${encodeURIComponent(tagId)}` });
 }
@@ -308,6 +337,7 @@ async function openAttachment(a: AttachmentVM) {
 .error { color: #c53030; font-size: 13px; }
 .group { display: block; margin: 18px 0 6px; color: #888888; font-size: 13px; }
 .act { display: block; color: #2b6cb0; font-size: 14px; padding: 4px 0 8px; }
+.act.danger { color: #c53030; }
 .tags { display: flex; flex-wrap: wrap; align-items: center; margin: 4px 0 6px; }
 .tag { padding: 2px 8px; margin: 0 8px 6px 0; background: #ebf8ff; color: #2b6cb0; border-radius: 10px; font-size: 12px; }
 .tag-pending { padding: 2px 8px; margin: 0 8px 6px 0; background: #fffaf0; color: #b7791f; border-radius: 10px; font-size: 12px; }
