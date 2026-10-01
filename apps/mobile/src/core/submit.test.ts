@@ -140,7 +140,7 @@ describe('台账状态机与补发', () => {
     http.postRoutes.set(`${BASE}/v1/submit`, { status: 500, body: utf8('boom') });
     const srv = await enqueueOrSend(o, articleDraft({ itemId: 'article/srv1' }));
     expect(srv.ledgerState).toBe('pending');
-    expect(srv.message).toBe('提交失败（HTTP 500）');
+    expect(srv.message).toBe('提交失败（HTTP 500）：boom');
   });
 
   describe('容器载体（course / lesson）', () => {
@@ -270,7 +270,7 @@ describe('台账状态机与补发', () => {
     http.postRoutes.set(`${BASE}/v1/submit`, { status: 500, body: utf8('boom') });
 
     const res = await flushSubmissions(o);
-    expect(res).toEqual({ sent: 0, failed: 0, remaining: 3, error: '提交失败（HTTP 500）' });
+    expect(res).toEqual({ sent: 0, failed: 0, remaining: 3, error: '提交失败（HTTP 500）：boom' });
     // 只试了第一条（串行 + 暂时失败即中止）
     expect(http.posted.filter((p) => p.url.endsWith('/v1/submit'))).toHaveLength(1);
     expect(await repo.listSubmissions('pending')).toHaveLength(3);
@@ -460,15 +460,40 @@ describe('retrySubmission：失败行重投（册子 #61 §4.3）', () => {
     expect(http.posted.some((p) => p.url === `${BASE}/v1/submit`)).toBe(false);
   });
 
-  it('码原文进文案：无码走裸兜底、有码追加（<code>）（册子 #63 §4.2.1）', async () => {
+  it('码原文进文案：无码非空体带原文片段、有码追加（<code>）（册子 #63 §4.2.1）', async () => {
     const a = env();
     a.http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8('{"error":"boom"}') });
     await a.repo.saveSubmission(containerRow({ state: 'failed', reason: '旧' }));
-    expect((await retrySubmission(a.o, 'course/c1')).message).toBe('提交失败（HTTP 400）');
+    // 无码 + 非空体：新口径追加响应体原文片段（册子 #65 §5.2），空体才走裸兜底。
+    expect((await retrySubmission(a.o, 'course/c1')).message).toBe('提交失败（HTTP 400）：{"error":"boom"}');
 
     const b = env();
     b.http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8('{"code":"item_title_invalid"}') });
     await b.repo.saveSubmission(containerRow({ state: 'failed', reason: '旧' }));
     expect((await retrySubmission(b.o, 'course/c1')).message).toBe('标题需 1–200 字且不含控制字符（item_title_invalid）');
+  });
+
+  it('无码 400：文案带响应体原文片段（折叠空白 + 截 120 字符）（册子 #65 §5.2）', async () => {
+    const a = env();
+    // 中间层 / 未解析请求：响应体没有 code 字段 ⇒ 旧口径只留一句无线索的兜底。
+    a.http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8('{"error":"bad_json"}') });
+    await a.repo.saveSubmission(containerRow({ state: 'failed', reason: '旧' }));
+    expect((await retrySubmission(a.o, 'course/c1')).message).toBe('提交失败（HTTP 400）：{"error":"bad_json"}');
+
+    const b = env();
+    const html = `<html>\n  <head></head>\n  <body>${'x'.repeat(200)}</body>\n</html>`;
+    b.http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8(html) });
+    await b.repo.saveSubmission(containerRow({ state: 'failed', reason: '旧' }));
+    const msg = (await retrySubmission(b.o, 'course/c1')).message;
+    expect(msg.startsWith('提交失败（HTTP 400）：<html> <head></head> <body>')).toBe(true);
+    // 前缀（含「）：」，共 14 个字符）+ 120 字符摘录 = 134
+    expect(msg).toHaveLength('提交失败（HTTP 400）：'.length + 120);
+    expect(msg.includes('\n')).toBe(false);
+
+    const c = env();
+    // 空体：摘录为空串 ⇒ 文案与现状逐字一致（不追加冒号）。
+    c.http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8('   ') });
+    await c.repo.saveSubmission(containerRow({ state: 'failed', reason: '旧' }));
+    expect((await retrySubmission(c.o, 'course/c1')).message).toBe('提交失败（HTTP 400）');
   });
 });

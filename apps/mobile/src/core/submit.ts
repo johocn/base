@@ -218,6 +218,15 @@ export function buildSubmitBody(draft: SubmitDraft, ident: Identity): Uint8Array
     : buildArticlePayload(draft.itemId, title, draft.bodyMd, sig);
 }
 
+/** 无码失败的原文摘录上限（册子 #65 §5.2）：够看出是节点的 `bad_json` 还是中间层回的 HTML。 */
+const NO_CODE_EXCERPT_MAX = 120;
+
+/** 折叠连续空白（含换行）为单个空格后截前 n 个字符；空串进 ⇒ 空串出。 */
+function excerptOf(raw: string, n: number): string {
+  const flat = raw.trim().replace(/\s+/g, ' ');
+  return flat.length <= n ? flat : flat.slice(0, n);
+}
+
 /** 节点错误码 → 用户可读错误；`code` 决定它是「暂时」还是「永久」（本册 §9.3）。 */
 function mapSubmitFailure(status: number, raw: string, itemId: string): SubmitError {
   const code = errorCodeOf(raw);
@@ -226,7 +235,10 @@ function mapSubmitFailure(status: number, raw: string, itemId: string): SubmitEr
   }
   // 码原文一并进文案（册子 #63 §4.2.1）：toast / 台账 reason / 编辑面日志一处改动全链路可见。
   const base = errorText(code, `提交失败（HTTP ${status}）`);
-  const message = code === '' ? base : `${base}（${code}）`;
+  // 无码时补响应体原文片段（册子 #65 §5.2）：这是「提交失败（HTTP 400）」唯一无线索的一种失败，
+  // 原文使下次复现自带证据（屏上红字 / 台账 reason / edit-surface.log 三处同时可见）。
+  const excerpt = code === '' ? excerptOf(raw, NO_CODE_EXCERPT_MAX) : '';
+  const message = code !== '' ? `${base}（${code}）` : excerpt === '' ? base : `${base}：${excerpt}`;
   // 4xx（除 429）= 永久失败；5xx = 节点侧问题，视为暂时（本计划口径填空 4）
   return new SubmitError(status >= 400 && status < 500 ? 'rejected' : 'server', message);
 }
