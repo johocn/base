@@ -976,4 +976,36 @@
 
 ## 执行实况
 
-（执行时逐 Task 回填：commit、门禁实测输出、发布证据。）
+**执行方式：** 子代理驱动（每 Task 一个 fresh `general-purpose` 子代理；Task 间两阶段审查 ＝ 查 diff + 跑门禁）。
+
+**逐 Task commit（均在 `apps/mobile` 侧，按序）：**
+
+| Task | commit | 说明 |
+| --- | --- | --- |
+| 1 | `b8455f5` | `toPlusUrl` 剥 `file://` scheme 归一化 + 读路径不建目录 |
+| 2 | `1c9b01f` | 落盘根候选链与实做探测 |
+| 3 | `c48d964` | 自检新增落盘根可用明细 |
+| 4 | `b5dc0b3` | 存量台账自愈，补齐缺失的本地条目行 |
+| 5 | `650e488` | 提交失败文案贯通节点 code 原文 |
+| 6 | `b24310a` | 提交失败落 `edit-surface.log`（新增 `submit` 阶段） |
+| 7 | `d74d27e` | 加一课前置检查父课程台账态 |
+
+**各 Task 门禁实测：**
+- Task 1–3（平台层）：`npx vitest run src/platform/uni.test.ts` **15/15** 全绿；`src/core/selfcheck.test.ts` **14/14** 全绿。
+- Task 4：`src/core/creator-migrate.test.ts` 由 5 例 → **9/9** 全绿；先红证据 `TypeError: runLedgerHealMigration is not a function`（`4 failed | 5 passed`）。
+- Task 5：`src/core/submit.test.ts` **25/25** 全绿；先红 `3 failed | 22 passed`（`item_id_taken` / `item_id_invalid` / 新例三条断言不带码）。
+- Task 6：`src/core/editlog.test.ts` **6/6** 全绿；`'submit'` 的类型红由 `npm run typecheck` 证实（`vitest` 走 esbuild 仅剥类型，不跑类型检查）。
+- Task 7：模板 `.value` 硬检查（`git grep -nE '="[^"]*\.value|\{\{[^}]*\.value' -- apps/mobile/src/pages`）**无输出**；`typecheck` 无新增。
+
+**Task 8 门禁全跑（2026-10-01）：**
+- `npx vitest run`（cwd `apps/mobile`）：**36 文件 / 451 用例全绿**。
+- `npm run typecheck`（cwd `apps/mobile`）：**仅 2 条册外既有错误、无新增** —— `src/pages/governance/governance.vue(58,7)` TS2741、`src/pages/submit/submit.vue(156,5)` TS2322（沿用 #62 登记惯例，按决策 12 不修、仅登记）。
+- `npm run build:h5`：`DONE  Build complete.`
+- `npm run build:app`：`DONE  Build complete.`
+- `git grep -nE '理目录|ensureDir' -- src/core src/platform`：仅 `platform/uni.ts`（定义）与 `platform/index.ts`（调用）；`core/*` 无目录 API。
+- `go test ./...`（仓库根）：全包 `ok`。
+- `git diff --stat -- internal/`：**无输出** —— 本册零节点改动，故不交叉编译、不部署节点二进制。
+
+**版本：** `apps/mobile/src/manifest.json` → `0.20.2` / `27`。
+
+**发布证据（四步 + 线上核对）：**（待回填）
