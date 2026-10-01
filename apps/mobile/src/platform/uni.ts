@@ -33,7 +33,7 @@ interface PlusSqlite {
 }
 
 /** plus.io 的目录/文件对象（HTML5+ 里两者是同一族 duck-typed 对象） */
-interface PlusEntry {
+export interface PlusEntry {
   isFile?: boolean;
   isDirectory?: boolean;
   getDirectory(
@@ -83,6 +83,10 @@ export interface PlusRuntime {
   sqlite: PlusSqlite;
   /** App 运行时信息（plus.runtime）：version 用于升级判定，openURL 用于打开下载链接 */
   runtime?: { version?: string; openURL?: (url: string) => void };
+  /** Android 侧运行时（plus.android）：取应用运行路径用；H5 / 老内核缺失（册子 #63 §3.2） */
+  android?: {
+    runtimeMainActivity(): { getFilesDir(): { getAbsolutePath(): string } };
+  };
 }
 
 interface UniGlobal {
@@ -295,17 +299,25 @@ export class PlusLocalDb implements LocalDb {
 
 const DOC = '_doc';
 
+/** 只留绝对路径：剥掉 `file://` 并补前导 `/`（`file:///x` 与 `file://x` 都要归一）。 */
+function stripFileScheme(p: string): string {
+  if (!p.startsWith('file://')) return p;
+  const rest = p.slice('file://'.length);
+  return rest.startsWith('/') ? rest : `/${rest}`;
+}
+
 /**
- * 路径 → plus.io 认的 URL。三种形态（本册 §3 附带修）：
- *  1. `file://` 前缀（真机相册 / 附件选择器给的绝对 URL）→ 统一过 `convertLocalFileSystemURL`；
- *  2. `_doc` 平台路径（其实例绝对路径由 `convertLocalFileSystemURL('_doc')` 给出）→ 折成 `_doc/…`；
- *  3. 其余绝对路径 → 补 `file://` 前缀，否则 plus.io 会把裸 `/storage/…` 当相对 URL 而读取失败。
+ * 路径 → plus.io 认的 URL（册子 #63 §3.1 / §3.3）。先归一成无 scheme 的绝对路径，再三分支：
+ *  1. 落在 `_doc` 平台根之下 ⇒ 折成 `_doc/…`（官方支持的相对形态，可安全下钻）；
+ *  2. 其余绝对路径 ⇒ 补 `file://`（裸 `/storage/…` 会被 plus.io 当相对 URL 读失败）；
+ *  3. 本就不是绝对路径（已是 `_doc/…` 形态）⇒ 原样返回。
  */
 export function toPlusUrl(io: PlusRuntime['io'], absPath: string): string {
-  if (absPath.startsWith('file://')) return io.convertLocalFileSystemURL(absPath);
-  const doc = io.convertLocalFileSystemURL(DOC);
-  if (absPath.startsWith(doc)) return DOC + absPath.slice(doc.length);
-  return absPath.startsWith('/') ? `file://${absPath}` : absPath;
+  const abs = stripFileScheme(absPath);
+  if (!abs.startsWith('/')) return abs;
+  const doc = stripFileScheme(io.convertLocalFileSystemURL(DOC));
+  if (abs.startsWith(doc)) return DOC + abs.slice(doc.length);
+  return `file://${abs}`;
 }
 
 function resolveUrl(io: PlusRuntime['io'], url: string): Promise<PlusEntry> {
@@ -319,27 +331,46 @@ function resolveUrl(io: PlusRuntime['io'], url: string): Promise<PlusEntry> {
 export class PlusFs implements FsAdapter {
   constructor(private readonly p: PlusRuntime) {}
 
-  /** 逐段下钻建目录，缺失的段一律 create —— 调用方不必先建父目录 */
-  private async dirEntry(absDir: string): Promise<PlusEntry> {
+  /**
+   * 目录入口。`_doc/…` 相对形态逐段下钻；`file://` 绝对路径先试整串解析（已存在即命中），
+   * 失败则向上找第一个可解析的祖先前缀，再从该祖先逐段 `create` 下钻——候选落盘根本身就是
+   * 待建目录，纯整串解析会让它恒失败（册子 #63 §3.2 / §3.3）。
+   */
+  private async dirEntry(absDir: string, create = true): Promise<PlusEntry> {
     const url = toPlusUrl(this.p.io, absDir);
-    // `'file:///a/b'.split('/')` 会切出 `'file:'` 段使下钻失败，故 file:// 整串解析。
-    if (url.startsWith('file://')) return resolveUrl(this.p.io, url);
+    if (url.startsWith('file://')) {
+      const segs = url.slice('file://'.length).split('/').filter(Boolean);
+      for (let i = segs.length; i >= 1; i--) {
+        let anchor: PlusEntry;
+        try {
+          anchor = await resolveUrl(this.p.io, `file:///${segs.slice(0, i).join('/')}`);
+        } catch {
+          continue; // 前缀不存在，继续向上退
+        }
+        let entry = anchor;
+        for (const name of segs.slice(i)) entry = await this.childDir(entry, name, create, absDir);
+        return entry;
+      }
+      throw new Error(`${create ? '建目录' : '打开目录'}失败 ${absDir}: 无可解析的祖先目录`);
+    }
     const parts = url.split('/').filter(Boolean);
     let entry = await resolveUrl(this.p.io, parts[0] as string);
-    for (const name of parts.slice(1)) {
-      const parent = entry;
-      entry = await new Promise<PlusEntry>((resolve, reject) => {
-        parent.getDirectory(name, { create: true, exclusive: false }, resolve, (e) =>
-          reject(new Error(`建目录失败 ${absDir}/${name}: ${JSON.stringify(e)}`)),
-        );
-      });
-    }
+    for (const name of parts.slice(1)) entry = await this.childDir(entry, name, create, absDir);
     return entry;
+  }
+
+  /** `getDirectory` 的 Promise 包装；`create === false` 只打开、不建目录（册子 #63 §3.3）。 */
+  private childDir(parent: PlusEntry, name: string, create: boolean, absDir: string): Promise<PlusEntry> {
+    return new Promise<PlusEntry>((resolve, reject) => {
+      parent.getDirectory(name, { create, exclusive: false }, resolve, (e) =>
+        reject(new Error(`${create ? '建目录' : '打开目录'}失败 ${absDir}/${name}: ${JSON.stringify(e)}`)),
+      );
+    });
   }
 
   private async fileEntry(absPath: string, create: boolean): Promise<PlusEntry> {
     const cut = absPath.lastIndexOf('/');
-    const dir = await this.dirEntry(absPath.slice(0, cut));
+    const dir = await this.dirEntry(absPath.slice(0, cut), create);
     const name = absPath.slice(cut + 1);
     return new Promise<PlusEntry>((resolve, reject) => {
       dir.getFile(name, { create, exclusive: false }, resolve, (e) =>
