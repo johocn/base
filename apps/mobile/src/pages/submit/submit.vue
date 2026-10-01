@@ -39,15 +39,16 @@
           @click="applyTool(b.action)"
         >{{ b.label }}<text class="tool-note">{{ b.hint }}</text></view>
       </view>
-      <textarea
-        ref="bodyRef"
-        v-model="bodyMd"
-        class="area"
-        placeholder="正文内容"
-        :selection-start="bodySelStart"
-        :selection-end="bodySelEnd"
-        :focus="bodyFocus"
-      />
+      <view :prop="caretCmd" :change:prop="caretBridge.setCaret">
+        <textarea
+          id="body-caret-anchor"
+          ref="bodyRef"
+          v-model="bodyMd"
+          class="area"
+          placeholder="正文内容"
+          :focus="bodyFocus"
+        />
+      </view>
       <text class="hint">正文以 Markdown 源文本保存，与课时同口径；支持 [文字]{.c-red} 变色</text>
       <text class="preview-label">预览</text>
       <rich-text :nodes="previewHtml" class="preview" />
@@ -83,6 +84,7 @@ import { computed, nextTick, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
 import { renderMarkdown } from '../../core/markdown';
+import { resolveCaret } from '../../core/editor-caret';
 import {
   COLOR_BUTTONS,
   INLINE_BUTTONS,
@@ -105,34 +107,54 @@ const notice = ref('');
 
 /** 正文编辑：工具栏产出源文本标记；预览是只读派生，不落库（保存口径零改动） */
 const bodyRef = ref<{ $el?: Element } | null>(null);
-const bodySelStart = ref(-1);
-const bodySelEnd = ref(-1);
 const bodyFocus = ref(false);
+/** renderjs 台账：App 视图层上报的真实光标；H5 不用（走原生 DOM 选区） */
+const caretLedger = ref<{ start: number; end: number } | null>(null);
+/** 逻辑层 → 视图层的写光标指令；每次换新对象以触发 `:change:prop` */
+const caretCmd = ref<{ start: number; end: number; text: string } | null>(null);
+/**
+ * renderjs 桥在 App 视图层执行，不进入逻辑层组件实例；这里给模板一个同形空实现占位：
+ * H5 无 renderjs、该占位会被真调用（no-op），App 上 uni 模板编译器按模块名解析、此值不参与运行。
+ */
+const caretBridge = {
+  setCaret: (_value: { start: number; end: number; text: string }): void => undefined,
+};
 const previewHtml = computed(() => renderMarkdown(bodyMd.value));
 
-/** H5：组件根节点下即原生 textarea，用 ref 拿真实选区；其它端落 props 兜底 */
+/** H5：组件根节点下即原生 textarea，用 ref 拿真实选区；其它端无 DOM，恒返回 null */
 function bodyTextarea(): HTMLTextAreaElement | null {
   const root = bodyRef.value?.$el;
   if (!root || typeof root.querySelector !== 'function') return null;
   return root.querySelector('textarea') as HTMLTextAreaElement | null;
 }
 
+/** renderjs 上报入口（App）：真实光标存台账 */
+function onCaret(c: { start: number; end: number }) {
+  caretLedger.value = { start: c.start, end: c.end };
+}
+defineExpose({ onCaret });
+
 /** 工具栏动作：把变换结果写回源文本，并把光标/选区落到新位置。 */
 function applyTool(action: ToolbarAction) {
-  const field = bodyTextarea();
   const src = bodyMd.value;
-  const start = field ? field.selectionStart : bodySelStart.value >= 0 ? bodySelStart.value : src.length;
-  const end = field ? field.selectionEnd : bodySelEnd.value >= 0 ? bodySelEnd.value : src.length;
-  const r = applyToolbar(src, start, end, action);
+  const field = bodyTextarea();
+  const live = field ? { start: field.selectionStart, end: field.selectionEnd } : null;
+  const pick = resolveCaret(live, caretLedger.value, src.length);
+  const r = applyToolbar(src, pick.caret.start, pick.caret.end, action);
   bodyMd.value = r.text;
-  bodySelStart.value = r.start;
-  bodySelEnd.value = r.end;
+  // 台账就地前移：setCaret 之后真机上的上报是异步的，不能等它
+  caretLedger.value = { start: r.start, end: r.end };
+  // 视图层写回（App 走 renderjs；H5 由下面的原生直写生效）
+  caretCmd.value = { start: r.start, end: r.end, text: r.text };
+  if (pick.source === 'fallback') {
+    uni.showToast({ title: '未取到光标，已插入到正文末尾', icon: 'none' });
+  }
   bodyFocus.value = false;
   nextTick(() => {
     bodyFocus.value = true;
     const el = bodyTextarea();
     if (el) {
-      // 直接落到原生节点：绕开组件 model→DOM 的 100ms 防抖，避免光标被重置到末尾
+      // H5 直写原生节点：绕开组件 model→DOM 的 100ms 防抖，避免光标被重置到末尾
       el.value = r.text;
       el.focus();
       el.setSelectionRange(r.start, r.end);
@@ -225,6 +247,9 @@ async function submit() {
   }
 }
 </script>
+
+<!-- renderjs 桥：App 视图层声明 `caretBridge`（uni 编译器改写为 <renderjs name=…>，vue-tsc 不参与运行） -->
+<script module="caretBridge" lang="renderjs" src="src/core/caret-bridge.renderjs.js"></script>
 
 <style>
 .wrap { padding: 16px; }
