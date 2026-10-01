@@ -7,6 +7,7 @@ import {
   ATTR_DURATION,
   ATTR_INSTRUCTOR,
   DIGEST_KIND,
+  attrSeqsCanonical,
 } from './attrs';
 import type { ContainerForm } from './course-edit';
 import { loadContainerForm } from './course-edit';
@@ -14,6 +15,7 @@ import { MemoryRepo } from './fakes';
 import {
   buildMyCreatedView,
   containerFormFromLedger,
+  containerSegmentsFromLedger,
   ledgerSegmentsOf,
   statusLabelOf,
   type MyCreatedType,
@@ -45,10 +47,10 @@ function seg(itemId: string, seq: number, kind: string, text: string): SegmentRo
 }
 
 describe('statusLabelOf：状态 → 中文标签', () => {
-  it('pending / failed / sent 三条映射', () => {
+  it('pending / failed / sent 三条映射（sent 改为「已提交 · 待节点收录」）', () => {
     expect(statusLabelOf('pending')).toBe('待补发');
     expect(statusLabelOf('failed')).toBe('失败');
-    expect(statusLabelOf('sent')).toBe('已同步');
+    expect(statusLabelOf('sent')).toBe('已提交 · 待节点收录');
   });
 });
 
@@ -58,10 +60,10 @@ describe('buildMyCreatedView：去重与四象限', () => {
     expect(buildMyCreatedView(rows, new Set(['article/a1']))).toEqual([]);
   });
 
-  it('sent 且不含 ⇒ 列出且 statusLabel 为「已同步」', () => {
+  it('sent 且不含 ⇒ 列出且 statusLabel 为「已提交 · 待节点收录」', () => {
     const rows = [row({ itemId: 'article/a1', state: 'sent', title: 'A' })];
     expect(buildMyCreatedView(rows, new Set())).toEqual([
-      { itemId: 'article/a1', type: 'article', title: 'A', state: 'sent', reason: '', statusLabel: '已同步' },
+      { itemId: 'article/a1', type: 'article', title: 'A', state: 'sent', reason: '', localOnly: false, statusLabel: '已提交 · 待节点收录' },
     ]);
   });
 
@@ -78,7 +80,7 @@ describe('buildMyCreatedView：去重与四象限', () => {
     const rows = [row({ itemId: 'article/a1', state: 'failed', reason: '网络不可达' })];
     for (const pack of [new Set(['article/a1']), new Set<string>()]) {
       expect(buildMyCreatedView(rows, pack)).toEqual([
-        { itemId: 'article/a1', type: 'article', title: '标题', state: 'failed', reason: '网络不可达', statusLabel: '失败' },
+        { itemId: 'article/a1', type: 'article', title: '标题', state: 'failed', reason: '网络不可达', localOnly: false, statusLabel: '失败' },
       ]);
     }
   });
@@ -115,6 +117,43 @@ describe('buildMyCreatedView：去重与四象限', () => {
     const rows = [row({ itemId: 'course/c1', type: 'course' }), row({ itemId: 'course/c1/lesson/l1', type: 'lesson' })];
     const out = buildMyCreatedView(rows, new Set());
     expect(out.map((r) => r.type)).toEqual<MyCreatedType[]>(['course', 'lesson']);
+  });
+});
+
+describe('buildMyCreatedView：仅本地留存行（册子 #56 §2.4）', () => {
+  it('localOnly 行无论包表是否含该 id 都列出，标签为「仅本地留存」', () => {
+    const rows = [row({ itemId: 'course/c1', type: 'course', state: 'failed', reason: 'item_segments_invalid', localOnly: true })];
+    for (const pack of [new Set(['course/c1']), new Set<string>()]) {
+      expect(buildMyCreatedView(rows, pack)).toEqual([
+        { itemId: 'course/c1', type: 'course', title: '标题', state: 'failed', reason: 'item_segments_invalid', localOnly: true, statusLabel: '仅本地留存' },
+      ]);
+    }
+  });
+});
+
+describe('containerSegmentsFromLedger：老台账行归一化重建（册子 #56 §2.3）', () => {
+  it('属性行 seq 非规范 ⇒ 重建为现行 assignAttrSeqs 排布', () => {
+    const legacy = row({
+      itemId: 'course/c1', type: 'course', title: '课程',
+      segmentsJson: JSON.stringify([
+        { seq: -2, kind: 'attr.cover', text: 'b1' },
+        { seq: -1, kind: 'attr.instructor', text: '李老师' },
+      ]),
+    });
+    const segs = containerSegmentsFromLedger(legacy);
+    expect(segs).not.toBeNull();
+    const attrs = segs!.filter((s) => s.seq < 0).map((s) => ({ seq: s.seq, kind: s.kind, text: s.text }));
+    expect(attrSeqsCanonical(attrs)).toBe(true);
+    // 现行字典序：attr.cover 在前 ⇒ seq=-1；attr.instructor ⇒ seq=-2
+    expect(attrs.sort((a, b) => a.seq - b.seq)).toEqual([
+      { seq: -2, kind: 'attr.instructor', text: '李老师' },
+      { seq: -1, kind: 'attr.cover', text: 'b1' },
+    ]);
+  });
+
+  it('坏 JSON / 空行集 ⇒ null（不重放，判为仅本地留存）', () => {
+    expect(containerSegmentsFromLedger(row({ type: 'course', segmentsJson: '{ not json' }))).toBeNull();
+    expect(containerSegmentsFromLedger(row({ type: 'course', segmentsJson: '' }))).toBeNull();
   });
 });
 
