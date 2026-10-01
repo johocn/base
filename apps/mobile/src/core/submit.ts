@@ -11,6 +11,7 @@ import { segmentsContentHash, type SubmitSegmentRow } from './attrs';
 import { CommentError, ensureRegistered, type CommentErrorCode, type CommentOptions } from './comment';
 import { errorCodeOf, errorText } from './errors';
 import { signRequestHeaders, type Identity } from './identity';
+import { containerSegmentsFromLedger } from './my-created';
 import { parseQuestionDoc } from './quiz';
 import type { LocalRepo } from './repo';
 import { decodeUtf8 } from './sync';
@@ -360,12 +361,25 @@ export function flushSubmissions(o: SubmitOptions): Promise<FlushSubmissionsResu
 }
 
 async function runFlushSubmissions(o: SubmitOptions): Promise<FlushSubmissionsResult> {
-  const rows = await o.repo.listSubmissions('pending');
+  // 「仅本地留存」是终态（册子 #56 §2.4）：先剔出重放集合，语义上永不重放。
+  const rows = (await o.repo.listSubmissions('pending')).filter((r) => !r.localOnly);
   let sent = 0;
   let failed = 0;
   let remaining = 0;
   let error = '';
   for (const row of rows) {
+    let segments: SubmitSegmentRow[] | undefined;
+    if (row.type === 'course' || row.type === 'lesson') {
+      // 归一化重放（册子 #56 §2.3）：不用 segments_json 原文，改走
+      // ledgerSegmentsOf → containerFormFromLedger → buildContainerSegments，老数据由此自愈。
+      const rebuilt = containerSegmentsFromLedger(row);
+      if (rebuilt === null) {
+        await o.repo.markSubmissionLocalOnly(row.itemId, '本地数据无法还原，仅本地留存');
+        failed += 1;
+        continue;
+      }
+      segments = rebuilt;
+    }
     const draft: SubmitDraft = {
       itemId: row.itemId,
       type: row.type,
@@ -373,7 +387,7 @@ async function runFlushSubmissions(o: SubmitOptions): Promise<FlushSubmissionsRe
       bodyMd: row.bodyMd,
       questionJson: row.questionJson,
       links: row.type === 'tag' ? decodeLedgerLinks(row.itemId, row.linksJson) : undefined,
-      segments: row.type === 'course' || row.type === 'lesson' ? decodeLedgerSegments(row.segmentsJson) : undefined,
+      segments,
     };
     try {
       const r = await submitItem(o, draft);
@@ -402,18 +416,6 @@ function decodeLedgerLinks(tagId: string, raw: string): TagLinkRow[] {
     const arr = JSON.parse(raw) as Array<{ target_id?: string; kind?: string }>;
     if (!Array.isArray(arr)) return [];
     return arr.map((l) => ({ tagId, targetId: String(l.target_id ?? ''), kind: String(l.kind ?? '') }));
-  } catch {
-    return [];
-  }
-}
-
-/** 台账 `segments_json` → 草稿 `segments`；空串或解析失败按空数组（节点会拒，不会写出错数据）。 */
-function decodeLedgerSegments(raw: string): SubmitSegmentRow[] {
-  if (raw === '') return [];
-  try {
-    const arr = JSON.parse(raw) as Array<{ seq?: number; kind?: string; text?: string }>;
-    if (!Array.isArray(arr)) return [];
-    return arr.map((s) => ({ seq: Number(s.seq ?? 0), kind: String(s.kind ?? ''), text: String(s.text ?? '') }));
   } catch {
     return [];
   }

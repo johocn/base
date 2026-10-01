@@ -337,3 +337,61 @@ describe('标签载体', () => {
     expect(wire.links).toEqual([{ target_id: 'course/c1', kind: 'course' }]);
   });
 });
+
+describe('补发：容器行归一化重放（册子 #56 §2.3）', () => {
+  it('老 segments_json（属性行 seq 非规范）重放时被重建为规范排布，不用原文', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'course/c1', created: true }));
+    await repo.saveSubmission({
+      itemId: 'course/c1', type: 'course', title: '课程', bodyMd: '', questionJson: '', linksJson: '',
+      segmentsJson: JSON.stringify([
+        { seq: -2, kind: 'attr.cover', text: 'b1' },
+        { seq: -1, kind: 'attr.instructor', text: '李老师' },
+      ]),
+      state: 'pending', reason: null, created: 0, queuedAt: '2026-10-01T00:00:01Z', sentAt: '', localOnly: false,
+    });
+
+    const res = await flushSubmissions(o);
+    expect(res.sent).toBe(1);
+    const wire = JSON.parse(decodeUtf8(http.posted.at(-1)!.body)) as { segments: Array<{ seq: number; kind: string; text: string }> };
+    // 归一化后：attr.instructor 占 -2、attr.cover 占 -1（原文是反的）
+    expect(wire.segments).toEqual([
+      { seq: -2, kind: 'attr.instructor', text: '李老师' },
+      { seq: -1, kind: 'attr.cover', text: 'b1' },
+    ]);
+    expect((await repo.getSubmission('course/c1'))!.state).toBe('sent');
+  });
+
+  it('坏 segments_json ⇒ 不重放，直接转「仅本地留存」（failed + localOnly）', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    await repo.saveSubmission({
+      itemId: 'course/c1', type: 'course', title: '课程', bodyMd: '', questionJson: '', linksJson: '',
+      segmentsJson: '{ not json', state: 'pending', reason: null, created: 0,
+      queuedAt: '2026-10-01T00:00:01Z', sentAt: '', localOnly: false,
+    });
+
+    const res = await flushSubmissions(o);
+    expect(res).toEqual({ sent: 0, failed: 1, remaining: 0, error: '' });
+    const got = (await repo.getSubmission('course/c1'))!;
+    expect(got.state).toBe('failed');
+    expect(got.localOnly).toBe(true);
+    expect(http.posted.filter((p) => p.url.endsWith('/v1/submit'))).toHaveLength(0);
+  });
+
+  it('仅本地留存行不进重放队列（即便 state 被误置为 pending）', async () => {
+    const { http, repo, o } = fixture();
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/submit`, json({ created: true }));
+    await repo.saveSubmission({
+      itemId: 'course/c1', type: 'course', title: '课程', bodyMd: '', questionJson: '', linksJson: '',
+      segmentsJson: JSON.stringify([{ seq: -1, kind: 'attr.cover', text: 'b1' }]),
+      state: 'pending', reason: null, created: 0, queuedAt: '2026-10-01T00:00:01Z', sentAt: '', localOnly: true,
+    });
+
+    const res = await flushSubmissions(o);
+    expect(res).toEqual({ sent: 0, failed: 0, remaining: 0, error: '' });
+    expect(http.posted.filter((p) => p.url.endsWith('/v1/submit'))).toHaveLength(0);
+  });
+});
