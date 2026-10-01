@@ -868,4 +868,63 @@
 
 ## 执行实况
 
-（执行时回填：各 Task commit、门禁实测数字、发布与部署证据、线上核对结果。）
+**执行时间：** 2026-10-01 23:34–23:58（Asia/Shanghai）
+
+**Task 1–7 commit**
+
+| Task | commit | 内容 |
+| --- | --- | --- |
+| 1 | `98bdffb` | 节点侧 `SettleGovernProposal` 小节点档（门槛恰为 1）把门槛降为 0 + 2 条用例 |
+| 2 | `e3aaa04` | 词条提交后重拉目录并按实况出 toast |
+| 3 | `e5c409f` | 新建 `core/lesson-list.ts` + 3 条用例 |
+| 4 | `d43e30c` | 课程详情两分支改用 `buildLessonList`，删页内 `LessonVM` / `KIND_LABEL` |
+| 5 | `cbd0ae7` | 课程页加「发表文章」入口 |
+| 6 | `6b6e372` | 无码失败透出响应体原文片段（trim + 空白折叠 + 截 120） |
+| 7 | `efee918` | `manifest.json` → `0.20.3`/`28` |
+
+**门禁实测（Task 7 时点，全绿）**
+
+| 项 | 结果 |
+| --- | --- |
+| `npx vitest run`（cwd `apps/mobile`） | **37 文件 / 455 用例全通过**。计划写的 406 是编写时估算；实际基线 451 + Task 3 的 3 + Task 6 的 1 = 455 |
+| `npm run typecheck` | **恰 2 条册外既有错**：`governance.vue(58,7)` TS2741、`submit.vue(156,5)` TS2322；**零新增** |
+| `npm run build:h5` | 通过（`DONE Build complete.`） |
+| `npm run build:app` | 通过；`dist/build/app/app-service.js` 中 `.value.value` 计数 **0** |
+| `go test ./...` | 全包 `ok`（含 `internal/store`） |
+| `git diff --stat -- internal/` | **空输出**（Task 1 节点改动已提交） |
+| 模板 `.value` 硬检查 | 无输出 |
+
+**执行期偏差登记（2 条，均已就地修正）**
+
+1. **计划 Task 3 测试有类型笔误**：Step 1 把 `toLocalContainer(...).segments`（`SubmitSegmentRow[]`）传给 `courseSegs`，而实现与 Task 4 的 `repo.listSegments()` 都是本地库口径 `SegmentRow[]`（多 `itemId` / `contentHash`）。按实现正确的一侧修正测试：改用显式构造的 `SegmentRow[]` 并从 `./types` 引入类型；断言与语义不变。
+2. **计划 Task 6 漏判既有断言**：新口径使 **3 条既有「无码 + 非空响应体」** 断言的期望值必然改变（`submit.test.ts:143` 500 `boom`、`:273` flush 同款、`:467` 400 `{"error":"boom"}`），已随新口径同步。`:467` 那条用例名（原「无码走裸兜底」）改为「无码非空体带原文片段」以与新行为一致。**有码分支与空体**情形的文案逐字未变（空体裸兜底由 Task 6 新用例守住）。
+
+**Task 8 节点侧部署（本册含节点改动）**
+
+| 步骤 | 证据 |
+| --- | --- |
+| 交叉编译 | `$env:GOOS='linux'; $env:GOARCH='amd64'; go build -o based-linux-amd64 ./cmd/based` → **21919663 字节 / sha256 `985f8ed43e0b56d51e0d839cde2c4f2ba5ddf03010da6f477603a239bdf6b1a0`** |
+| 上传 + 原子替换 | `scp` 至 `/opt/base/based.new`（远端 sha256 与本地逐字一致）；`cp -a /opt/base/based /opt/base/based.bak-pre-0.20.3` → `mv` → `chmod 0755` → 重启 `base` / `base-cache` |
+| 生效核对 | `systemctl is-active base` = `active`、`base-cache` = `active`、`nginx` = `active`；`sha256sum /opt/base/based` = `985f8ed4…`（与本地逐字一致） |
+| 只读探活 | `/v1/comment` = `200`、`/v1/proposal` = `200`、`/v1/directory` = `200`、`POST /v1/blob`（空体）= `400`、`/v1/blobzzz` = `404`（无回归） |
+
+**四步发布（`0.20.3`/`28`）**
+
+| 步骤 | 证据 |
+| --- | --- |
+| ① 云打包 | `D:\HBuilderX\cli.exe pack --project e:\code\base\apps\mobile --platform android --android.packagename uni.app.UNI936A667 --android.androidpacktype 3`；23:53:44 起 → **23:55:13 打包成功**（编译器 5.26 vue3、Android云端证书）；产物经临时下载地址取回 = **27449533 字节 / sha256 `25c1c5479858d07c63c499a026e5b6de09c1f9a6d20f7bf3774d8b8964559a2a`** |
+| ② 上传 | **包内**核对 `assets/apps/__UNI__936A667/www/manifest.json` = `"version":{"code":"28","name":"0.20.3"}`；证书 SHA1 = `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 `0.6.0`–`0.20.2` 逐字一致 ⇒ 可覆盖安装）；`scp` 至 `/opt/appdl/base-0.20.3.apk`，**远端 sha256 逐字一致** |
+| ③ 落地页 | `/opt/appdl/index.html` **整页重写**改指 `./base-0.20.3.apk`（`GET /dl/` 只出现 `base-0.20.3.apk` 1 次、`0.20.2` 命中 **0**）；旧页备份 `/opt/appdl/index.html.bak-0.20.2` |
+| ④ 签发 | `set -a; . /opt/base/base.secret.env; set +a; /opt/base/based release -version-name 0.20.3 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.20.3.apk -apk-file /opt/appdl/base-0.20.3.apk -notes 小节点票选豁免_创作入口_课时标题_无码取证 -out /opt/base-cache/data/release.json` → `apk_size=27449533`、`apk_sha256=25c1c547…`、`public_key 48c33db9cf859e107fe89651d15fc5faaa8b16ffbb7d4b483aa167a0cff824f4`（与 0.20.0–0.20.2 同一把源节点公钥）；`/opt/base/data/release.json` **不存在**（无游离副本） |
+
+**线上核对（公网 :80）**
+
+| 检查项 | 结果 |
+| --- | --- |
+| `GET /v1/release` | `200`；`version_name=0.20.3`、`min_version_name=0.8.0`、`apk_size=27449533`、`apk_sha256=25c1c547…`（与本地逐字一致）、`apk_url=http://118.190.217.242/dl/base-0.20.3.apk`、`notes=小节点票选豁免_…`、`issuer=base-node-1`、`signature` 128 hex |
+| `HEAD /dl/base-0.20.3.apk` | `200` / `application/octet-stream` / `Content-Length: 27449533`（与本地一致） |
+| `GET /dl/` 落地页 | `200`；只出现 `base-0.20.3.apk`，`0.20.2` 残留 **0** |
+
+**发布链偏差登记（1 条）**
+
+- 本计划 Task 8 Step 3 ④ 的命令**漏写签名来源**，直接执行报 `release: 缺少 -sign-key（或环境变量 BASE_SIGN_KEY）：没有私钥不能签发升级文档`。实际口径沿用 `0.20.0`–`0.20.2`：先 `set -a; . /opt/base/base.secret.env; set +a;` 再执行（`base.secret.env` 内即源节点私钥）。
