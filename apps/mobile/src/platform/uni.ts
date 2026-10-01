@@ -320,6 +320,22 @@ export function toPlusUrl(io: PlusRuntime['io'], absPath: string): string {
   return `file://${abs}`;
 }
 
+/**
+ * 落盘根候选链（册子 #63 §3.2）：① 应用运行路径（沙盒内，`getFilesDir()`）+ `/base`；
+ * ② `_doc/base` 兜底（现状）。`plus.android` 缺失或取值抛错一律静默跳过 ①。
+ */
+export function rootCandidates(io: PlusRuntime['io'], android: PlusRuntime['android']): string[] {
+  const out: string[] = [];
+  try {
+    const files = android?.runtimeMainActivity().getFilesDir().getAbsolutePath();
+    if (typeof files === 'string' && files !== '') out.push(`${stripFileScheme(files)}/base`);
+  } catch {
+    // plus.android 不可用：只留兜底候选
+  }
+  out.push(`${stripFileScheme(io.convertLocalFileSystemURL(DOC))}/base`);
+  return out;
+}
+
 function resolveUrl(io: PlusRuntime['io'], url: string): Promise<PlusEntry> {
   return new Promise((resolve, reject) => {
     io.resolveLocalFileSystemURL(url, resolve, (e) =>
@@ -329,6 +345,8 @@ function resolveUrl(io: PlusRuntime['io'], url: string): Promise<PlusEntry> {
 }
 
 export class PlusFs implements FsAdapter {
+  private root: string | null = null;
+
   constructor(private readonly p: PlusRuntime) {}
 
   /**
@@ -379,8 +397,32 @@ export class PlusFs implements FsAdapter {
     });
   }
 
+  /** 唯一入口（`FsAdapter` 接口零改动）：候选链依次实做一次，首个全过者胜出并进程内缓存。 */
   async rootDir(): Promise<string> {
-    return `${this.p.io.convertLocalFileSystemURL(DOC)}/base`;
+    if (this.root !== null) return this.root;
+    const errs: string[] = [];
+    for (const cand of rootCandidates(this.p.io, this.p.android)) {
+      try {
+        await this.probeRoot(cand);
+        this.root = cand;
+        return cand;
+      } catch (e) {
+        errs.push(`${cand}: ${(e as Error).message ?? String(e)}`);
+      }
+    }
+    throw new Error(`落盘根不可用（${errs.join('；')}）`);
+  }
+
+  /** 「建目录 → 写 1 字节 → 读回 → 删」全过才算该候选可用（册子 #63 §3.2）。 */
+  private async probeRoot(root: string): Promise<void> {
+    const path = `${root}/.rootprobe/p.bin`;
+    await this.writeFile(path, new Uint8Array([1]));
+    try {
+      const back = await this.readFile(path);
+      if (back.length !== 1 || back[0] !== 1) throw new Error(`读回 ${back.length} 字节，期望 1`);
+    } finally {
+      await this.remove(path);
+    }
   }
 
   /** 目录必须显式创建：SQLite 会建库文件，但不会建父目录 */

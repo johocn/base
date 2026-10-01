@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { PlusFs, pickCapabilityOf, toPlusUrl, type PlusEntry, type PlusRuntime } from './uni';
+import { PlusFs, pickCapabilityOf, rootCandidates, toPlusUrl, type PlusEntry, type PlusRuntime } from './uni';
 
 describe('选文件能力探针（本册 §3）', () => {
   it('App 端（有 plus）优先相册（chooseImage）', () => {
@@ -123,5 +123,31 @@ describe('PlusFs 目录下钻（册子 #63 §3.2 / §3.3）', () => {
     const t = fakeTree(['/data/user/0/pkg/files']);
     await fsOf(t).ensureDir('/data/user/0/pkg/files/base/.rootprobe');
     expect(t.D.has('/data/user/0/pkg/files/base/.rootprobe')).toBe(true);
+  });
+});
+
+describe('rootCandidates：落盘根候选链（册子 #63 §3.2）', () => {
+  const ANDROID = {
+    runtimeMainActivity: () => ({ getFilesDir: () => ({ getAbsolutePath: () => '/data/user/0/uni.app.x/files' }) }),
+  };
+
+  it('① 应用运行路径在前、② _doc/base 兜底在后', () => {
+    expect(rootCandidates(fakeIo(), ANDROID)).toEqual([
+      '/data/user/0/uni.app.x/files/base',
+      '/storage/emulated/0/Android/data/base/doc/base',
+    ]);
+  });
+
+  it('无 plus.android（H5 / 老内核）⇒ 只剩 ②', () => {
+    expect(rootCandidates(fakeIo(), undefined)).toEqual(['/storage/emulated/0/Android/data/base/doc/base']);
+  });
+
+  it('android 取值抛错 ⇒ 静默跳过 ①，不抛', () => {
+    const boom = {
+      runtimeMainActivity: () => {
+        throw new Error('no android');
+      },
+    };
+    expect(rootCandidates(fakeIo(), boom)).toEqual(['/storage/emulated/0/Android/data/base/doc/base']);
   });
 });
