@@ -156,7 +156,7 @@ import { myIdentityId, roster } from '../../core/contribution';
 import { loadContainerForm, saveContainer, startNewCourse, uploadAndStoreBlob, type ChildRow, type ContainerForm } from '../../core/course-edit';
 import { splitCategories } from '../../core/course-tree';
 import { normalizeTermKey } from '../../core/directory';
-import { containerFormFromLedger } from '../../core/my-created';
+import { containerFormFromLedger, statusLabelOf } from '../../core/my-created';
 import { recordEditFailure, type EditStage } from '../../core/editlog';
 import type { LocalRepo } from '../../core/repo';
 import { UNKNOWN_FLAGS, canPickFile, pickBlockedReason, type CapabilityFlags } from '../../core/selfcheck';
@@ -376,8 +376,19 @@ function removeAttachment(i: number) {
   form.value.attachments.splice(i, 1);
 }
 
-/** 加一课：id 用当前课程 id 立刻拼出（课程 id 在页面打开时就固定了），随后跳课时编辑页 */
-function addLesson() {
+/**
+ * 加一课：父课程台账非 `sent` 时先在入口阻断（册子 #63 §4.2.3）——节点不校验父存在，
+ * 课时会变成孤立条目；先给可操作原因，比再发一次注定失败的请求更有信息量。
+ */
+async function addLesson() {
+  if (pickRepo) {
+    const row = await pickRepo.getSubmission(form.value.itemId);
+    if (row && row.state !== 'sent') {
+      const label = row.localOnly ? '仅本地留存' : statusLabelOf(row.state);
+      error.value = `课程尚未提交成功（当前：${label}）。请先保存课程，提交成功后再添加课时`;
+      return;
+    }
+  }
   const id = newLessonID(form.value.itemId);
   const row: ChildRow = { kind: 'lesson', itemId: id };
   form.value.children.push(row);
