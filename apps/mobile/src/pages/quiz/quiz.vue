@@ -40,6 +40,8 @@ const correct = ref(0);
 const finished = ref(false);
 const error = ref('');
 const itemId = ref('');
+/** 续位时读到的本地已有 position（历史最好值）：上报不回退，避免抹掉已完成态 */
+const restoredPosition = ref(0);
 
 const current = computed<ShuffledQuestion | null>(() => questions.value[index.value] ?? null);
 
@@ -125,6 +127,7 @@ async function restoreProgress() {
     const { repo } = await bootstrap();
     const p = await repo.getProgress(itemId.value);
     if (!p) return;
+    restoredPosition.value = p.position;
     index.value = Math.min(Math.max(0, p.position), questions.value.length - 1);
   } catch {
     // 读本地失败不影响答题
@@ -139,7 +142,7 @@ async function reportNow() {
   if (itemId.value === '' || questions.value.length === 0) return;
   try {
     const { opts, repo } = await bootstrap();
-    const position = quizPosition(answeredCount(), questions.value.length);
+    const position = Math.max(quizPosition(answeredCount(), questions.value.length), restoredPosition.value);
     await reportProgress(
       { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl },
       { itemId: itemId.value, position, done: quizDone(position, questions.value.length) },

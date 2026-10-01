@@ -87,6 +87,8 @@ const scrollable = ref(0);
 const scrolled = ref(0);
 /** 待续位的滚动比例 0..1（进入时从本地 progress 读出）；0 = 不续位 */
 const pendingRestore = ref(0);
+/** 是否已实测过可滚高度：未测量时禁止上报（否则会把没测到的文章当「读完」） */
+let measured = false;
 
 const themeLabel = computed(() => READER_THEME_LABEL[theme.value]);
 
@@ -193,6 +195,7 @@ function measure() {
     .exec((res) => {
       const rect = res && res[0] ? (res[0] as { height?: number }) : undefined;
       scrollable.value = Math.max(0, (rect?.height ?? 0) - winH);
+      measured = true;
       // 续位只能在量到可滚高度之后做：`Math.round(scrollable * fraction)` 才是千分比对应的像素位
       if (pendingRestore.value > 0 && scrollable.value > 0) {
         const top = Math.round(scrollable.value * pendingRestore.value);
@@ -226,7 +229,8 @@ function currentPosition(): number {
  * 失败静默：本地已由 `reportProgress` 写入，离开动作不该弹错。
  */
 async function reportNow() {
-  if (itemId.value === '') return;
+  // 只在文章成功载入且已实测过时上报：否则会把未载入/未测量的文章当「读完」落库
+  if (itemId.value === '' || error.value !== '' || article.value === null || !measured) return;
   try {
     const { opts, repo } = await bootstrap();
     const position = currentPosition();
