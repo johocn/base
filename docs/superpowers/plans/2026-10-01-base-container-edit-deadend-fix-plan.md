@@ -1450,7 +1450,7 @@
 | 7 | `9ef9589` | 两个编辑页：`logFail` 改 `ctx.opts.adapters.fs`、`pickFile`/`storeBlob` 拆分 + 封面 dataURL 即时预览 + 重进回显、`?rebuildFrom=` 复建分支、课时 `courseId` 先解码；全量 436 例绿、`git grep "ctx.adapters"` 无输出 |
 | 8 | `8486bc5` | 列表页删除入口改 `canRemoveMyCreated` + `removeMyCreated` 连带 `removeLocalContainer`；详情页消费 `ledgerActionsOf` + 新增 `retrySubmit`/`removeLocal`/`rebuildCourse`；436 例无回归 |
 | 9 | `79f528a` | `vue-tsc@^2.2.12` 进 devDependencies、`typecheck` 直替为 `vue-tsc --noEmit`、`tsconfig.include` 补 `src/**/*.vue`；顺修 `course.vue` 的 `TS7053`（本册改动页面内）；锁文件在**仓库根** `package-lock.json` |
-| 10 | 本次 commit | 版本号 `0.20.1`/`26`；文档登记核对（无重复、无需改动）；发布前门禁全跑；本文回填；commit + push |
+| 10 | `2ade511` | 版本号 `0.20.1`/`26`；文档登记核对（无重复、无需改动）；发布前门禁全跑；本文回填；commit + push（`0a5e651..2ade511 master`） |
 
 ### 三、门禁原文（Task 10 发布前实跑）
 
@@ -1471,6 +1471,25 @@
 4. **Task 9 遗留**：另 2 条册外既有 `vue-tsc` 错误（上列 `governance.vue` / `submit.vue`）按决策 12 **不修**，仅登记。
 5. 其余 Task 均按计划原文落地，无额外偏差。
 
-### 四步发布（0.20.1/26）——待填
+### 五、四步发布（`0.20.1`/`26`，2026-10-01 19:41–19:48）
 
-（后续单独回填：APK 字节数 / sha256 / 证书 SHA1 / 落地页改指 / `based release` 签发 / 线上 `GET /v1/release` 与 `HEAD /dl/base-0.20.1.apk` 核对原文。）
+| 步骤 | 证据 |
+|---|---|
+| ① 云打包 | `D:\HBuilderX\cli.exe pack --project e:\code\base\apps\mobile --platform android --android.packagename uni.app.UNI936A667 --android.androidpacktype 3`；19:41:53 提交 → **19:42:58 打包成功**（编译器 5.26 vue3）；日志含 1 条隐私合规 Warning（历史版本同样存在、不阻塞） |
+| ② 上传 | APK 落 `apps/mobile/dist/release/apk/base-0.20.1.apk` = **27448579 字节 / sha256 `1ffe1e46f67e56b4108a9fdeb33f6cfe98d1c7ff5efc89dbf5527b1a9d577590`**；**包内**核对：`AndroidManifest.xml` 字符串池含 `versionName 0.20.1`（UTF-16）、不含 `0.20.0`，`versionCode` 属性记录 = `INT_DEC 26`（唯一命中，`25` 零命中）；证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.6.0–0.20.0 **逐字一致 ⇒ 可覆盖安装**）；`scp` 至 `/opt/appdl/base-0.20.1.apk`，**远端 sha256 逐字一致** |
+| ③ 落地页 | `/opt/appdl/index.html` **整页重写**改指 `./base-0.20.1.apk`（重写后 `grep -o "base-0.*\.apk"` 只剩 `base-0.20.1.apk`、`0.20.0` 命中 **0**）；旧页备份 `/opt/appdl/index.html.bak-0.20.0` |
+| ④ 签发 | `BASE_SIGN_KEY=37a6f5… /opt/base/based release -version-name 0.20.1 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.20.1.apk -apk-file /opt/appdl/base-0.20.1.apk -notes 容器编辑修复_编辑回填_封面预览_失败行重投删除复建 -out /opt/base-cache/data/release.json` → `apk_size=27448579`、`apk_sha256=1ffe1e46…`、`public_key 48c33db9cf859e107fe89651d15fc5faaa8b16ffbb7d4b483aa167a0cff824f4`（与 0.20.0 同一把源节点公钥）；`/opt/base/data/release.json` **不存在**（无游离副本） |
+
+**线上核对（本机 `curl.exe` 与服务器本机双向复核，逐字一致）**
+
+| 检查项 | 结果 |
+|---|---|
+| `GET http://118.190.217.242/v1/release` | `200`；`version_name=0.20.1`、`min_version_name=0.8.0`、`apk_size=27448579`、`apk_sha256=1ffe1e46…`（与本地逐字一致）、`apk_url=http://118.190.217.242/dl/base-0.20.1.apk`、`notes=容器编辑修复_…`、`issuer=base-node-1`、`signature` 已签发 |
+| `HEAD http://118.190.217.242/dl/base-0.20.1.apk` | `200`，`Content-Length: 27448579`（与本地一致） |
+| `GET http://118.190.217.242/` 落地页 | `200` |
+| 只读探活（无回归） | `/v1/comment` = `200`、`/v1/proposal` = `200`、`/v1/directory` = `200`、`/v1/release` = `200`、`/v1/catalog` = `200`、`POST /v1/blob`（空体）= `400`、`/v1/blobzzz` = `404` |
+| 服务状态 | `base` / `base-cache` / `nginx` 均 `active`（本册零节点改动，**未**交叉编译、**未**替换节点二进制） |
+
+### 六、真机验收（AC 7–13）——待人工
+
+计划 §AC 表里 7 条真机项（AC 7–13）**待人工**：编辑已有课程标题 / 简介 / 封面 / 课时清单全部回填；选封面立即出缩略图且退出再进仍在；改完保存不再 400；失败行详情页出现 编辑 / 重试 / 删除；删除该失败行后「我创建的」与课程列表都消失；id 非法行复建为新课程成功；若选图仍失败则 `workDir/edit-surface.log` 有 `stage` + `detail` 原文（判读口径见册子 §7 风险 1——**本册只修了掩码字段，未预设选图失败的真实根因**）。
