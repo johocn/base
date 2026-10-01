@@ -337,15 +337,14 @@ func (s *Server) handleGovernancePage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// ListProposalViews 按 proposal_id 升序（旧 → 新）返回；这里只做纯展示反转（新提案在前，册子 §7.4）
-	approved := s.approvedTermSet()
 	for i := len(views) - 1; i >= 0; i-- {
-		data.Proposals = append(data.Proposals, s.proposalPageRow(views[i], names, approved))
+		data.Proposals = append(data.Proposals, s.proposalPageRow(views[i], names))
 	}
 	s.renderPage(w, governanceTmpl, data)
 }
 
 // proposalPageRow 把一条提案视图折成看板行。**票数与门槛一律用 ListProposalViews 给的**，看板不自己算。
-func (s *Server) proposalPageRow(v store.ProposalView, names map[string]string, approved map[string]bool) pageProposal {
+func (s *Server) proposalPageRow(v store.ProposalView, names map[string]string) pageProposal {
 	row := pageProposal{
 		Action:      v.Action,
 		ActionLabel: governActionLabel(v.Action),
