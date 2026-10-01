@@ -92,9 +92,10 @@ func (c Config) pullEvents(ctx context.Context, st *store.Store, hc *http.Client
 		// 治理事件才派生名册，且**整页只派生一次**（册子 §4.3）：派生要扫 items + articles + quizzes + videos，
 		// 纯评论 / 圈子页不该付这笔开销；本页只写事件与投影，不碰名册输入，故页内复用同一份安全。
 		var govRoster map[string]bool
+		var govRosterOK bool
 		for _, it := range out.Items {
 			if it.Type == "govern.v1" {
-				govRoster = deriveGovernRoster(st)
+				govRoster, govRosterOK = deriveGovernRoster(st)
 				break
 			}
 		}
@@ -116,7 +117,7 @@ func (c Config) pullEvents(ctx context.Context, st *store.Store, hc *http.Client
 				return total, err
 			}
 			// govern.v1 投影失败**不阻断整页反熵**：事件行才是权威来源，读接口可从事件重算。
-			if _, err := applySyncedGovernEvent(st, it, govRoster); err != nil {
+			if _, err := applySyncedGovernEvent(st, it, govRoster, govRosterOK); err != nil {
 				log.Printf("peersync: govern.v1 投影失败（事件行已落，读接口可从事件重算）: %v", err)
 			}
 			total++
@@ -347,23 +348,27 @@ func applySyncedProgressEvent(st *store.Store, it eventSyncItem) (bool, error) {
 // 投影是**幂等**的：重复事件静默忽略；冲突事件（已被更早的 (created_at,event_id) 占位）**不算错**；
 // 投影失败**不阻断事件行落地**（事件行才是权威来源，读接口可以从事件重算）。
 // roster 由调用方**每页派生一次**传入（见 pullEvents）；nil 视作空名册（settle 停在 pending）。
-func applySyncedGovernEvent(st *store.Store, it eventSyncItem, roster map[string]bool) (bool, error) {
+// rosterReady 是名册就绪位，透传给 settle（目录提案的小节点豁免要它，册子 #58 §3.2）。
+func applySyncedGovernEvent(st *store.Store, it eventSyncItem, roster map[string]bool, rosterReady bool) (bool, error) {
 	if it.Type != "govern.v1" {
 		return false, nil
 	}
 	// body_json 是**客户端原始键集**（httpapi 存的就是 req.Body 原文），故这里能取到全部字段。
 	var m struct {
-		Action         string `json:"action"`
-		ProposalID     string `json:"proposal_id"`
-		TargetItemID   string `json:"target_item_id"`
-		Verb           string `json:"verb"`
-		ContentHash    string `json:"content_hash"`
-		ContentVersion int64  `json:"content_version"`
-		RevokedRev     int64  `json:"revoked_rev"`
-		Reason         string `json:"reason"`
-		Title          string `json:"title"`
-		BodyMD         string `json:"body_md"`
-		Choice         string `json:"choice"`
+		Action               string `json:"action"`
+		ProposalID           string `json:"proposal_id"`
+		TargetItemID         string `json:"target_item_id"`
+		Verb                 string `json:"verb"`
+		ContentHash          string `json:"content_hash"`
+		ContentVersion       int64  `json:"content_version"`
+		RevokedRev           int64  `json:"revoked_rev"`
+		Reason               string `json:"reason"`
+		Title                string `json:"title"`
+		BodyMD               string `json:"body_md"`
+		Choice               string `json:"choice"`
+		DirectoryKind        string `json:"directory_kind"`
+		DirectoryTermKey     string `json:"directory_term_key"`
+		DirectoryDisplayName string `json:"directory_display_name"`
 	}
 	if err := json.Unmarshal([]byte(it.BodyJSON), &m); err != nil || m.ProposalID == "" {
 		return false, nil // 形态不认识的事件：落行但不投影（与 parseEventProjection 的零值口径一致）
@@ -374,9 +379,22 @@ func applySyncedGovernEvent(st *store.Store, it eventSyncItem, roster map[string
 	}
 	switch m.Action {
 	case "proposal":
+		// 与 httpapi.parseGovernBody 同口径的镜像校验（双端对同一事件必须同信心，册子 #58 §3.1）：
+		// directory_add 形态不认识 ⇒ 落行不投影（与 default 口径一致）。
+		title, body := m.Title, m.BodyMD
+		if m.Verb == store.GovernActionDirectoryAdd {
+			if _, ok := store.DirectoryKindOfItemID(m.TargetItemID); !ok {
+				return false, nil
+			}
+			tk, ok2 := store.NormalizeTermKey(m.DirectoryDisplayName)
+			if !ok2 || tk != m.DirectoryTermKey {
+				return false, nil
+			}
+			title, body = m.DirectoryDisplayName, m.DirectoryTermKey
+		}
 		err := st.ProjectGovernProposal(store.GovernProposalEvent{
 			ProposalID: pid, TargetItemID: m.TargetItemID, Verb: m.Verb, ContentHash: m.ContentHash,
-			Reason: m.Reason, Title: m.Title, BodyMD: m.BodyMD,
+			Reason: m.Reason, Title: title, BodyMD: body,
 			ContentVersion: m.ContentVersion, RevokedRev: m.RevokedRev,
 			CreatedAt: it.CreatedAt, EventID: it.EventID, Actor: it.ID,
 		})
@@ -396,23 +414,23 @@ func applySyncedGovernEvent(st *store.Store, it eventSyncItem, roster map[string
 	// 投影后 settle（册子 §4.3 / §4.4）：proposal 与 vote **两支都要**——反熵不保证
 	// proposal 事件先于 vote 事件到达。settle 失败只记日志、**不阻断整页反熵**
 	//（事件行才是权威来源，读接口可从事件重算）。
-	if err := st.SettleGovernProposal(pid, roster, true); err != nil {
+	if err := st.SettleGovernProposal(pid, roster, rosterReady); err != nil {
 		log.Printf("peersync: 治理提案 %d 生效判定失败（事件行已落，读接口可从事件重算）: %v", pid, err)
 	}
 	return true, nil
 }
 
-// deriveGovernRoster 派生本节点治者名册（册子 §4.3）；失败按空名册降级（settle 停在 pending）。
-// 返回 nil 与空集等价（Go 的 nil map 读为假），调用方无需再判错。
-func deriveGovernRoster(st *store.Store) map[string]bool {
+// deriveGovernRoster 派生本节点治者名册（册子 §4.3）；失败返回 ok=false，按空名册降级（settle 停在 pending）。
+// 返回的 nil map 与空集等价（Go 的 nil map 读为假），调用方无需再判空。
+func deriveGovernRoster(st *store.Store) (map[string]bool, bool) {
 	rows, err := st.ContributorRoster()
 	if err != nil {
 		log.Printf("peersync: 治理名册派生失败，按空名册降级（settle 停在 pending）: %v", err)
-		return nil
+		return nil, false
 	}
 	set := make(map[string]bool, len(rows))
 	for _, c := range rows {
 		set[c.ID] = true
 	}
-	return set
+	return set, true
 }

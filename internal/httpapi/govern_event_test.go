@@ -149,25 +149,26 @@ func drainGovernFromPeer(t *testing.T, peerURL string, dst *store.Store) []map[s
 		}
 		// **必须与 applySyncedGovernEvent 的真实行为一致**：投影后 settle（proposal / vote 两支都要）。
 		// 镜像失真会让 AC 11 等用例验不到事件路径的生效闭环（缺陷 1 的洞）。
-		if err := dst.SettleGovernProposal(pid, testRoster(t, dst), true); err != nil {
+		roster, rosterOK := testRoster(t, dst)
+		if err := dst.SettleGovernProposal(pid, roster, rosterOK); err != nil {
 			t.Fatalf("SettleGovernProposal: %v", err)
 		}
 	}
 	return mirrored
 }
 
-// testRoster 复刻 peersync 从 ContributorRoster 派生名册（map[string]bool）的口径。
-func testRoster(t *testing.T, st *store.Store) map[string]bool {
+// testRoster 复刻 peersync 从 ContributorRoster 派生名册（map[string]bool, ok）的口径。
+func testRoster(t *testing.T, st *store.Store) (map[string]bool, bool) {
 	t.Helper()
 	rows, err := st.ContributorRoster()
 	if err != nil {
-		t.Fatalf("ContributorRoster: %v", err)
+		return map[string]bool{}, false
 	}
 	set := make(map[string]bool, len(rows))
 	for _, c := range rows {
 		set[c.ID] = true
 	}
-	return set
+	return set, true
 }
 
 // rosterCount 读匿名名册里某个 id 的条数；不在名册返回 0（govEventNode 用）。

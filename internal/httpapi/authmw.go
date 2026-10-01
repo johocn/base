@@ -54,6 +54,7 @@ var authErrText = map[string]string{
 	"proposal_action_unsupported": "action 只能是 remove / edit / revive",
 	"proposal_reason_invalid":     "reason 必须是去首尾空白后 1..200 个字符，且不含控制字符",
 	"proposal_edit_invalid":       "edit 载荷不合法：title 须为去首尾空白后 1..200 个字符且不含控制字符，body_md 必填，且目标必须是 article 载体",
+	"proposal_directory_invalid":  "directory 载荷不合法：kind 须为 category/instructor/tag，display_name 规范化后须与 term_key 一致",
 	"proposal_too_large":          "title 与 body_md 的字节之和超过 32768",
 	"item_not_found":              "目标 item_id 不存在",
 	"item_self_owned":             "不能治理自己的条目，请改用 POST /v1/submit",

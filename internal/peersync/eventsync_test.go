@@ -113,12 +113,13 @@ func TestSyncEventsGovernProposalSettlesOnPeer(t *testing.T) {
 	cfg := Config{TransportFor: tr, IssuerPubKeys: map[string]string{srcIssuer: pub}}
 	cfg.RunOnce(context.Background(), dst, []Peer{{URL: url}}, func(string, ...any) {})
 
-	views, err := dst.ListProposalViews(deriveGovernRoster(dst))
+	roster, rosterOK := deriveGovernRoster(dst)
+	views, err := dst.ListProposalViews(roster)
 	if err != nil || len(views) != 1 {
 		t.Fatalf("缓存节点应有 1 条提案 err=%v views=%+v", err, views)
 	}
 	if views[0].Status != store.GovernStatusEffective || views[0].ExecutedResult == "" {
-		t.Fatalf("票满门槛后应判为生效（名册未传到 ⇒ 停在 pending）: %+v", views[0])
+		t.Fatalf("名册就绪=%v：票满门槛后应判为生效: %+v", rosterOK, views[0])
 	}
 }
 

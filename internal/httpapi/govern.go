@@ -29,10 +29,19 @@ const (
 	maxProposalReasonRunes = 200
 )
 
-// validProposalAction 按册子 §2.1：remove / edit / revive 三值枚举。
+// validProposalAction 按册子 §2.1：remove / edit / revive 三值枚举，另加 #58 §3.1 的 directory_add。
 func validProposalAction(a string) bool {
 	switch a {
-	case store.GovernActionRemove, store.GovernActionEdit, store.GovernActionRevive:
+	case store.GovernActionRemove, store.GovernActionEdit, store.GovernActionRevive, store.GovernActionDirectoryAdd:
+		return true
+	}
+	return false
+}
+
+// validDirectoryKind 判目录词条 kind ∈ 三值（册子 #58 §2.1）。
+func validDirectoryKind(k string) bool {
+	switch k {
+	case store.DirectoryKindCategory, store.DirectoryKindInstructor, store.DirectoryKindTag:
 		return true
 	}
 	return false
@@ -94,12 +103,20 @@ type proposalEditReq struct {
 }
 
 type proposalReq struct {
-	Action     string           `json:"action"`
-	ItemID     string           `json:"item_id"`
-	Reason     string           `json:"reason"`
-	Edit       *proposalEditReq `json:"edit"`
-	ProposerID json.RawMessage  `json:"proposer_id"`
-	AuthorID   json.RawMessage  `json:"author_id"`
+	Action     string                `json:"action"`
+	ItemID     string                `json:"item_id"`
+	Reason     string                `json:"reason"`
+	Edit       *proposalEditReq      `json:"edit"`
+	Directory  *proposalDirectoryReq `json:"directory"`
+	ProposerID json.RawMessage       `json:"proposer_id"`
+	AuthorID   json.RawMessage       `json:"author_id"`
+}
+
+// proposalDirectoryReq 是 directory_add 的载荷（册子 #58 §3.1）。
+type proposalDirectoryReq struct {
+	Kind        string `json:"kind"`
+	TermKey     string `json:"term_key"`
+	DisplayName string `json:"display_name"`
 }
 
 // handleProposalPost 是签名写路径 POST /v1/proposal（册子 §3.1）：名册内的治理者
@@ -134,6 +151,58 @@ func (s *Server) handleProposalPost(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.proposalLimiterByID.allow(actor) || !s.governLimiterByIP.allow(clientIP(r)) {
 		s.writeAuthErr(w, http.StatusTooManyRequests, "govern_rate_limited")
+		return
+	}
+	// directory_add 走独立载荷与同键归并，不要求目标条目存在、不要求名册内资格（册子 #58 §3.1/§3.3）。
+	if req.Action == store.GovernActionDirectoryAdd {
+		if req.Edit != nil || req.Directory == nil || !validDirectoryKind(req.Directory.Kind) {
+			s.writeAuthErr(w, http.StatusBadRequest, "proposal_directory_invalid")
+			return
+		}
+		termKey, ok := store.NormalizeTermKey(req.Directory.DisplayName)
+		display := store.CleanDisplayName(req.Directory.DisplayName)
+		if !ok || display == "" || req.Directory.TermKey != termKey {
+			s.writeAuthErr(w, http.StatusBadRequest, "proposal_directory_invalid")
+			return
+		}
+		itemID := store.DirectoryProposalItemID(req.Directory.Kind, termKey)
+		// 同键归并（册子 #58 §3.3）：已 approved ⇒ 成功短路不建提案；已有 pending 提案 ⇒ 返回既有 id。
+		if t, ok, err := s.st.GetDirectoryTerm(req.Directory.Kind, termKey); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		} else if ok && t.State == store.DirectoryStateApproved {
+			s.writeJSON(w, http.StatusOK, map[string]any{"merged": true, "action": req.Action, "item_id": itemID, "status": store.GovernStatusEffective})
+			return
+		}
+		roster, rosterOK := s.governRoster()
+		if pid, ok, err := s.st.FindPendingDirectoryProposal(itemID); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		} else if ok {
+			votes, err := s.st.DirectoryPendingVotes(itemID, roster)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			s.writeJSON(w, http.StatusOK, map[string]any{"proposal_id": strconv.FormatInt(pid, 10), "action": req.Action,
+				"item_id": itemID, "vote_count": votes, "merged": true,
+				"threshold": store.GovernThresholdForRoster(req.Action, len(roster), rosterOK), "status": store.GovernStatusPending})
+			return
+		}
+		// 小节点豁免（名册就绪且 < 10）⇒ 提交即 approved（册子 #58 §3.2）。
+		auto := rosterOK && len(roster) < store.DirectorySmallNodeRosterMax
+		pid, status, err := s.st.CreateDirectoryProposal(store.Proposal{
+			Action: req.Action, ItemID: itemID, ProposerID: actor, Reason: reason,
+			Title: display, BodyMD: termKey, BaseContentHash: store.DirectoryPayloadHash(req.Directory.Kind, termKey),
+			CreatedAt: time.Now().UnixMilli(),
+		}, auto)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, map[string]any{"proposal_id": strconv.FormatInt(pid, 10), "action": req.Action,
+			"item_id": itemID, "vote_count": 1,
+			"threshold": store.GovernThresholdForRoster(req.Action, len(roster), rosterOK), "status": status})
 		return
 	}
 	it, ok, err := s.st.GetItem(req.ItemID)

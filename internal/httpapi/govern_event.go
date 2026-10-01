@@ -7,15 +7,18 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/johocn/base/internal/store"
 )
 
 // governProposalKeys / governVoteKeys 是两档严格键集（册子 §4.2）。多一个未知键即拒——
 // `verifyEventSig` 会把 body **原样** canonicalize，签的与存的不一致就是漏洞（同 parseCommentBody 口径）。
+// directory_* 三键是 #58 §3.1 directory_add 的载荷位。
 var governProposalKeys = map[string]struct{}{
 	"action": {}, "proposal_id": {}, "target_item_id": {}, "verb": {}, "content_hash": {},
 	"content_version": {}, "revoked_rev": {}, "reason": {}, "title": {}, "body_md": {},
+	"directory_kind": {}, "directory_term_key": {}, "directory_display_name": {},
 }
 
 var governVoteKeys = map[string]struct{}{
@@ -97,6 +100,34 @@ func parseGovernBody(raw json.RawMessage) (map[string]any, string, bool) {
 				return nil, "", false
 			}
 		}
+		// directory_add 的附加校验（#58 §3.1）：三键必存，且互相自洽；禁止再用 title / body_md 承载（防歧义）。
+		if anyString(m["verb"]) == store.GovernActionDirectoryAdd {
+			for _, k := range []string{"directory_kind", "directory_term_key", "directory_display_name"} {
+				if _, present := m[k]; !present {
+					return nil, "", false
+				}
+			}
+			kind := anyString(m["directory_kind"])
+			tk := anyString(m["directory_term_key"])
+			d := anyString(m["directory_display_name"])
+			norm, nOK := store.NormalizeTermKey(d)
+			n := utf8.RuneCountInString(d)
+			switch {
+			case !validDirectoryKind(kind),
+				store.CleanDisplayName(d) == "",
+				n < 1 || n > store.TermKeyMaxRunes,
+				hasControlChars(d),
+				!nOK || norm != tk,
+				anyString(m["target_item_id"]) != store.DirectoryProposalItemID(kind, tk):
+				return nil, "", false
+			}
+			if _, p := m["title"]; p {
+				return nil, "", false
+			}
+			if _, p := m["body_md"]; p {
+				return nil, "", false
+			}
+		}
 		return m, action, true
 	case "vote":
 		if !onlyKeys(m, governVoteKeys) {
@@ -139,11 +170,17 @@ func (s *Server) handleGovernEvent(w http.ResponseWriter, actor string, req even
 	case "proposal":
 		cv, _ := jsonInt(rawBody["content_version"])
 		rv, _ := jsonInt(rawBody["revoked_rev"])
+		// directory_add 的标题 / 正文位由 directory_* 三键承载（映射进既有 Title/BodyMD 字段，结构体零改动）。
+		title, body := anyString(rawBody["title"]), anyString(rawBody["body_md"])
+		if anyString(rawBody["verb"]) == store.GovernActionDirectoryAdd {
+			title = anyString(rawBody["directory_display_name"])
+			body = anyString(rawBody["directory_term_key"])
+		}
 		perr = s.st.ProjectGovernProposal(store.GovernProposalEvent{
 			ProposalID: pid, TargetItemID: anyString(rawBody["target_item_id"]),
 			Verb: anyString(rawBody["verb"]), ContentHash: anyString(rawBody["content_hash"]),
-			Reason: anyString(rawBody["reason"]), Title: anyString(rawBody["title"]),
-			BodyMD:         anyString(rawBody["body_md"]),
+			Reason: anyString(rawBody["reason"]), Title: title,
+			BodyMD:         body,
 			ContentVersion: cv, RevokedRev: rv,
 			CreatedAt: createdAt, EventID: req.EventID, Actor: actor,
 		})
@@ -170,8 +207,8 @@ func (s *Server) handleGovernEvent(w http.ResponseWriter, actor string, req even
 	// 权威事件行落地后才做生效判定（册子 §4.3 / §4.4）：proposal 与 vote **两条分支都要 settle**——
 	// 反熵不保证 proposal 事件先于 vote 事件到达，故任一事件落地后都重新收敛一次（幂等）。
 	// settle 是派生、事件是权威：失败只记日志，**不拒事件**。（顺序与 peersync.applySyncedGovernEvent 一致。）
-	roster, _ := s.governRoster() // 派生失败按空名册降级（册子 §6.2），settle 会停在 pending
-	if err := s.st.SettleGovernProposal(pid, roster, true); err != nil {
+	roster, rosterOK := s.governRoster() // 派生失败按空名册降级（册子 §6.2），settle 会停在 pending
+	if err := s.st.SettleGovernProposal(pid, roster, rosterOK); err != nil {
 		log.Printf("httpapi: 治理提案 %d 生效判定失败（事件行已落）: %v", pid, err)
 	}
 	if ev, ok, err := s.st.GetEventByID(req.EventID); err == nil && ok {
