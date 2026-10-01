@@ -7,7 +7,7 @@
 import { keyPairFromSeed, randomBytes, sign, utf8, verify } from '@base/protocol-ts';
 
 import type { Adapters, LocalDb } from '../platform/adapter';
-import { base64ToBytes, bytesToBase64, pickHandle, plusRuntime, type PickHandle } from '../platform/uni';
+import { base64ToBytes, bytesToBase64, pickCapabilityOf, pickHandle, plusRuntime, type PickHandle } from '../platform/uni';
 import { CommentError, sendComment } from './comment';
 import type { LocalRepo } from './repo';
 import { fetchReleaseDoc } from './update';
@@ -355,25 +355,29 @@ const PROBES: Probe[] = [
   {
     id: 'pick.choose_file',
     group: '文件选择',
-    name: 'uni.chooseFile 存在',
+    name: '选择文件能力（按运行时探针）',
     affects: '选图片 / 附件',
     flag: 'pickOk',
     scope: 'standalone',
-    async run(_plus, pick) {
-      if (typeof pick.chooseFile !== 'function') throw new Error('uni.chooseFile 不存在（App 端为可选 API）');
+    async run(plus, pick) {
+      const cap = pickCapabilityOf(plus !== undefined, pick);
+      if (cap === 'none') throw new Error('运行时不提供 uni.chooseImage 或 uni.chooseFile');
+      if (cap === 'album') return 'App 端以相册选取为准（uni.chooseImage）';
       return 'uni.chooseFile 可用';
     },
   },
   {
     id: 'pick.album',
     group: '文件选择',
-    name: 'uni.chooseImage 存在',
+    name: '选择图片能力（相册支，按运行时探针）',
     affects: '选图片 / 附件（App 支）',
     flag: 'pickOk',
     scope: 'standalone',
-    async run(_plus, pick) {
-      if (typeof pick.chooseImage !== 'function') throw new Error('uni.chooseImage 不存在（App 端为可选 API）');
-      return 'uni.chooseImage 可用';
+    async run(plus, pick) {
+      const cap = pickCapabilityOf(plus !== undefined, pick);
+      if (cap === 'none') throw new Error('运行时不提供 uni.chooseImage 或 uni.chooseFile');
+      if (cap === 'album') return 'uni.chooseImage 可用';
+      return '当前运行时以 uni.chooseFile 为准';
     },
   },
 ];

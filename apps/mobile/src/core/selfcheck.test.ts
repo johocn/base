@@ -218,14 +218,14 @@ describe('选择文件能力（pickOk）', () => {
     expect(pickBlockedReason({ ...UNKNOWN_FLAGS, pickOk: 'ok' })).toBe('');
   });
 
-  it('两条 pick.* 探测进场；缺 chooseImage 时 pickOk 降级为 fail', async () => {
+  it('两条 pick.* 探测进场；按运行时探针分支断言（有 chooseFile 无相册 ⇒ 两项都 ok）', async () => {
     const r = await runSelfCheck(null, { plus: FAKE_PLUS, pick: { chooseFile: () => undefined } });
     const ids = r.items.map((i) => i.id);
     expect(ids).toContain('pick.choose_file');
     expect(ids).toContain('pick.album');
     expect(r.items.find((i) => i.id === 'pick.choose_file')?.status).toBe('ok');
-    expect(r.items.find((i) => i.id === 'pick.album')?.status).toBe('fail');
-    expect(r.flags.pickOk).toBe('fail');
+    expect(r.items.find((i) => i.id === 'pick.album')?.status).toBe('ok');
+    expect(r.flags.pickOk).toBe('ok');
   });
 
   it('两条选择 API 都缺 ⇒ fail；都在 ⇒ ok', async () => {

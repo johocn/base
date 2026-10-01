@@ -141,6 +141,21 @@ export function pickHandle(): PickHandle {
   return u ?? {};
 }
 
+/**
+ * 选文件能力探针（本册 §3）：App 端（有 plus）优先相册（`uni.chooseImage`），
+ * 否则退回 `uni.chooseFile`，都没有则 `'none'`。纯函数，供 `pickLocalFile` 与自检**同源**判定。
+ */
+export function pickCapabilityOf(hasPlus: boolean, pick: PickHandle): 'album' | 'chooseFile' | 'none' {
+  if (hasPlus && typeof pick.chooseImage === 'function') return 'album';
+  if (typeof pick.chooseFile === 'function') return 'chooseFile';
+  return 'none';
+}
+
+/** 取当前运行时的选文件能力（唯一判定源，本册 §3）。 */
+export function pickCapability(): 'album' | 'chooseFile' | 'none' {
+  return pickCapabilityOf(plusRuntime() !== undefined, pickHandle());
+}
+
 /** H5 下没有 plus：给可读提示，而不是 TypeError。 */
 export function assertAppRuntime(): PlusRuntime {
   const p = plusRuntime();
@@ -476,8 +491,8 @@ export interface PickedFile {
  */
 export async function pickLocalFile(): Promise<PickedFile | null> {
   const uni = uniGlobal();
-  const app = plusRuntime() !== undefined && typeof uni.chooseImage === 'function';
-  const hit = app ? await pickByAlbum(uni) : await pickByChooseFile(uni);
+  // 能力判定与自检同源（本册 §3）；'none' 时仍走 pickByChooseFile 以抛既有的可读错误。
+  const hit = pickCapability() === 'album' ? await pickByAlbum(uni) : await pickByChooseFile(uni);
   if (hit === null) return null;
   const bytes = await new PlusFs(assertAppRuntime()).readFile(hit.path);
   return { name: hit.name, bytes };
