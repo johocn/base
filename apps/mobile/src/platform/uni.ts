@@ -295,10 +295,17 @@ export class PlusLocalDb implements LocalDb {
 
 const DOC = '_doc';
 
-/** 绝对平台路径 → plus.io 认的 URL（_doc/…）：plus.io 不认裸平台路径 */
-function toPlusUrl(io: PlusRuntime['io'], absPath: string): string {
+/**
+ * 路径 → plus.io 认的 URL。三种形态（本册 §3 附带修）：
+ *  1. `file://` 前缀（真机相册 / 附件选择器给的绝对 URL）→ 统一过 `convertLocalFileSystemURL`；
+ *  2. `_doc` 平台路径（其实例绝对路径由 `convertLocalFileSystemURL('_doc')` 给出）→ 折成 `_doc/…`；
+ *  3. 其余绝对路径 → 补 `file://` 前缀，否则 plus.io 会把裸 `/storage/…` 当相对 URL 而读取失败。
+ */
+export function toPlusUrl(io: PlusRuntime['io'], absPath: string): string {
+  if (absPath.startsWith('file://')) return io.convertLocalFileSystemURL(absPath);
   const doc = io.convertLocalFileSystemURL(DOC);
-  return absPath.startsWith(doc) ? DOC + absPath.slice(doc.length) : absPath;
+  if (absPath.startsWith(doc)) return DOC + absPath.slice(doc.length);
+  return absPath.startsWith('/') ? `file://${absPath}` : absPath;
 }
 
 function resolveUrl(io: PlusRuntime['io'], url: string): Promise<PlusEntry> {
@@ -314,7 +321,10 @@ export class PlusFs implements FsAdapter {
 
   /** 逐段下钻建目录，缺失的段一律 create —— 调用方不必先建父目录 */
   private async dirEntry(absDir: string): Promise<PlusEntry> {
-    const parts = toPlusUrl(this.p.io, absDir).split('/').filter(Boolean);
+    const url = toPlusUrl(this.p.io, absDir);
+    // `'file:///a/b'.split('/')` 会切出 `'file:'` 段使下钻失败，故 file:// 整串解析。
+    if (url.startsWith('file://')) return resolveUrl(this.p.io, url);
+    const parts = url.split('/').filter(Boolean);
     let entry = await resolveUrl(this.p.io, parts[0] as string);
     for (const name of parts.slice(1)) {
       const parent = entry;
