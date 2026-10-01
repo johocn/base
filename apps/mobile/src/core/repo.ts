@@ -626,6 +626,7 @@ export class SqlRepo implements LocalRepo {
                 day=excluded.day,updated_at=excluded.updated_at,event_id=excluded.event_id,dirty=0`,
         params: [row.itemId, row.position, row.done ? 1 : 0, row.day, row.updatedAt, row.eventId],
       });
+      cur.set(row.itemId, { ...row, dirty: false });
     }
     for (const d of days) {
       stmts.push({

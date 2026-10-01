@@ -83,4 +83,27 @@ describe('progress 本地仓储语义（#8 册子 §3.4 / §3.5 / §5.1）', () 
     await repo.mergeProgress([row({ position: 1, updatedAt: 1, eventId: 'e'.repeat(32) })], []);
     expect((await repo.getProgress('article/a'))!.position).toBe(900);
   });
+
+  it('mergeProgress：同批同 item_id 按 LWW 取胜者，而非末条', async () => {
+    const repo = new MemoryRepo();
+    // 同一批次内同 item_id 两条：末条 created_at 更早，LWW 应取前一条
+    await repo.mergeProgress(
+      [
+        row({ position: 900, updatedAt: 5000, eventId: 'b'.repeat(32) }),
+        row({ position: 1, updatedAt: 1, eventId: 'c'.repeat(32) }),
+      ],
+      [],
+    );
+    expect((await repo.getProgress('article/a'))!.position).toBe(900);
+
+    // 平局（同为 5000）：event_id 升序 ⇒ '0…' 胜 'b…'，即使它排在后面
+    await repo.mergeProgress(
+      [
+        row({ position: 700, updatedAt: 5000, eventId: 'b'.repeat(32) }),
+        row({ position: 800, updatedAt: 5000, eventId: '0'.repeat(32) }),
+      ],
+      [],
+    );
+    expect((await repo.getProgress('article/a'))!.position).toBe(800);
+  });
 });
