@@ -49,24 +49,15 @@ import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
 import { fetchBlob } from '../../core/blob';
-import { attrsOf, childCounts, childrenRowsOf, digestOf, type AttachmentVM } from '../../core/container-view';
-import { lessonNo } from '../../core/course-tree';
+import { attrsOf, childrenRowsOf, digestOf, type AttachmentVM } from '../../core/container-view';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
+import { buildLessonList, type LessonVM } from '../../core/lesson-list';
 import { containerFormFromLedger, ledgerActionsOf, type LedgerActions } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
 import { createProposal, GovernError, listProposals } from '../../core/govern';
 import { bootstrap } from '../../platform';
 import { retrySubmission, SubmitError } from '../../core/submit';
-
-interface LessonVM {
-  itemId: string;
-  no: number;
-  title: string;
-  /** 徽标行：类型计数 / 附件 / 时长，或「空课时」「未同步」 */
-  sub: string;
-  tags: TagLinkRow[];
-}
 
 const courseId = ref('');
 const courseTitle = ref('');
@@ -93,8 +84,6 @@ const fromLedger = ref(false);
 const actions = ref<LedgerActions>({ edit: false, retry: false, removeLocal: false, rebuild: false, proposeRemove: false });
 const error = ref('');
 
-const KIND_LABEL: Record<string, string> = { article: '文章', quiz: '测验', video: '视频', audio: '音频' };
-
 onLoad(async (query) => {
   const q = (query as Record<string, string> | undefined) ?? {};
   const raw = String(q.courseId ?? '');
@@ -118,14 +107,13 @@ onLoad(async (query) => {
       if (form.durationSec > 0) meta.push(`共约 ${Math.round(form.durationSec / 60)} 分钟`);
       metaLine.value = meta.join(' · ');
       attachments.value = form.attachments;
-      // children 行标题回落 itemId（台账行集不含子项标题，与既有「本地未同步」回落同口径）
-      lessons.value = form.children.map((c, i) => ({
-        itemId: c.itemId,
-        no: i + 1,
-        title: c.itemId,
-        sub: '本地未同步（点开按 id 直接查）',
-        tags: [],
-      }));
+      // 台账行集不含子项标题，但本地 items 表里有（#56 乐观落库 / #63 存量自愈都会写）⇒ 按 id 补取。
+      // 序号取入参次序（台账入口没有课程行集）；tags 恒空（该入口不加载 tag_links）。
+      lessons.value = await buildLessonList(
+        repo,
+        form.children.map((c) => c.itemId),
+        { courseSegs: null, links: [] },
+      );
       fromLedger.value = true;
       actions.value = ledgerActionsOf(form.type, row.itemId, row.state, row.localOnly);
       canEdit.value = actions.value.edit;
@@ -157,31 +145,7 @@ onLoad(async (query) => {
 
     const rows = childrenRowsOf(segs);
     const links = await repo.listTagLinks();
-    const acc: LessonVM[] = [];
-    for (let i = 0; i < rows.length; i++) {
-      const lid = rows[i]!.text;
-      const lrow = await repo.getItem(lid);
-      const lsegs = await repo.listSegments(lid);
-      const counts = childCounts(lsegs);
-      const lattrs = attrsOf(lsegs);
-      const parts: string[] = [];
-      for (const k of ['article', 'quiz', 'video', 'audio']) {
-        const n = counts[k] ?? 0;
-        if (n > 0) parts.push(`${KIND_LABEL[k]} ${n}`);
-      }
-      if (lattrs.attachments.length > 0) parts.push(`附件 ${lattrs.attachments.length}`);
-      if (lattrs.duration > 0) parts.push(`约 ${Math.round(lattrs.duration / 60)} 分钟`);
-      // 位次由 seq 决定：空课时与未同步都照占一行，不吃掉后面课时的序号
-      const sub = !lrow ? '本地未同步（点开按 id 直接查）' : parts.length === 0 ? '空课时' : parts.join(' · ');
-      acc.push({
-        itemId: lid,
-        no: lessonNo(segs, lid) || i + 1,
-        title: lrow?.title || lid,
-        sub,
-        tags: tagsOf(links, lid),
-      });
-    }
-    lessons.value = acc;
+    lessons.value = await buildLessonList(repo, rows.map((r) => r.text), { courseSegs: segs, links });
 
     const all = await repo.listItems();
     untagged.value = new Set(untaggedTargets(all, links));
