@@ -179,7 +179,7 @@ import { BADGE_WORDS, BADGE_WORDS_AUTHOR, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, 
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
 import { myIdentityId, roster } from '../../core/contribution';
 import { loadContainerForm, saveContainer, startNewLesson, uploadAndStoreBlob, type ContainerForm } from '../../core/course-edit';
-import { recordEditFailure } from '../../core/editlog';
+import { recordEditFailure, type EditStage } from '../../core/editlog';
 import { renderMarkdown } from '../../core/markdown';
 import {
   COLOR_BUTTONS,
@@ -339,10 +339,16 @@ function titleColorLabel(c: string): string {
 }
 
 /** 失败落本地日志（`workDir/edit-surface.log`）；取消不落，日志写失败静默不影响主流程。 */
-async function logFail(stage: 'pick' | 'upload', e: unknown) {
+async function logFail(stage: EditStage, e: unknown) {
   if (!ctx) return;
   // 适配器在 `ctx.opts.adapters`（`AppContext` 没有 `adapters`）——写错会二次抛错掩码真实失败（册子 #61 §3）
   await recordEditFailure(ctx.opts.adapters.fs, ctx.opts.workDir, stage, String((e as Error)?.message ?? e));
+}
+
+/** 提交失败现场（册子 #63 §4.2.2）：手里已是字符串文案，直接落 `submit` 阶段。 */
+async function logSubmit(msg: string) {
+  if (!ctx) return;
+  await recordEditFailure(ctx.opts.adapters.fs, ctx.opts.workDir, 'submit', msg);
 }
 
 /** 选文件（取消 → null）；pick 阶段失败落日志并原样抛出。 */
@@ -486,8 +492,10 @@ async function submit() {
       return;
     }
     notice.value = out.message;
+    await logSubmit(out.message);
   } catch (e) {
     error.value = (e as Error).message;
+    await logSubmit(error.value);
   } finally {
     busy.value = false;
   }

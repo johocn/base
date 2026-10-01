@@ -39,14 +39,16 @@ describe('editlog：追加失败现场', () => {
     expect(Number.isNaN(Date.parse(row.at))).toBe(false);
   });
 
-  it('两次失败追加而非覆盖', async () => {
+  it('三次失败追加而非覆盖（含 submit 阶段，册子 #63 §4.2.2）', async () => {
     const fs = new MemoryFs();
     await recordEditFailure(fs, WORK_DIR, 'read', '读文件失败');
     await recordEditFailure(fs, WORK_DIR, 'upload', '上传失败');
+    await recordEditFailure(fs, WORK_DIR, 'submit', '条目 id 不合法（item_id_invalid）');
     const lines = logText(fs).split('\n').filter((l) => l !== '');
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(3);
     expect((JSON.parse(lines[0]!) as { stage: string }).stage).toBe('read');
     expect((JSON.parse(lines[1]!) as { stage: string }).stage).toBe('upload');
+    expect((JSON.parse(lines[2]!) as { stage: string }).stage).toBe('submit');
   });
 
   it('超上限从头部截断：文件 ≤ 64 KiB 且最新一行仍在', async () => {

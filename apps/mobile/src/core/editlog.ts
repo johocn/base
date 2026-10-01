@@ -16,8 +16,8 @@ export const EDIT_LOG_NAME = 'edit-surface.log';
 /** 上限 64 KiB：超出从头部截断，保留最新现场。 */
 export const EDIT_LOG_MAX_BYTES = 64 * 1024;
 
-/** 编辑面三个失败阶段。 */
-export type EditStage = 'pick' | 'read' | 'upload';
+/** 编辑面四个失败阶段（`submit` 为册子 #63 §4.2.2 新增）。 */
+export type EditStage = 'pick' | 'read' | 'upload' | 'submit';
 
 /** 追加一条失败日志；任何 IO 失败都静默（日志本身不得影响主流程）。 */
 export async function recordEditFailure(
