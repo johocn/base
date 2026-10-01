@@ -2,8 +2,9 @@
 import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReader, SqliteConnection, StorageAdapter } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TagLinkRow, TombstoneRow } from './types';
+import type { ArticleRow, CheckinDayRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, ProgressRow, QuizRow, SegmentRow, TagLinkRow, TombstoneRow } from './types';
 import type { LocalRepo, PackApply } from './repo';
+import { progressWins } from './progress';
 
 export class MemoryFs implements FsAdapter {
   files = new Map<string, Uint8Array>();
@@ -280,6 +281,43 @@ export class MemoryRepo implements LocalRepo {
   }
   async removeSubmission(itemId: string): Promise<void> {
     this.submissions.delete(itemId);
+  }
+
+  progress = new Map<string, ProgressRow>(); // itemId -> row
+  checkinDays = new Map<string, CheckinDayRow>(); // day -> row
+
+  async saveProgressLocal(row: ProgressRow): Promise<void> {
+    const cur = this.progress.get(row.itemId);
+    // 与 SqlRepo 同一守卫：赢才写进度行；打卡与守卫无关，永远写
+    if (cur === undefined || progressWins(row.updatedAt, row.eventId, cur.updatedAt, cur.eventId)) {
+      this.progress.set(row.itemId, { ...row, dirty: true });
+    }
+    if (!this.checkinDays.has(row.day)) {
+      this.checkinDays.set(row.day, { day: row.day, firstEventId: row.eventId, createdAt: row.updatedAt });
+    }
+  }
+
+  async mergeProgress(rows: ProgressRow[], days: CheckinDayRow[]): Promise<void> {
+    for (const row of rows) {
+      const cur = this.progress.get(row.itemId);
+      if (cur !== undefined && !progressWins(row.updatedAt, row.eventId, cur.updatedAt, cur.eventId)) continue;
+      this.progress.set(row.itemId, { ...row, dirty: false });
+    }
+    for (const d of days) {
+      if (!this.checkinDays.has(d.day)) this.checkinDays.set(d.day, { ...d });
+    }
+  }
+
+  async listProgress(): Promise<ProgressRow[]> {
+    return [...this.progress.values()].sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0));
+  }
+
+  async getProgress(itemId: string): Promise<ProgressRow | null> {
+    return this.progress.get(itemId) ?? null;
+  }
+
+  async listCheckinDays(): Promise<CheckinDayRow[]> {
+    return [...this.checkinDays.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
   }
 }
 

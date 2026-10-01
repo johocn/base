@@ -178,3 +178,37 @@ export interface DmKeyRow {
   /** 建立会话时刻 ISO8601（列表排序键） */
   createdAt: string;
 }
+
+/**
+ * 本地学习进度（`progress` 表，#8 册子 §5.1）。
+ * **一个 `item_id` 一条**（本地单人库故无 `id` 列），值是该条目所有 `progress.v1` 事件经
+ * §3.4 LWW 排序后的胜者。`updatedAt` 存**胜者事件的 `created_at`**（毫秒），
+ * 不是「本机写入时刻」——否则跨设备比较无意义。
+ */
+export interface ProgressRow {
+  itemId: string;
+  /** 量纲按条目 type 分派（#8 册子 §3.2） */
+  position: number;
+  /** 客户端判定并显式上报；节点只信该值，不反推 */
+  done: boolean;
+  /** 客户端本地时区的 `YYYY-MM-DD` */
+  day: string;
+  /** 胜者事件的 `created_at`（毫秒） */
+  updatedAt: number;
+  /** 胜者事件的 `event_id`（32 hex）；LWW 平局判据要求本地必须持有它 */
+  eventId: string;
+  /** true = 本地新变（尚未确认投递）；远程合并写回 false */
+  dirty: boolean;
+}
+
+/**
+ * 打卡日集合（`checkin_days` 表，#8 册子 §5.1）。与节点侧同构、insert-or-ignore 保留首次。
+ * **不能从 `progress` 派生**：后者是 LWW 寄存器，只留最后一次的 `day`，会把历史打卡日冲掉。
+ */
+export interface CheckinDayRow {
+  day: string;
+  /** 该日首次打卡事件的 `event_id`（32 hex） */
+  firstEventId: string;
+  /** 该日首次打卡事件的 `created_at`（毫秒） */
+  createdAt: number;
+}

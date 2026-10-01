@@ -1,7 +1,8 @@
 import type { LocalDb } from '../platform/adapter';
 import { computeStats, favoriteNext, readAtNext } from './state';
+import { progressWins } from './progress';
 import { SEARCH_SQL, searchPattern } from './search';
-import type { ArticleRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, QuizRow, SegmentRow, TagLinkRow, TombstoneRow } from './types';
+import type { ArticleRow, CheckinDayRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, ProgressRow, QuizRow, SegmentRow, TagLinkRow, TombstoneRow } from './types';
 
 export interface PackApply {
   version: number;
@@ -94,6 +95,23 @@ export interface LocalRepo {
   markSubmissionFailed(itemId: string, reason: string): Promise<void>;
   /** 删一行：用户对 `pending` / `failed` 项点「删除」。`sent` 不可删（它是台账本体）。 */
   removeSubmission(itemId: string): Promise<void>;
+  /**
+   * 写一条本地进度（#8 册子 §5.2）：同一事务 upsert `progress`（`dirty=1`）+ insert-or-ignore `checkin_days`。
+   * upsert 受 §3.4 LWW 守卫（`progressWins`）；**打卡不受守卫**——打卡是**事件级**语义，
+   * 即使进度行输了 LWW，该事件带来的打卡日照样写（否则同一 issue 的形态会丢打卡）。
+   */
+  saveProgressLocal(row: ProgressRow): Promise<void>;
+  /**
+   * 把 `GET /v1/me` 拉回的远程行按 §3.4 同一比较函数合并进本地（#8 册子 §5.5）。
+   * 合并写入的 `dirty` 固定 0（已同步）；无一行变更时**不写库**。
+   */
+  mergeProgress(rows: ProgressRow[], days: CheckinDayRow[]): Promise<void>;
+  /** 全部进度行，按 `item_id ASC`（页面渲染只读本地表）。 */
+  listProgress(): Promise<ProgressRow[]>;
+  /** 读一条；不存在返回 null（续位用）。 */
+  getProgress(itemId: string): Promise<ProgressRow | null>;
+  /** 全部打卡日，按 `day ASC`（连续天数回溯用）。 */
+  listCheckinDays(): Promise<CheckinDayRow[]>;
 }
 
 /** 本地库建表语句（P0 只建用得到的 5 张表）。 */
@@ -142,6 +160,11 @@ export const SCHEMA_SQL: string[] = [
      tag_id TEXT NOT NULL, target_id TEXT NOT NULL, kind TEXT NOT NULL,
      PRIMARY KEY(tag_id, target_id))`,
   `CREATE INDEX IF NOT EXISTS idx_tag_links_target ON tag_links(target_id)`,
+  `CREATE TABLE IF NOT EXISTS progress(
+     item_id TEXT PRIMARY KEY, position INTEGER NOT NULL, done INTEGER NOT NULL,
+     day TEXT NOT NULL, updated_at INTEGER NOT NULL, event_id TEXT NOT NULL, dirty INTEGER NOT NULL DEFAULT 0)`,
+  `CREATE TABLE IF NOT EXISTS checkin_days(
+     day TEXT PRIMARY KEY, first_event_id TEXT NOT NULL, created_at INTEGER NOT NULL)`,
 ];
 
 /**
@@ -169,6 +192,26 @@ export async function ensureSubmissionColumns(db: LocalDb): Promise<void> {
   }
   if (!cols.has('segments_json')) {
     await db.execute(`ALTER TABLE my_submissions ADD COLUMN segments_json TEXT NOT NULL DEFAULT ''`);
+  }
+}
+
+/**
+ * 存量库幂等补列（`progress` 表，#8 册子 §5.1）。
+ * 总纲 §9 早已预留 `progress(item_id, position, updated_at, dirty)` 四列形态，
+ * 本册补 `done` / `day` / `event_id` 三列；`CREATE TABLE IF NOT EXISTS` 对既有表不补列，故沿用同款手法。
+ * 表本身不存在（`PRAGMA table_info` 返回空）说明是首启前的空库，直接跳过，等 DDL 建全。
+ */
+export async function ensureProgressColumns(db: LocalDb): Promise<void> {
+  const cols = new Set((await db.select(`PRAGMA table_info(progress)`)).map((r) => String(r.name)));
+  if (cols.size === 0) return;
+  if (!cols.has('done')) {
+    await db.execute(`ALTER TABLE progress ADD COLUMN done INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!cols.has('day')) {
+    await db.execute(`ALTER TABLE progress ADD COLUMN day TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!cols.has('event_id')) {
+    await db.execute(`ALTER TABLE progress ADD COLUMN event_id TEXT NOT NULL DEFAULT ''`);
   }
 }
 
@@ -551,6 +594,68 @@ export class SqlRepo implements LocalRepo {
   async removeSubmission(itemId: string): Promise<void> {
     await this.db.execute(`DELETE FROM my_submissions WHERE item_id=?`, [itemId]);
   }
+
+  async saveProgressLocal(row: ProgressRow): Promise<void> {
+    // LocalDb.tx 只写不读 ⇒ 先单独读当前行，再在一个事务里落下两条语句。
+    const cur = await this.getProgress(row.itemId);
+    const stmts: Array<{ sql: string; params?: unknown[] }> = [];
+    if (cur === null || progressWins(row.updatedAt, row.eventId, cur.updatedAt, cur.eventId)) {
+      stmts.push({
+        sql: `INSERT INTO progress(item_id,position,done,day,updated_at,event_id,dirty) VALUES(?,?,?,?,?,?,1)
+              ON CONFLICT(item_id) DO UPDATE SET position=excluded.position,done=excluded.done,
+                day=excluded.day,updated_at=excluded.updated_at,event_id=excluded.event_id,dirty=1`,
+        params: [row.itemId, row.position, row.done ? 1 : 0, row.day, row.updatedAt, row.eventId],
+      });
+    }
+    stmts.push({
+      sql: `INSERT INTO checkin_days(day,first_event_id,created_at) VALUES(?,?,?) ON CONFLICT(day) DO NOTHING`,
+      params: [row.day, row.eventId, row.updatedAt],
+    });
+    await this.db.tx(stmts);
+  }
+
+  async mergeProgress(rows: ProgressRow[], days: CheckinDayRow[]): Promise<void> {
+    const cur = new Map((await this.listProgress()).map((r) => [r.itemId, r]));
+    const stmts: Array<{ sql: string; params?: unknown[] }> = [];
+    for (const row of rows) {
+      const prev = cur.get(row.itemId);
+      if (prev !== undefined && !progressWins(row.updatedAt, row.eventId, prev.updatedAt, prev.eventId)) continue;
+      stmts.push({
+        sql: `INSERT INTO progress(item_id,position,done,day,updated_at,event_id,dirty) VALUES(?,?,?,?,?,?,0)
+              ON CONFLICT(item_id) DO UPDATE SET position=excluded.position,done=excluded.done,
+                day=excluded.day,updated_at=excluded.updated_at,event_id=excluded.event_id,dirty=0`,
+        params: [row.itemId, row.position, row.done ? 1 : 0, row.day, row.updatedAt, row.eventId],
+      });
+    }
+    for (const d of days) {
+      stmts.push({
+        sql: `INSERT INTO checkin_days(day,first_event_id,created_at) VALUES(?,?,?) ON CONFLICT(day) DO NOTHING`,
+        params: [d.day, d.firstEventId, d.createdAt],
+      });
+    }
+    if (stmts.length === 0) return;
+    await this.db.tx(stmts);
+  }
+
+  async listProgress(): Promise<ProgressRow[]> {
+    const rows = await this.db.select(
+      `SELECT item_id,position,done,day,updated_at,event_id,dirty FROM progress ORDER BY item_id ASC`,
+    );
+    return rows.map(toProgressRow);
+  }
+
+  async getProgress(itemId: string): Promise<ProgressRow | null> {
+    const rows = await this.db.select(
+      `SELECT item_id,position,done,day,updated_at,event_id,dirty FROM progress WHERE item_id=?`,
+      [itemId],
+    );
+    return rows.length > 0 ? toProgressRow(rows[0]) : null;
+  }
+
+  async listCheckinDays(): Promise<CheckinDayRow[]> {
+    const rows = await this.db.select(`SELECT day,first_event_id,created_at FROM checkin_days ORDER BY day ASC`);
+    return rows.map(toCheckinDayRow);
+  }
 }
 
 function toNullableString(v: unknown): string | null {
@@ -663,5 +768,25 @@ function toMySubmissionRow(r: Record<string, unknown>): MySubmissionRow {
     created: Number(r.created ?? 0),
     queuedAt: String(r.queued_at ?? ''),
     sentAt: String(r.sent_at ?? ''),
+  };
+}
+
+function toProgressRow(r: Record<string, unknown>): ProgressRow {
+  return {
+    itemId: String(r.item_id),
+    position: Number(r.position ?? 0),
+    done: Number(r.done ?? 0) !== 0,
+    day: String(r.day ?? ''),
+    updatedAt: Number(r.updated_at ?? 0),
+    eventId: String(r.event_id ?? ''),
+    dirty: Number(r.dirty ?? 0) !== 0,
+  };
+}
+
+function toCheckinDayRow(r: Record<string, unknown>): CheckinDayRow {
+  return {
+    day: String(r.day),
+    firstEventId: String(r.first_event_id ?? ''),
+    createdAt: Number(r.created_at ?? 0),
   };
 }
