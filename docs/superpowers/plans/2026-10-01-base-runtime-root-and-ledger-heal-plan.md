@@ -1008,4 +1008,26 @@
 
 **版本：** `apps/mobile/src/manifest.json` → `0.20.2` / `27`。
 
-**发布证据（四步 + 线上核对）：**（待回填）
+**发布证据（`0.20.2`/`27`，2026-10-01 21:55–22:00）**
+
+| 步骤 | 证据 |
+| --- | --- |
+| ① 云打包 | `D:\HBuilderX\cli.exe pack --project e:\code\base\apps\mobile --platform android --android.packagename uni.app.UNI936A667 --android.androidpacktype 3`；21:55:23 提交 → **21:56:49 打包成功**（编译器 5.26 vue3）；日志含 1 条隐私合规 Warning（历史版本同样存在、不阻塞） |
+| ② 上传 | APK 落 `apps/mobile/dist/release/apk/base-0.20.2.apk` = **27449360 字节 / sha256 `ccf6f8635392123e97c719f0fd76d729204925a343d372c371474e3997c8b2d8`**；**包内**核对：`assets/apps/__UNI__936A667/www/manifest.json` 的 `"version":{"code":"27","name":"0.20.2"}`，`AndroidManifest.xml` 字符串池含 `0.20.2`、`0.20.1` / `0.20.0` 均 **0 命中**；证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.6.0–0.20.1 **逐字一致 ⇒ 可覆盖安装**）；`scp` 至 `/opt/appdl/base-0.20.2.apk`，**远端 sha256 逐字一致**（27449360 字节） |
+| ③ 落地页 | `/opt/appdl/index.html` **整页重写**改指 `./base-0.20.2.apk`（`GET /dl/` 只出现 `base-0.20.2.apk`、`0.20.1` 命中 **0**、`0.20.2` 命中 2）；旧页备份 `/opt/appdl/index.html.bak-0.20.1` |
+| ④ 签发 | `set -a; . /opt/base/base.secret.env; set +a; /opt/base/based release -version-name 0.20.2 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.20.2.apk -apk-file /opt/appdl/base-0.20.2.apk -notes 运行路径落盘根_存量台账自愈_传图修复_课时400取证 -out /opt/base-cache/data/release.json` → `apk_size=27449360`、`apk_sha256=ccf6f863…`、`public_key 48c33db9cf859e107fe89651d15fc5faaa8b16ffbb7d4b483aa167a0cff824f4`（与 0.20.0/0.20.1 同一把源节点公钥）；`/opt/base/data/release.json` **不存在**（无游离副本） |
+
+**线上核对（公网 :80）**
+
+| 检查项 | 结果 |
+| --- | --- |
+| `GET /v1/release` | `200`；`version_name=0.20.2`、`min_version_name=0.8.0`、`apk_size=27449360`、`apk_sha256=ccf6f863…`（与本地逐字一致）、`apk_url=http://118.190.217.242/dl/base-0.20.2.apk`、`notes=运行路径落盘根_…`、`issuer=base-node-1`、`signature` 已签发（128 hex） |
+| `HEAD /dl/base-0.20.2.apk` | `200` / `application/octet-stream` / `Content-Length: 27449360`（与本地一致） |
+| `GET /dl/` 落地页 | `200`；只出现 `base-0.20.2.apk`，`0.20.1` 残留 **0** |
+| 只读探活（无回归） | `/v1/comment` = `200`、`/v1/proposal` = `200`、`/v1/directory` = `200`、`/v1/catalog` = `200`、`POST /v1/blob`（空体）= `400`、`/v1/blobzzz` = `404` |
+| 服务状态 | `base` / `base-cache` / `nginx` 均 `active`（本册零节点改动，**未**交叉编译、**未**替换节点二进制） |
+
+**执行期偏差登记（2 条，均不影响交付）**
+
+1. **① 云打包产物未自动落盘**：`cli pack` 只回打印一条临时下载地址（`https://app.liuyingyong.cn/build/download/ca849380-…`，限 5 次），`dist/release/apk/` 下未生成 `base-0.20.2.apk`；已按该地址下载并落到标准路径后核对（字节数 / sha256 / 包内版本 / 证书 SHA1 全部通过）。
+2. **计划 Step 5.5 的 `GET /` 口径不实**：实测 `GET /` 是**节点自带的内容目录页**（Go 服务渲染，非下载页），下载落地页在 **`GET /dl/`**；已按 `/dl/` 完成「改指 `0.20.2`、无 `0.20.1` 残留」核对，`GET /` 的 `200` 一并记录。
