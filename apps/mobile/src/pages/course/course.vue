@@ -33,6 +33,7 @@
               <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
             </view>
             <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
+            <text v-if="completionText(it.itemId)" class="meta">{{ completionText(it.itemId) }}</text>
           </view>
         </block>
       </block>
@@ -43,6 +44,7 @@
           <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
         </view>
         <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
+        <text v-if="completionText(it.itemId)" class="meta">{{ completionText(it.itemId) }}</text>
       </view>
       <text v-if="standalone.length > 0" class="group">独立内容</text>
       <view v-for="it in standalone" :key="it.itemId" class="item" @click="openStandalone(it)">
@@ -61,6 +63,7 @@
           <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
         </view>
         <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
+        <text v-if="completionText(it.itemId)" class="meta">{{ completionText(it.itemId) }}</text>
       </view>
       <text v-if="standalone.length > 0" class="group">未归类</text>
       <view v-for="it in standalone" :key="it.itemId" class="item" @click="openStandalone(it)">
@@ -79,12 +82,14 @@ import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
 import { syncOnce } from '../../core/sync';
-import { groupCoursesByCategory, splitCourses } from '../../core/course-tree';
+import { childrenOf, groupCoursesByCategory, splitCourses } from '../../core/course-tree';
 import { attrsOf } from '../../core/container-view';
 import { buildMyCreatedView, type MyCreatedRow, type MyCreatedType } from '../../core/my-created';
-import type { ItemRow, SegmentRow } from '../../core/types';
+import type { ItemRow, ProgressRow, SegmentRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 import { canSync } from '../../core/selfcheck';
+import type { LocalRepo } from '../../core/repo';
+import { lessonCompleted } from '../../core/progress';
 
 interface CategoryGroupVM {
   slug: string;
@@ -100,6 +105,8 @@ const collapsed = ref<Record<string, boolean>>({});
 const myCreated = ref<MyCreatedRow[]>([]);
 // 图章与标题色（册子 #53 §2.5）：只读派生映射，仅供展示；无属性行则空数组 / 空串
 const marksByItemId = ref(new Map<string, { badge: string[]; titleColor: string }>());
+/** 每门课的完成度（已学 a / b 讲）；分母为 0 的课**不入 Map** ⇒ 模板不显示该行（#8 册子 §6） */
+const completionByCourse = ref(new Map<string, { done: number; total: number }>());
 const total = computed(
   () => courses.value.length + groups.value.reduce((n, g) => n + g.courses.length, 0) + standalone.value.length,
 );
@@ -107,6 +114,42 @@ const error = ref('');
 const tip = ref('');
 const busy = ref(false);
 const syncBlocked = ref(false);
+
+/**
+ * 一门课的完成度（#8 册子 §6）。分母 = **可达** lesson 数，分子 = 其中「可达叶子非空且全 done」的 lesson 数。
+ * 未下载的子条目（不在本地 `items` 里）**不计入分母**；分母为 0 时由调用方不显示该行（不是显示 0 / 0）。
+ * 只用于展示：**不产生事件、不落表**。
+ */
+async function courseCompletion(
+  courseId: string,
+  repo: LocalRepo,
+  byId: Map<string, ItemRow>,
+  progressByItem: Map<string, ProgressRow>,
+): Promise<{ done: number; total: number }> {
+  let done = 0;
+  let total = 0;
+  for (const lessonId of childrenOf(await repo.listSegments(courseId))) {
+    if (!byId.has(lessonId)) continue;
+    const leafDone: boolean[] = [];
+    for (const leafId of childrenOf(await repo.listSegments(lessonId))) {
+      const leaf = byId.get(leafId);
+      if (!leaf) continue;
+      // 叶子载体只有这三类才有 position / done（#8 册子 §3.2）
+      if (leaf.type !== 'article' && leaf.type !== 'video' && leaf.type !== 'quiz') continue;
+      leafDone.push(progressByItem.get(leafId)?.done === true);
+    }
+    if (leafDone.length === 0) continue;
+    total += 1;
+    if (lessonCompleted(leafDone)) done += 1;
+  }
+  return { done, total };
+}
+
+/** 「已学 a / b 讲」；无数据（分母 0）返回空串 ⇒ 模板不显示该行。 */
+function completionText(courseId: string): string {
+  const c = completionByCourse.value.get(courseId);
+  return c ? `已学 ${c.done} / ${c.total} 讲` : '';
+}
 
 async function load() {
   try {
@@ -136,6 +179,17 @@ async function load() {
       marks.set(id, { badge: a.badge, titleColor: a.titleColor });
     }
     marksByItemId.value = marks;
+
+    // 每门课的完成度（#8 册子 §6）：只读派生，复用上面已建的 segsByItemId；零写入。
+    const byId = new Map(active.map((i) => [i.itemId, i]));
+    const progressByItem = new Map((await repo.listProgress()).map((r) => [r.itemId, r]));
+    const completion = new Map<string, { done: number; total: number }>();
+    for (const it of active) {
+      if (it.type !== 'course') continue;
+      const c = await courseCompletion(it.itemId, repo, byId, progressByItem);
+      if (c.total > 0) completion.set(it.itemId, c);
+    }
+    completionByCourse.value = completion;
 
     // 独立内容 = 独立文章 article/<aid> ∪ 独立题库 quiz/<qid>（册子 §5.2）
     standalone.value = [
