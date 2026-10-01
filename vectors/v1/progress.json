@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "article": [
+    {"name": "起点", "fraction": 0, "want": 0},
+    {"name": "半程", "fraction": 0.5, "want": 500},
+    {"name": "读了 64%", "fraction": 0.64, "want": 640},
+    {"name": "末尾", "fraction": 1, "want": 1000},
+    {"name": "过 1 夹到 1000", "fraction": 1.5, "want": 1000},
+    {"name": "负数归零", "fraction": -0.2, "want": 0},
+    {"name": "四舍五入 123.4 → 123", "fraction": 0.1234, "want": 123},
+    {"name": "临近末尾进位 999.9 → 1000", "fraction": 0.9999, "want": 1000}
+  ],
+  "video": [
+    {"name": "起点", "seconds": 0, "want": 0},
+    {"name": "整数秒", "seconds": 42, "want": 42},
+    {"name": "小数向下取整", "seconds": 42.9, "want": 42},
+    {"name": "负数归零", "seconds": -3, "want": 0}
+  ],
+  "quiz": [
+    {"name": "未作答", "answered": 0, "total": 10, "want": 0},
+    {"name": "答 3 题", "answered": 3, "total": 10, "want": 3},
+    {"name": "全答完", "answered": 10, "total": 10, "want": 10},
+    {"name": "超出总题数夹到 total", "answered": 12, "total": 10, "want": 10},
+    {"name": "总题数为 0 归零", "answered": 3, "total": 0, "want": 0}
+  ],
+  "lww": [
+    {"name": "更晚的 created_at 胜", "createdAt": 200, "eventId": "00000000000000000000000000000002", "prevCreatedAt": 100, "prevEventId": "00000000000000000000000000000001", "want": true},
+    {"name": "更早的 created_at 负", "createdAt": 100, "eventId": "00000000000000000000000000000001", "prevCreatedAt": 200, "prevEventId": "00000000000000000000000000000002", "want": false},
+    {"name": "平局取 event_id 升序（更小者胜）", "createdAt": 100, "eventId": "00000000000000000000000000000001", "prevCreatedAt": 100, "prevEventId": "00000000000000000000000000000002", "want": true},
+    {"name": "平局取 event_id 升序（更大者负）", "createdAt": 100, "eventId": "0000000000000000000000000000000f", "prevCreatedAt": 100, "prevEventId": "00000000000000000000000000000001", "want": false}
+  ]
+}
