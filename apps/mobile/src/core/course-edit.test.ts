@@ -1,7 +1,7 @@
 import { utf8 } from '@base/protocol-ts';
 import { describe, expect, it } from 'vitest';
 
-import { attrSeqsCanonical } from './attrs';
+import { attrSeqsCanonical, segmentsContentHash } from './attrs';
 import {
   buildContainerSegments,
   emptyContainerForm,
@@ -9,6 +9,7 @@ import {
   saveContainer,
   startNewCourse,
   startNewLesson,
+  toLocalContainer,
   type ContainerForm,
 } from './course-edit';
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
@@ -199,5 +200,47 @@ describe('startNewCourse / startNewLesson / saveContainer', () => {
     const wire = JSON.parse(decodeUtf8(http.posted.at(-1)!.body)) as { segments: unknown[] };
     expect(wire.segments).toHaveLength(10);
     expect((await repo.getSubmission('course/c1/lesson/l1'))!.segmentsJson).toContain('"seq":-1');
+  });
+});
+
+describe('toLocalContainer：表单 → 本地乐观条目（册子 #56 §2.1）', () => {
+  it('items 输入为 source/rev/state 之外的四字段，content_hash 等于现行 segmentsContentHash', () => {
+    const { item, segments } = toLocalContainer(lessonForm(), '2026-10-01T00:00:00Z');
+    expect(item).toEqual({
+      itemId: 'course/c1/lesson/l1', type: 'lesson', title: '第一讲',
+      contentHash: segmentsContentHash(segments), updatedAt: '2026-10-01T00:00:00Z',
+    });
+    expect(item.contentHash).not.toBe('');
+    expect(segments).toEqual(buildContainerSegments(lessonForm()));
+  });
+});
+
+describe('saveContainer：本地乐观落库 + 投稿（册子 #56 §2.1）', () => {
+  it('保存后本机立即可读（items.source=local，segments 落库），台账照旧 sent', async () => {
+    const http = new FakeHttp();
+    const repo = new MemoryRepo();
+    const adapters = fakeAdapters(http, new MemoryFs(), new FakePackReader());
+    const o: SubmitOptions = { adapters, repo, nodeBaseUrl: BASE };
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'course/c1/lesson/l1', created: true }));
+
+    const out = await saveContainer(o, lessonForm());
+    expect(out.ledgerState).toBe('sent');
+    expect((await repo.getItem('course/c1/lesson/l1'))!.source).toBe('local');
+    expect((await repo.getItem('course/c1/lesson/l1'))!.title).toBe('第一讲');
+    expect((await repo.listSegments('course/c1/lesson/l1')).map((s) => s.kind)).toEqual(
+      [...buildContainerSegments(lessonForm())].sort((a, b) => a.seq - b.seq).map((s) => s.kind),
+    );
+  });
+
+  it('未配置节点（enqueueOrSend 抛错）也先落本地乐观条目', async () => {
+    const repo = new MemoryRepo();
+    const o: SubmitOptions = {
+      adapters: fakeAdapters(new FakeHttp(), new MemoryFs(), new FakePackReader()),
+      repo,
+      nodeBaseUrl: '',
+    };
+    await expect(saveContainer(o, lessonForm())).rejects.toThrow('未配置节点地址，无法投稿');
+    expect((await repo.getItem('course/c1/lesson/l1'))!.source).toBe('local');
   });
 });

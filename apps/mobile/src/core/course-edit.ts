@@ -19,12 +19,13 @@ import {
   DIGEST_KIND,
   assignAttrSeqs,
   isTitleColor,
+  segmentsContentHash,
   serializeBadge,
   type AttrLine,
   type SubmitSegmentRow,
 } from './attrs';
 import { attrsOf, childrenRowsOf, digestOf } from './container-view';
-import type { LocalRepo } from './repo';
+import type { LocalContainerInput, LocalRepo } from './repo';
 import {
   enqueueOrSend,
   newItemID,
@@ -132,6 +133,28 @@ export function buildContainerSegments(form: ContainerForm): SubmitSegmentRow[] 
   return out;
 }
 
+/**
+ * 容器表单 → 本地乐观条目 + 行集（册子 #56 §2.1）：`content_hash` 用现行
+ * `segmentsContentHash(orderedRows)` 算（与节点 `store.SegmentsContentHash` 逐字节同构）。
+ * `saveContainer` 与 `core/creator-migrate.ts` 共用这一出口，避免两处各算一份哈希。
+ */
+export function toLocalContainer(
+  form: ContainerForm,
+  updatedAt: string,
+): { item: LocalContainerInput; segments: SubmitSegmentRow[] } {
+  const segments = buildContainerSegments(form);
+  return {
+    item: {
+      itemId: form.itemId,
+      type: form.type,
+      title: form.title.trim(),
+      contentHash: segmentsContentHash(segments),
+      updatedAt,
+    },
+    segments,
+  };
+}
+
 /** 从本地包回填表单：标题取 `items`，其余取 `segments` 的三区间。条目不存在也得空表单，不抛。 */
 export async function loadContainerForm(repo: LocalRepo, itemId: string, type: ContainerType): Promise<ContainerForm> {
   const item = await repo.getItem(itemId);
@@ -158,13 +181,16 @@ export async function loadContainerForm(repo: LocalRepo, itemId: string, type: C
  * 送达 → 台账 `sent`；断网 / 429 / 5xx → `pending` 待补发；其余 4xx → `failed`。
  * 三种结果都会留台账行（「我的条目」的列表本体）。
  */
-export function saveContainer(o: SubmitOptions, form: ContainerForm): Promise<SubmitOutcome> {
+export async function saveContainer(o: SubmitOptions, form: ContainerForm): Promise<SubmitOutcome> {
+  const { item, segments } = toLocalContainer(form, new Date().toISOString());
+  // 先本地乐观落库（册子 #56 §2.1）：本机立刻可读、可点开、可编辑，不依赖节点重建内容包。
+  await o.repo.upsertLocalContainer(item, segments);
   return enqueueOrSend(o, {
     itemId: form.itemId,
     type: form.type,
     title: form.title,
     bodyMd: '',
     questionJson: '',
-    segments: buildContainerSegments(form),
+    segments,
   });
 }
