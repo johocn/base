@@ -18,6 +18,9 @@ import (
 
 const (
 	metaContentVersion = "content_version"
+	// metaDirectoryVersion 是目录版本水位（册子 #58 §4.1）：任何目录变更在同一事务内自增，
+	// 客户端携旧值拉取时未变即短路，与 content_version 同构。
+	metaDirectoryVersion = "directory_version"
 )
 
 // Store 是内容库（SQLite + 块文件目录）访问层。

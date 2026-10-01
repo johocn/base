@@ -251,6 +251,21 @@ var schemaStatements = []string{
 		created_at     INTEGER NOT NULL,
 		PRIMARY KEY(id, day)
 	)`,
+
+	// directory_terms：节点级词条目录（册子 #58 §2.1）。**节点侧独立数据面**——
+	// 不新增 items 行、不进 segments、不进内容包。主键 (kind, term_key)。
+	// 新表（无存量列演进问题），故直接进 schemaStatements，不入 ColumnMigrations。
+	`CREATE TABLE IF NOT EXISTS directory_terms(
+		kind            TEXT NOT NULL,
+		term_key        TEXT NOT NULL,
+		display_name    TEXT NOT NULL,
+		state           TEXT NOT NULL,
+		first_author_id TEXT NOT NULL DEFAULT '',
+		created_at      TEXT NOT NULL,
+		updated_at      TEXT NOT NULL,
+		PRIMARY KEY(kind, term_key)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_directory_terms_state ON directory_terms(kind, state)`,
 }
 
 // eventColumnMigrations 是 events 表的**后加列**（B 阶段引入）。
