@@ -3,6 +3,7 @@
     <view class="bar">
       <text class="title">课程</text>
       <button size="mini" @click="createCourse">新建课程</button>
+      <button size="mini" @click="publishArticle">发表文章</button>
       <button size="mini" :disabled="busy || syncBlocked" @click="doSync">{{ busy ? '同步中…' : '同步' }}</button>
     </view>
     <view class="searchbox" @click="openSearch">
@@ -302,6 +303,11 @@ async function doSync() {
 
 function openSearch() {
   uni.navigateTo({ url: '/pages/search/search' });
+}
+
+/** 发表文章入口（册子 #65 §4）：复用既有投稿页（内部已是「文章 / 题库」双 tab），零新页面。 */
+function publishArticle() {
+  uni.navigateTo({ url: '/pages/submit/submit' });
 }
 
 function createCourse() {
