@@ -1428,4 +1428,49 @@
 
 ## 执行实况
 
-（执行时逐 Task 回填：commit 哈希、用例数、门禁原文、APK 字节数 / sha256 / 证书 SHA1、线上核对原文、执行期更正。**待填**。）
+（执行时逐 Task 回填：本册 Task 1–10 已全部落地；Task 10 的前半段（版本号 + 文档登记核对 + 发布前门禁 + 本文回填 + commit/push）已完成，**Step 6 四步发布由后续单独处理**。）
+
+### 一、基准与交付
+
+- 起点 commit：`0a5e651`（`docs(plan): 出 #62 容器编辑与失败行出路实施计划`，即 Task 1 之前的最后一次提交）。
+- Task 1–9 交付 commit：`79f528a`（`chore: mobile 门禁补 vue-tsc`）。
+- Task 10 交付 commit：本次 `chore: 版本 0.20.1/26 并回填计划 #62 执行实况`。
+- `git diff --stat 0a5e651 HEAD`（Task 1–9 阶段实测）：**16 files changed, 797 insertions(+), 65 deletions(-)**，全部位于 `apps/mobile/` 与仓库根 `package-lock.json`，`internal/` 零改动。
+
+### 二、逐 Task 落地
+
+| Task | commit | 摘要 |
+|---|---|---|
+| 1 | `621e740` | `loadContainerForm` 下沉私有 `resolveId` 解码（先原样后 `decodeURIComponent`，命中真实 id 覆盖 `form.itemId`）；`course-edit.test.ts` 24 例绿 |
+| 2 | `6bc947c` | 新增导出 `isLegalContainerId`（段规则 `^[a-z0-9][a-z0-9-]{0,63}$` + 段结构）；同文件 26 例绿 |
+| 3 | `b185d13` | 新增导出 `PickedBytes` / `BlobStoreOptions` / `uploadAndStoreBlob`（上传 + 落 `${workDir}/blobs/<blobId>` + `addBlob('<itemId>/<slot>')`）；27 例绿 |
+| 4 | `7842a12` | `LocalRepo.removeLocalContainer` 接口 + `SqlRepo` 实现（`db.tx`，`items` 带 `source='local'` 守卫）+ `MemoryRepo` 实现；`creator-repo.test.ts` 6 例绿 |
+| 5 | `46a7b50` | `retrySubmission` + `LOCAL_ONLY_REASON`（复用既有私有 `decodeLedgerLinks`，未复刻第二份）；暂时失败不改台账状态；`submit.test.ts` 24 例绿、全量 428 例绿 |
+| 6 | `1ab0f4e` | `canRemoveMyCreated` + `ledgerActionsOf` + `LedgerActions`（`my-created.ts`）；测试新增 `listRow(out)` 复用既有 `row()` helper；`my-created.test.ts` 26 例绿 |
+| 7 | `9ef9589` | 两个编辑页：`logFail` 改 `ctx.opts.adapters.fs`、`pickFile`/`storeBlob` 拆分 + 封面 dataURL 即时预览 + 重进回显、`?rebuildFrom=` 复建分支、课时 `courseId` 先解码；全量 436 例绿、`git grep "ctx.adapters"` 无输出 |
+| 8 | `8486bc5` | 列表页删除入口改 `canRemoveMyCreated` + `removeMyCreated` 连带 `removeLocalContainer`；详情页消费 `ledgerActionsOf` + 新增 `retrySubmit`/`removeLocal`/`rebuildCourse`；436 例无回归 |
+| 9 | `79f528a` | `vue-tsc@^2.2.12` 进 devDependencies、`typecheck` 直替为 `vue-tsc --noEmit`、`tsconfig.include` 补 `src/**/*.vue`；顺修 `course.vue` 的 `TS7053`（本册改动页面内）；锁文件在**仓库根** `package-lock.json` |
+| 10 | 本次 commit | 版本号 `0.20.1`/`26`；文档登记核对（无重复、无需改动）；发布前门禁全跑；本文回填；commit + push |
+
+### 三、门禁原文（Task 10 发布前实跑）
+
+- `npx vitest run`（cwd `apps/mobile`）：`Test Files  36 passed (36)` / `Tests  436 passed (436)`，全绿。
+- `npm run build:h5`（cwd `apps/mobile`）：`编译器版本：5.26（vue3）` → `DONE  Build complete.`，成功（exit 0）。
+- `npm run build:app`（cwd `apps/mobile`）：`编译器版本：5.26（vue3）` → `DONE  Build complete.`，成功（exit 0）。
+- `npm run typecheck`（cwd `apps/mobile`）：**按预期失败**（exit 2），恰好 **2 条册外既有错误**，按决策 12 不修、如实登记——
+  1. `src/pages/governance/governance.vue(58,7): error TS2741: Property 'directory_add' is missing in type '{ remove: string; edit: string; revive: string; }' but required in type 'Record<GovernAction, string>'.`（册外既有）
+  2. `src/pages/submit/submit.vue(156,5): error TS2322: Type '"article" | "quiz" | "tag" | "course" | "lesson"' is not assignable to type '"article" | "quiz"'. Type '"tag"' is not assignable to type '"article" | "quiz"'.`（册外既有）
+- 模板 `.value` 硬检查（仓库根）：`git grep -nP '=\x22[^\x22]*\.value|\{\{[^}]*\.value' -- apps/mobile/src/pages` → **无输出**（exit 1，即通过）。
+- `git diff --stat -- internal/`（仓库根）→ **无输出**（本册零节点改动，故不交叉编译、不部署节点二进制）。
+
+### 四、执行期偏差清单
+
+1. **Task 5**：`decodeLedgerLinks` 直接复用既有私有函数（同模块可调用），**未**复刻第二份实现。
+2. **Task 6**：测试新增 `listRow(out)=buildMyCreatedView([row(out)], new Set())[0]!`，复用既有 `row()` helper，避免重复构造。
+3. **Task 9**：`vue-tsc` 锁文件落在**仓库根** `package-lock.json`（非 `apps/mobile/`）；并顺修本册改动页面 `course.vue` 的 `TS7053`。
+4. **Task 9 遗留**：另 2 条册外既有 `vue-tsc` 错误（上列 `governance.vue` / `submit.vue`）按决策 12 **不修**，仅登记。
+5. 其余 Task 均按计划原文落地，无额外偏差。
+
+### 四步发布（0.20.1/26）——待填
+
+（后续单独回填：APK 字节数 / sha256 / 证书 SHA1 / 落地页改指 / `based release` 签发 / 线上 `GET /v1/release` 与 `HEAD /dl/base-0.20.1.apk` 核对原文。）
