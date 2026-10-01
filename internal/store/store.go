@@ -162,6 +162,10 @@ func Open(dataDir string, opts ...Option) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := seedDirectoryFromExisting(db); err != nil {
+		// 不阻断 Open：目录端点开放前必须修好（册子 #58 §9 风险 1）。
+		fmt.Fprintf(os.Stderr, "store: 目录 seed 迁移失败（目录端点开放前必须修好，#58 §9 风险 1）: %v\n", err)
+	}
 	return st, nil
 }
 

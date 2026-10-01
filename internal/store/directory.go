@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -27,6 +28,9 @@ const (
 
 // TermKeyMaxRunes 是词条键的 rune 上限（册子 #58 §2.2 步 6，与 #37 标签段同上限）。
 const TermKeyMaxRunes = 64
+
+// metaDirectorySeeded 标记存量词条 seed 已完成（幂等短路键，册子 #58 §2.3）。
+const metaDirectorySeeded = "directory_seeded"
 
 // DirectoryTerm 是 directory_terms 的一行（册子 #58 §2.1）。
 type DirectoryTerm struct {
@@ -285,4 +289,159 @@ func bumpDirectoryVersionExec(e sqlExec) (int64, error) {
 		return 0, err
 	}
 	return next, nil
+}
+
+// seedDirectoryFromExisting 把存量内容里已经存在的分类/讲师/标签名称一次性登记为 approved 词条
+// （册子 #58 §2.3）。幂等：靠 meta 键 directory_seeded 短路；失败由调用方记日志、不阻断 Open。
+//
+// 采三组名称（kind, term_key 归并去重，同键只写一次）：
+//   - attr.category / attr.instructor：segments.seq<0 的属性取值，名称取 text；
+//   - 分类容器 slug：items.source='category' 的 item_id 去 'category/' 前缀；
+//   - 标签名称段：items.item_id LIKE 'tag/%' 的第二段。
+//
+// 只有确有写入（≥1 条）时才 bumpDirectoryVersionExec 一次并落 directory_seeded；
+// 空库/全新安装一条都没有则不 bump、也不落短路键，避免无谓 churn，也让后续补入的存量内容仍能被 seed。
+func seedDirectoryFromExisting(db *sql.DB) error {
+	// 幂等短路：收 *sql.DB（不能用 Store 方法），故裸 SQL 读 meta。ErrNoRows 视为未 seed。
+	var seeded string
+	err := db.QueryRow(`SELECT value FROM meta WHERE key=?`, metaDirectorySeeded).Scan(&seeded)
+	switch {
+	case err == nil:
+		if seeded != "" {
+			return nil
+		}
+	case errors.Is(err, sql.ErrNoRows):
+		// 未 seed，继续。
+	default:
+		return fmt.Errorf("store: 读 directory_seeded: %w", err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: 开启目录 seed 事务: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// (kind, term_key) → display：map 去重，保证同键只写一次。
+	seen := map[[2]string]string{}
+	add := func(kind, raw string) {
+		termKey, ok := NormalizeTermKey(raw)
+		if !ok {
+			return
+		}
+		display := CleanDisplayName(raw)
+		if display == "" {
+			return
+		}
+		key := [2]string{kind, termKey}
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = display
+	}
+
+	// 1) 属性取值的词条：segments.seq<0 的 attr.category / attr.instructor。
+	attrRows, err := tx.Query(`SELECT DISTINCT kind,text FROM segments WHERE seq<0 AND kind IN ('attr.category','attr.instructor')`)
+	if err != nil {
+		return fmt.Errorf("store: 读存量属性段: %w", err)
+	}
+	for attrRows.Next() {
+		var kind, text string
+		if err := attrRows.Scan(&kind, &text); err != nil {
+			attrRows.Close()
+			return fmt.Errorf("store: 扫描存量属性段: %w", err)
+		}
+		switch kind {
+		case "attr.category":
+			add(DirectoryKindCategory, text)
+		case "attr.instructor":
+			add(DirectoryKindInstructor, text)
+		}
+	}
+	err = attrRows.Err()
+	attrRows.Close()
+	if err != nil {
+		return fmt.Errorf("store: 遍历存量属性段: %w", err)
+	}
+
+	// 2) 分类容器 slug：items.source='category' 的 item_id 去 'category/' 前缀。
+	catRows, err := tx.Query(`SELECT item_id FROM items WHERE source='category'`)
+	if err != nil {
+		return fmt.Errorf("store: 读存量分类容器: %w", err)
+	}
+	for catRows.Next() {
+		var itemID string
+		if err := catRows.Scan(&itemID); err != nil {
+			catRows.Close()
+			return fmt.Errorf("store: 扫描存量分类容器: %w", err)
+		}
+		name := strings.TrimPrefix(itemID, "category/")
+		if name == "" {
+			continue
+		}
+		add(DirectoryKindCategory, name)
+	}
+	err = catRows.Err()
+	catRows.Close()
+	if err != nil {
+		return fmt.Errorf("store: 遍历存量分类容器: %w", err)
+	}
+
+	// 3) 标签名称段：items.item_id LIKE 'tag/%' 的第二段。
+	tagRows, err := tx.Query(`SELECT item_id FROM items WHERE item_id LIKE 'tag/%'`)
+	if err != nil {
+		return fmt.Errorf("store: 读存量标签条目: %w", err)
+	}
+	for tagRows.Next() {
+		var itemID string
+		if err := tagRows.Scan(&itemID); err != nil {
+			tagRows.Close()
+			return fmt.Errorf("store: 扫描存量标签条目: %w", err)
+		}
+		parts := strings.Split(itemID, "/")
+		if len(parts) < 2 || parts[1] == "" {
+			continue
+		}
+		add(DirectoryKindTag, parts[1])
+	}
+	err = tagRows.Err()
+	tagRows.Close()
+	if err != nil {
+		return fmt.Errorf("store: 遍历存量标签条目: %w", err)
+	}
+
+	if len(seen) == 0 {
+		// 无存量词条：不 bump、不落短路键，避免空库无谓 churn（收窄计划原文的「无条件 bump」）。
+		return nil
+	}
+
+	// 按 (kind, term_key) 升序写入，抵消 map 迭代无序，保证 determinism。
+	keys := make([][2]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i][0] != keys[j][0] {
+			return keys[i][0] < keys[j][0]
+		}
+		return keys[i][1] < keys[j][1]
+	})
+	for _, k := range keys {
+		// 存量数据没有签名作者，first_author_id 传空串（册子 §2.1 允许为空）。
+		if err := approveDirectoryTermExec(tx, k[0], k[1], seen[k], ""); err != nil {
+			return err
+		}
+	}
+	// 仅在确有写入时递增目录版本，避免空库无谓 churn（册子 #58 §4.1）。
+	if _, err := bumpDirectoryVersionExec(tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO meta(key,value) VALUES(?,?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, metaDirectorySeeded, "1"); err != nil {
+		return fmt.Errorf("store: 写 directory_seeded: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: 提交目录 seed 事务: %w", err)
+	}
+	return nil
 }
