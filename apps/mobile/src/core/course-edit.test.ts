@@ -288,3 +288,48 @@ describe('validateContainerSegments / saveContainer 预检（本册 §4）', () 
     expect(wrongDigest.ok).toBe(false);
   });
 });
+
+describe('loadContainerForm：参数解码（册子 #61 §2）', () => {
+  /** 造一门已在本地库里的课程（items + segments 直塞，与 my-created.test.ts 同手法）。 */
+  function seeded(): MemoryRepo {
+    const repo = new MemoryRepo();
+    repo.items.set('course/c1', {
+      itemId: 'course/c1', source: 'course', type: 'course', title: '数学',
+      rev: 'r', contentHash: 'h', state: 'active', updatedAt: '',
+    });
+    repo.segments.set('course/c1', [
+      { itemId: 'course/c1', seq: -1, kind: 'attr.instructor', text: '李老师', contentHash: '' },
+      { itemId: 'course/c1', seq: 0, kind: 'digest', text: '课程简介', contentHash: '' },
+      { itemId: 'course/c1', seq: 1, kind: 'lesson', text: 'course/c1/lesson/l1', contentHash: '' },
+    ]);
+    return repo;
+  }
+
+  it('传编码态 id（course%2Fc1）⇒ 回填真实内容，且 form.itemId 为解码后的真 id', async () => {
+    const form = await loadContainerForm(seeded(), 'course%2Fc1', 'course');
+    expect(form.itemId).toBe('course/c1');
+    expect(form.title).toBe('数学');
+    expect(form.instructor).toBe('李老师');
+    expect(form.digest).toBe('课程简介');
+    expect(form.children).toEqual([{ kind: 'lesson', itemId: 'course/c1/lesson/l1' }]);
+  });
+
+  it('传解码态 id 或原样命中 ⇒ 行为不变（首次 getItem 即命中）', async () => {
+    const form = await loadContainerForm(seeded(), 'course/c1', 'course');
+    expect(form.itemId).toBe('course/c1');
+    expect(form.title).toBe('数学');
+  });
+
+  it('条目不存在 ⇒ 仍得空表单、不抛（保留语义，AC 2）', async () => {
+    const form = await loadContainerForm(new MemoryRepo(), 'course%2Fnope', 'course');
+    expect(form.title).toBe('');
+    expect(form.type).toBe('course');
+    expect(form.itemId).toBe('course%2Fnope');
+  });
+
+  it('坏编码（course%ZZ）不抛，回落原样得空表单', async () => {
+    const form = await loadContainerForm(new MemoryRepo(), 'course%ZZ', 'course');
+    expect(form.itemId).toBe('course%ZZ');
+    expect(form.title).toBe('');
+  });
+});
