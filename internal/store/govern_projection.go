@@ -168,6 +168,12 @@ func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool, r
 	effective := filterRosterAtWatermarkSet(voters, roster, restored)
 	// 门槛按名册语境分档（册子 #58 §3.2）；remove 另加免票选旁路（本册 §5）。
 	threshold := GovernThresholdForRoster(p.Action, len(roster), rosterReady)
+	// 小节点豁免（册子 #65 §2）：门槛恰为 1 只可能由 directory_add 命中
+	// （rosterReady && rosterLen < DirectorySmallNodeRosterMax，见 govern.go:53-58）⇒ 提交即达门槛。
+	// 与签名路径 CreateDirectoryProposal(auto=true) 的「提交即 approved」对齐；写法照本函数 remove 旁路。
+	if threshold == 1 {
+		threshold = 0
+	}
 	freeResult := ""
 	if p.Action == GovernActionRemove {
 		// 在 Begin 之前用 s.db 判定：单连接池下事务内再发查询会死锁。

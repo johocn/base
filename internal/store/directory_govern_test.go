@@ -237,3 +237,84 @@ func TestDirectoryAddMergeQueries(t *testing.T) {
 		t.Fatalf("approved 词条 ok=%v err=%v got=%+v", ok, err, got)
 	}
 }
+
+// 事件路径的小节点豁免（本册 §2）：名册就绪且为空（< DirectorySmallNodeRosterMax）⇒ 投影后结算即生效。
+// authorA 无任何达标内容 ⇒ 不在名册内，正是线上小节点创建者的真实形态（旧口径下自投那票会被过滤掉）。
+func TestDirectoryAddSettlesOnSmallNodeViaEventPath(t *testing.T) {
+	st := openTemp(t)
+	p := dirProposal(DirectoryKindCategory, "语文", authorA)
+	if err := st.ProjectGovernProposal(GovernProposalEvent{
+		ProposalID:   7,
+		TargetItemID: p.ItemID,
+		Verb:         GovernActionDirectoryAdd,
+		ContentHash:  p.BaseContentHash,
+		Reason:       p.Reason,
+		Title:        p.Title,
+		BodyMD:       p.BodyMD,
+		CreatedAt:    1,
+		EventID:      "evt-small-node-1",
+		Actor:        authorA,
+	}); err != nil {
+		t.Fatalf("ProjectGovernProposal: %v", err)
+	}
+	if err := st.SettleGovernProposal(7, govRoster(), true); err != nil {
+		t.Fatalf("SettleGovernProposal: %v", err)
+	}
+	view, ok, err := st.GetProposal(7)
+	if err != nil || !ok {
+		t.Fatalf("GetProposal ok=%v err=%v", ok, err)
+	}
+	if view.ExecutedAt == 0 || view.ExecutedResult != directoryExecutedResult {
+		t.Fatalf("小节点应提交即生效: executed_at=%d result=%q", view.ExecutedAt, view.ExecutedResult)
+	}
+	got, ok, err := st.GetDirectoryTerm(DirectoryKindCategory, p.BodyMD)
+	if err != nil || !ok || got.State != DirectoryStateApproved {
+		t.Fatalf("词条 ok=%v err=%v got=%+v, want approved", ok, err, got)
+	}
+	if v, err := st.DirectoryVersion(); err != nil || v != 1 {
+		t.Fatalf("DirectoryVersion=%d err=%v, want 1", v, err)
+	}
+}
+
+// 越界护栏（本册 §2.2）：名册 = 10 时该分支不进入，提案人不在名册内 ⇒ 有效票 0 < 门槛 2 ⇒ 仍 pending。
+func TestDirectoryAddStaysPendingAtRosterTenViaEventPath(t *testing.T) {
+	st := openTemp(t)
+	ids := seedRoster(t, st, 10)
+	roster := rosterOf(t, st)
+	if len(roster) != 10 {
+		t.Fatalf("名册=%d, want 10", len(roster))
+	}
+	// authorA 不在 seedRoster 造出的 ids 里 ⇒ 不在名册内。
+	p := dirProposal(DirectoryKindInstructor, "王老师", authorA)
+	if err := st.ProjectGovernProposal(GovernProposalEvent{
+		ProposalID:   8,
+		TargetItemID: p.ItemID,
+		Verb:         GovernActionDirectoryAdd,
+		ContentHash:  p.BaseContentHash,
+		Reason:       p.Reason,
+		Title:        p.Title,
+		BodyMD:       p.BodyMD,
+		CreatedAt:    1,
+		EventID:      "evt-roster-10",
+		Actor:        authorA,
+	}); err != nil {
+		t.Fatalf("ProjectGovernProposal: %v", err)
+	}
+	if roster[authorA] {
+		t.Fatalf("前置不成立：authorA 不应在名册内")
+	}
+	_ = ids
+	if err := st.SettleGovernProposal(8, roster, true); err != nil {
+		t.Fatalf("SettleGovernProposal: %v", err)
+	}
+	view, _, err := st.GetProposal(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.ExecutedAt != 0 {
+		t.Fatalf("名册=10 不应豁免: executed_at=%d result=%q", view.ExecutedAt, view.ExecutedResult)
+	}
+	if _, ok, err := st.GetDirectoryTerm(DirectoryKindInstructor, p.BodyMD); err != nil || ok {
+		t.Fatalf("未达门槛不应写目录行: ok=%v err=%v", ok, err)
+	}
+}
