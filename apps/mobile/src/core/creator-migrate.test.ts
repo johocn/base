@@ -2,7 +2,7 @@ import { utf8 } from '@base/protocol-ts';
 import { describe, expect, it } from 'vitest';
 
 import { segmentsContentHash } from './attrs';
-import { CREATOR_VISIBILITY_MIGRATION_KEY, runCreatorVisibilityMigration } from './creator-migrate';
+import { CREATOR_VISIBILITY_MIGRATION_KEY, LEDGER_HEAL_KEY, runCreatorVisibilityMigration, runLedgerHealMigration } from './creator-migrate';
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import type { SubmitOptions } from './submit';
 import type { MySubmissionRow } from './types';
@@ -103,5 +103,61 @@ describe('runCreatorVisibilityMigration：一次性自愈迁移（册子 #56 §2
     const res = await runCreatorVisibilityMigration(opts(http, repo));
     expect(res.retried).toBe(0);
     expect(http.posted).toHaveLength(0);
+  });
+});
+
+describe('runLedgerHealMigration：存量台账自愈（册子 #63 §2）', () => {
+  it('有台账行、无条目行 ⇒ 按现行口径重建本地乐观条目，并写独立幂等标志位', async () => {
+    const repo = new MemoryRepo();
+    await repo.saveSubmission(courseRow());
+
+    const res = await runLedgerHealMigration({ repo });
+
+    expect(res).toEqual({ skipped: false, scanned: 1, healed: 1, localOnly: 0 });
+    const item = (await repo.getItem('course/c1'))!;
+    expect(item.source).toBe('local');
+    expect(item.contentHash).toBe(segmentsContentHash(await repo.listSegments('course/c1')));
+    expect(await repo.getConfig(LEDGER_HEAL_KEY)).toBe('0.20.2');
+    // 状态一无所改（本函数只补 items / segments）
+    const row = (await repo.getSubmission('course/c1'))!;
+    expect(row.state).toBe('failed');
+    expect(row.localOnly).toBe(false);
+  });
+
+  it('幂等：标志位已存在 ⇒ 零动作', async () => {
+    const repo = new MemoryRepo();
+    await repo.setConfig(LEDGER_HEAL_KEY, '0.20.2');
+    await repo.saveSubmission(courseRow());
+
+    expect(await runLedgerHealMigration({ repo })).toEqual({ skipped: true, scanned: 0, healed: 0, localOnly: 0 });
+    expect(await repo.getItem('course/c1')).toBe(null);
+  });
+
+  it('行集还原不出（空 segments_json）⇒ 落 localOnly 终态、不建条目行', async () => {
+    const repo = new MemoryRepo();
+    await repo.saveSubmission(courseRow({ segmentsJson: '' }));
+
+    const res = await runLedgerHealMigration({ repo });
+
+    expect(res).toEqual({ skipped: false, scanned: 1, healed: 0, localOnly: 1 });
+    const row = (await repo.getSubmission('course/c1'))!;
+    expect(row.localOnly).toBe(true);
+    expect(row.reason).toBe('本地数据无法还原，仅本地留存');
+    expect(await repo.getItem('course/c1')).toBe(null);
+  });
+
+  it('tag 行不参与；已有条目行的容器跳过、内容一字不改', async () => {
+    const repo = new MemoryRepo();
+    await repo.saveSubmission(courseRow({ itemId: 'tag/x', type: 'tag' }));
+    await repo.upsertLocalContainer(
+      { itemId: 'course/c1', type: 'course', title: '既有标题', contentHash: 'h', updatedAt: 't' },
+      [{ seq: 1, kind: 'lesson', text: 'course/c1/lesson/l1' }],
+    );
+    await repo.saveSubmission(courseRow());
+
+    const res = await runLedgerHealMigration({ repo });
+
+    expect(res).toEqual({ skipped: false, scanned: 1, healed: 0, localOnly: 0 });
+    expect((await repo.getItem('course/c1'))!.title).toBe('既有标题');
   });
 });

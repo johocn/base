@@ -84,7 +84,7 @@ import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
 import { syncOnce } from '../../core/sync';
-import { runCreatorVisibilityMigration } from '../../core/creator-migrate';
+import { runCreatorVisibilityMigration, runLedgerHealMigration } from '../../core/creator-migrate';
 import { childrenOf, groupCoursesByCategory, splitCourses } from '../../core/course-tree';
 import { attrsOf } from '../../core/container-view';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot, type PendingTerm } from '../../core/directory';
@@ -168,6 +168,8 @@ async function load() {
     if (opts.nodeBaseUrl !== '') {
       await runCreatorVisibilityMigration(opts);
     }
+    // 存量台账自愈（册子 #63 §2.2）：纯本地、不依赖节点地址 ⇒ 放在上面判据之外，串行执行。
+    await runLedgerHealMigration({ repo });
     const all = await repo.listItems();
     const active = all.filter((i) => i.state !== 'removed');
     const tree = splitCourses(active);
