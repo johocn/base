@@ -284,16 +284,89 @@ func TestEscrowGetRateLimited(t *testing.T) {
 	}
 }
 
-func TestMeReturnsEmptyArrays(t *testing.T) {
-	_, _, ts := newIdentityServer(t)
+// GET /v1/me 的三个数组**恒为数组而非 null**（契约 5.5 的红线不破），
+// 且 progress / checkin_days 已从「写死空数组」改为**按签名身份返回真数据**（#8 册子 §4.4）。
+func TestMeReturnsRealProgressArrays(t *testing.T) {
+	st, _, ts := newFullServer(t)
 	id, _ := identityFromSeed(t, testSeed)
-	status, body := doIdentityJSON(t, http.MethodGet, ts.URL+"/v1/me", "", "")
-	if status != http.StatusOK || body["id"] != id {
+	otherID, _ := identityFromSeed(t, strings.Repeat("ab", 32))
+
+	seed := func(eventID, actor, itemID string, position int64, day string) {
+		t.Helper()
+		if err := st.PutProgressProjection(store.ProgressEvent{
+			ID: actor, ItemID: itemID, Position: position, Done: false,
+			Day: day, CreatedAt: 100, EventID: eventID,
+		}); err != nil {
+			t.Fatalf("PutProgressProjection(%s): %v", eventID, err)
+		}
+	}
+	seed(strings.Repeat("1", 32), id, "article/a", 640, "2026-10-01")
+	seed(strings.Repeat("2", 32), id, "quiz/q1", 3, "2026-10-02")
+	// 别人的进度绝不能被返回（进度恒为私有，§2 第 1 条）
+	seed(strings.Repeat("3", 32), otherID, "article/z", 1, "2026-10-03")
+
+	status, body := sendAuth(t, signedRequest(t, testSeed, http.MethodGet, ts.URL+"/v1/me", ""))
+	if status != http.StatusOK {
 		t.Fatalf("GET /v1/me status=%d body=%v", status, body)
 	}
-	ev, ok1 := body["events"].([]any)
-	pg, ok2 := body["progress"].([]any)
-	if !ok1 || !ok2 || len(ev) != 0 || len(pg) != 0 {
-		t.Fatalf("events/progress 必须是空数组而不是 null: %v", body)
+	if body["id"] != id {
+		t.Fatalf("id=%v want %s", body["id"], id)
+	}
+
+	events, ok := body["events"].([]any)
+	if !ok || len(events) != 0 {
+		t.Fatalf("events 应为长度 0 的数组而非 null: %v", body["events"])
+	}
+	progress, ok := body["progress"].([]any)
+	if !ok || len(progress) != 2 {
+		t.Fatalf("progress 应为长度 2 的数组: %v", body["progress"])
+	}
+	first, ok := progress[0].(map[string]any)
+	if !ok {
+		t.Fatalf("progress[0] 不是对象: %v", progress[0])
+	}
+	// 元素形状 {item_id, position, done, day, updated_at, event_id}（§4.4）——
+	// event_id 是必需的：本地合并要复现 §3.4 的平局判据。
+	for _, k := range []string{"item_id", "position", "done", "day", "updated_at", "event_id"} {
+		if _, has := first[k]; !has {
+			t.Fatalf("progress 元素缺字段 %q: %v", k, first)
+		}
+	}
+	if first["item_id"] != "article/a" || first["position"] != float64(640) ||
+		first["event_id"] != strings.Repeat("1", 32) {
+		t.Fatalf("progress[0] 不符: %v", first)
+	}
+
+	days, ok := body["checkin_days"].([]any)
+	if !ok || len(days) != 2 {
+		t.Fatalf("checkin_days 应为长度 2 的数组: %v", body["checkin_days"])
+	}
+	d0, ok := days[0].(map[string]any)
+	if !ok {
+		t.Fatalf("checkin_days[0] 不是对象: %v", days[0])
+	}
+	for _, k := range []string{"day", "first_event_id", "created_at"} {
+		if _, has := d0[k]; !has {
+			t.Fatalf("checkin_days 元素缺字段 %q: %v", k, d0)
+		}
+	}
+	if d0["day"] != "2026-10-01" {
+		t.Fatalf("checkin_days[0] 不符: %v", d0)
+	}
+}
+
+// 无任何进度时三个数组仍必须是 `[]` 而非 `null`。
+func TestMeEmptyArraysAreNotNull(t *testing.T) {
+	_, _, ts := newFullServer(t)
+
+	status, body := sendAuth(t, signedRequest(t, testSeed, http.MethodGet, ts.URL+"/v1/me", ""))
+	if status != http.StatusOK {
+		t.Fatalf("GET /v1/me status=%d", status)
+	}
+	for _, k := range []string{"events", "progress", "checkin_days"} {
+		arr, ok := body[k].([]any)
+		if !ok || len(arr) != 0 {
+			t.Fatalf("%s 应为长度 0 的数组而非 null: %v", k, body[k])
+		}
 	}
 }

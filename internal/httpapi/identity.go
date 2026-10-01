@@ -235,11 +235,46 @@ func (s *Server) handleEscrowGet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleMe 返回当前身份与事件/进度骨架（契约 5.5）。
-// events/progress 恒为空数组而非 null：结构先定死，客户端可无条件迭代。
+// handleMe 返回当前身份与事件/进度骨架（契约 5.5 / #8 册子 §4.4）。
+//
+// `events` 本册**保持现状**（空数组），不扩面——它属于另一条待办。
+// `progress` / `checkin_days` 按**签名身份**返回真数据；三数组**恒为数组而非 null**：
+// 用 `make(..., 0, n)` 而不是 `nil`，否则 JSON 会编成 `null`，客户端无条件迭代就会炸。
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	id := identityFrom(r)
+	progressRows, err := s.st.ListProgressByID(id)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	checkins, err := s.st.CheckinDaysOf(id)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// 元素形状见 §4.4：progress 带 event_id（本地要复现 §3.4 的平局判据）；
+	// checkin_days 是 §3.5 的独立投影，不能从折叠后的 progress 派生。
+	progress := make([]map[string]any, 0, len(progressRows))
+	for _, p := range progressRows {
+		progress = append(progress, map[string]any{
+			"item_id":    p.ItemID,
+			"position":   p.Position,
+			"done":       p.Done,
+			"day":        p.Day,
+			"updated_at": p.UpdatedAt,
+			"event_id":   p.EventID,
+		})
+	}
+	days := make([]map[string]any, 0, len(checkins))
+	for _, c := range checkins {
+		days = append(days, map[string]any{
+			"day":            c.Day,
+			"first_event_id": c.FirstEventID,
+			"created_at":     c.CreatedAt,
+		})
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"id": identityFrom(r), "events": []any{}, "progress": []any{},
+		"id": id, "events": []any{}, "progress": progress, "checkin_days": days,
 	})
 }
 
