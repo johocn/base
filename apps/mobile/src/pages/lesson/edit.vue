@@ -59,6 +59,7 @@
         <text class="val">{{ form.cover === '' ? '未设置' : form.cover }}</text>
         <text class="act" @click="pickCover">{{ form.cover === '' ? '选择图片' : '更换' }}</text>
       </view>
+      <image v-if="coverPreview" :src="coverPreview" mode="widthFix" class="cover-preview" />
     </view>
 
     <view class="field">
@@ -175,10 +176,9 @@ import { onLoad } from '@dcloudio/uni-app';
 import { computed, nextTick, ref } from 'vue';
 
 import { BADGE_WORDS, BADGE_WORDS_AUTHOR, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO, TITLE_COLORS } from '../../core/attrs';
-import { uploadBlob } from '../../core/blob';
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
 import { myIdentityId, roster } from '../../core/contribution';
-import { loadContainerForm, saveContainer, startNewLesson, type ContainerForm } from '../../core/course-edit';
+import { loadContainerForm, saveContainer, startNewLesson, uploadAndStoreBlob, type ContainerForm } from '../../core/course-edit';
 import { recordEditFailure } from '../../core/editlog';
 import { renderMarkdown } from '../../core/markdown';
 import {
@@ -191,7 +191,7 @@ import {
 import type { LocalRepo } from '../../core/repo';
 import { UNKNOWN_FLAGS, canPickFile, pickBlockedReason, type CapabilityFlags } from '../../core/selfcheck';
 import { bootstrap, type AppContext } from '../../platform';
-import { pickLocalFile, type PickedFile } from '../../platform/uni';
+import { bytesToBase64, pickLocalFile, type PickedFile } from '../../platform/uni';
 
 /** 课时可挂的载体类型（本册 §2.4；audio 登记在册但播放能力待后续版本） */
 const CARRIER_KINDS = ['article', 'quiz', 'video', 'audio'];
@@ -200,6 +200,8 @@ const courseId = ref('');
 const form = ref<ContainerForm>(startNewLesson(''));
 const durationMin = ref('');
 const busy = ref(false);
+/** 封面预览 src：刚上传 = 内存 dataURL，重进页 = 本地 `file://` 路径（册子 #61 §5）。 */
+const coverPreview = ref('');
 const error = ref('');
 const notice = ref('');
 
@@ -264,7 +266,8 @@ let ctx: AppContext | null = null;
 
 onLoad(async (query) => {
   const q = (query as Record<string, string> | undefined) ?? {};
-  courseId.value = String(q.courseId ?? '');
+  // 先解码（册子 #61 §2.2）：跳转方传 `encodeURIComponent(courseId)`，不解码会拼出 `course%2F…/lesson/…` 的坏 id
+  courseId.value = decodedId(String(q.courseId ?? ''));
   const lessonId = String(q.lessonId ?? '');
   try {
     ctx = await bootstrap();
@@ -274,12 +277,15 @@ onLoad(async (query) => {
     for (const it of await repo.listItems()) carrierTitles.set(it.itemId, it.title || it.itemId);
     if (lessonId !== '') {
       form.value = await loadContainerForm(repo, lessonId, 'lesson');
-      durationMin.value = form.value.durationSec > 0 ? String(Math.round(form.value.durationSec / 60)) : '';
     } else if (courseId.value !== '') {
       form.value = startNewLesson(courseId.value);
     } else {
       error.value = '缺少课程 id，无法定位课时';
     }
+    durationMin.value = form.value.durationSec > 0 ? String(Math.round(form.value.durationSec / 60)) : '';
+    // 封面回显（册子 #61 §5）：与详情页取键逐字一致（`<itemId>/cover`）
+    const coverFile = await repo.findBlobPathByItem(`${form.value.itemId}/cover`);
+    coverPreview.value = coverFile ? (coverFile.startsWith('file://') ? coverFile : `file://${coverFile}`) : '';
     // 治理者身份按 #23 名册实时派生；联网失败一律按作者档（4 种），不阻塞编辑
     try {
       const o = { adapters: ctx.opts.adapters, repo, nodeBaseUrl: ctx.opts.nodeBaseUrl };
@@ -293,6 +299,15 @@ onLoad(async (query) => {
     error.value = (e as Error).message;
   }
 });
+
+/** 解码路由参数；坏编码回落原样（与详情页 `resolveBy` 同口径）。 */
+function decodedId(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
 
 function difficultyLabel(d: string): string {
   if (d === DIFFICULTY_INTRO) return '入门';
@@ -326,32 +341,35 @@ function titleColorLabel(c: string): string {
 /** 失败落本地日志（`workDir/edit-surface.log`）；取消不落，日志写失败静默不影响主流程。 */
 async function logFail(stage: 'pick' | 'upload', e: unknown) {
   if (!ctx) return;
-  await recordEditFailure(ctx.adapters.fs, ctx.opts.workDir, stage, String((e as Error)?.message ?? e));
+  // 适配器在 `ctx.opts.adapters`（`AppContext` 没有 `adapters`）——写错会二次抛错掩码真实失败（册子 #61 §3）
+  await recordEditFailure(ctx.opts.adapters.fs, ctx.opts.workDir, stage, String((e as Error)?.message ?? e));
 }
 
-/** 选文件 → 上传拿 blob_id；取消返回 null。封面与附件共用一条上传路径。 */
-async function uploadOne(): Promise<{ blobId: string; name: string } | null> {
-  let picked: PickedFile | null;
+/** 选文件（取消 → null）；pick 阶段失败落日志并原样抛出。 */
+async function pickFile(): Promise<PickedFile | null> {
   try {
-    picked = await pickLocalFile();
+    return await pickLocalFile();
   } catch (e) {
     await logFail('pick', e);
     throw e;
   }
-  if (!picked) return null;
+}
+
+/** 上传 + 落盘 + 登记（册子 #61 §5）；失败落 upload 阶段日志并原样抛出，成功返回 blob_id。 */
+async function storeBlob(slot: string, picked: PickedFile): Promise<string> {
   const { opts, repo } = await bootstrap();
-  let blobId: string;
   try {
-    blobId = await uploadBlob(
-      { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl },
-      picked.bytes,
-      picked.name,
+    const up = await uploadAndStoreBlob(
+      { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl, workDir: opts.workDir },
+      form.value.itemId,
+      slot,
+      { name: picked.name, bytes: picked.bytes },
     );
+    return up.blobId;
   } catch (e) {
     await logFail('upload', e);
     throw e;
   }
-  return { blobId, name: picked.name };
 }
 
 async function pickCover() {
@@ -361,10 +379,13 @@ async function pickCover() {
   }
   error.value = '';
   try {
-    const up = await uploadOne();
-    if (up) form.value.cover = up.blobId;
+    const picked = await pickFile();
+    if (!picked) return;
+    // 立即出缩略图（册子 #61 §5）：内存 dataURL，不必等落盘或节点返回
+    coverPreview.value = `data:image/*;base64,${bytesToBase64(picked.bytes)}`;
+    form.value.cover = await storeBlob('cover', picked);
   } catch (e) {
-    // 日志已由 uploadOne 按 pick / upload 阶段落盘，此处只出人读文案（避免同一失败写两行）
+    // 日志已由 pickFile / storeBlob 按阶段落盘，此处只出人读文案（避免同一失败写两行）
     error.value = (e as Error).message;
   }
 }
@@ -376,10 +397,13 @@ async function addAttachment() {
   }
   error.value = '';
   try {
-    const up = await uploadOne();
-    if (up && !form.value.attachments.some((a) => a.blobId === up.blobId)) form.value.attachments.push(up);
+    const picked = await pickFile();
+    if (!picked) return;
+    const blobId = await storeBlob('attachment', picked);
+    if (!form.value.attachments.some((a) => a.blobId === blobId)) {
+      form.value.attachments.push({ blobId, name: picked.name });
+    }
   } catch (e) {
-    // 同 pickCover：日志只在 uploadOne 一处落，这里只出文案
     error.value = (e as Error).message;
   }
 }
@@ -502,6 +526,7 @@ async function submit() {
 .chip-on { border-color: #2b6cb0; color: #2b6cb0; }
 .swatch { background: #fafafa; }
 .swatch-on { border-color: #2b6cb0; border-width: 2px; }
+.cover-preview { width: 180px; margin-top: 8px; border-radius: 6px; }
 .card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 12px; }
 .chead { display: flex; justify-content: space-between; align-items: center; }
 .row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f5f5f5; }
