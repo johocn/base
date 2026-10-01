@@ -223,6 +223,34 @@ var schemaStatements = []string{
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_tag_links_target ON tag_links(target_id)`,
+
+	// progress / checkin_days：学习进度与打卡的**两张投影表**（#8 册子 §4.2）。
+	// 一条 progress.v1 事件**同一事务**同时写这两张表：
+	//   progress     = (id,item_id) 的 LWW 寄存器（§3.3 / §3.4），只留胜者；
+	//   checkin_days = 打卡日集合（§3.5），insert-or-ignore 保留首次。
+	// 打卡日**不能**从 progress 派生：(id,item_id) 只留最后一次的 day，会把该条目历史上的打卡日冲掉。
+	// 两表都是新表（无存量列演进问题），故直接进 schemaStatements，不需要 ColumnMigrations。
+	`CREATE TABLE IF NOT EXISTS progress(
+		id         TEXT    NOT NULL,
+		item_id    TEXT    NOT NULL,
+		position   INTEGER NOT NULL,
+		done       INTEGER NOT NULL,
+		day        TEXT    NOT NULL,
+		updated_at INTEGER NOT NULL,
+		event_id   TEXT    NOT NULL,
+		dirty      INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY(id, item_id)
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_progress_item ON progress(item_id)`,
+
+	`CREATE TABLE IF NOT EXISTS checkin_days(
+		id             TEXT    NOT NULL,
+		day            TEXT    NOT NULL,
+		first_event_id TEXT    NOT NULL,
+		created_at     INTEGER NOT NULL,
+		PRIMARY KEY(id, day)
+	)`,
 }
 
 // eventColumnMigrations 是 events 表的**后加列**（B 阶段引入）。
