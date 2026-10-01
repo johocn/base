@@ -11,6 +11,7 @@ import {
   startNewCourse,
   startNewLesson,
   toLocalContainer,
+  uploadAndStoreBlob,
   validateContainerSegments,
   type ContainerForm,
 } from './course-edit';
@@ -355,5 +356,30 @@ describe('isLegalContainerId：容器 id 形态判据（册子 #61 §4.3）', ()
     expect(isLegalContainerId('lesson', 'course/c1/lesson')).toBe(false);
     expect(isLegalContainerId('lesson', 'course/c1/article/a1')).toBe(false);
     expect(isLegalContainerId('lesson', 'course/c1/lesson/l1/x')).toBe(false);
+  });
+});
+
+describe('uploadAndStoreBlob：上传 + 落盘 + 登记（册子 #61 §5）', () => {
+  it('字节写 workDir/blobs/<blobId>，并登记 blob_index 使 <itemId>/cover 可回显', async () => {
+    const http = new FakeHttp();
+    const fs = new MemoryFs();
+    const repo = new MemoryRepo();
+    const adapters = fakeAdapters(http, fs, new FakePackReader());
+    const blobId = 'a'.repeat(32);
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/blob`, json({ blob_id: blobId }));
+
+    const got = await uploadAndStoreBlob(
+      { adapters, repo, nodeBaseUrl: BASE, workDir: '/work' },
+      'course/c1',
+      'cover',
+      { name: 'c.png', bytes: utf8('hello') },
+    );
+
+    expect(got.blobId).toBe(blobId);
+    expect(got.path).toBe(`/work/blobs/${blobId}`);
+    expect(await fs.exists(got.path)).toBe(true);
+    expect(await repo.findBlobPathByItem('course/c1/cover')).toBe(got.path);
+    expect(await repo.hasBlob(blobId)).toBe(true);
   });
 });

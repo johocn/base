@@ -6,6 +6,7 @@
  * **子项清单由编辑页直接管**：表单里的 `children` 就是 `seq>=1` 的全集，提交时整段覆盖——
  * 节点 `UpsertSegmentSubmission` 先删同 item_id 旧行再按 seq 写入，天然是「整体替换」语义。
  */
+import type { Adapters } from '../platform/adapter';
 import {
   ATTR_ATTACHMENT,
   ATTR_BADGE,
@@ -27,6 +28,7 @@ import {
   type AttrSlot,
   type SubmitSegmentRow,
 } from './attrs';
+import { uploadBlob } from './blob';
 import { attrsOf, childrenRowsOf, digestOf } from './container-view';
 import type { LocalContainerInput, LocalRepo } from './repo';
 import {
@@ -315,4 +317,37 @@ export async function saveContainer(o: SubmitOptions, form: ContainerForm): Prom
     questionJson: '',
     segments,
   });
+}
+
+/** 待上传的字节（与 `platform/uni.ts` 的 `PickedFile` 同形；core 不 import 平台层）。 */
+export interface PickedBytes {
+  name: string;
+  bytes: Uint8Array;
+}
+
+/** `uploadAndStoreBlob` 的依赖（与 `core/sync.ts` 的 `SyncOptions` 同形，本模块只取用这四项）。 */
+export interface BlobStoreOptions {
+  adapters: Adapters;
+  repo: LocalRepo;
+  nodeBaseUrl: string;
+  workDir: string;
+}
+
+/**
+ * 上传一块并把字节落到本机（册子 #61 §5）：`POST /v1/blob` → `${workDir}/blobs/<blobId>` →
+ * `addBlob(blobId, '<itemId>/<slot>')`。封面（slot=`cover`）与附件（slot=`attachment`）共用这一出口；
+ * 封面键 `<itemId>/cover` 与 `pages/course/detail.vue` 的取键**逐字一致**，重进编辑页即可回显。
+ * 「字节 → 预览 src」留页面（`bytesToBase64` 属平台层）。
+ */
+export async function uploadAndStoreBlob(
+  o: BlobStoreOptions,
+  itemId: string,
+  slot: string,
+  picked: PickedBytes,
+): Promise<{ blobId: string; path: string }> {
+  const blobId = await uploadBlob({ adapters: o.adapters, repo: o.repo, nodeBaseUrl: o.nodeBaseUrl }, picked.bytes, picked.name);
+  const path = `${o.workDir}/blobs/${blobId}`;
+  await o.adapters.fs.writeFile(path, picked.bytes);
+  await o.repo.addBlob(blobId, `${itemId}/${slot}`, path, picked.bytes.length, new Date().toISOString());
+  return { blobId, path };
 }
