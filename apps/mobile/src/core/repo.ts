@@ -3,6 +3,7 @@ import { computeStats, favoriteNext, readAtNext } from './state';
 import { progressWins } from './progress';
 import { SEARCH_SQL, searchPattern } from './search';
 import type { ArticleRow, CheckinDayRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, ProgressRow, QuizRow, SegmentRow, TagLinkRow, TombstoneRow } from './types';
+import type { SubmitSegmentRow } from './attrs';
 
 export interface PackApply {
   version: number;
@@ -12,6 +13,15 @@ export interface PackApply {
   quizzes: QuizRow[];
   segments: SegmentRow[];
   tombstones: TombstoneRow[];
+  updatedAt: string;
+}
+
+/** 本地乐观落库的条目输入（册子 #56 §2.1）：`source='local'` / `rev=''` / `state='active'` 由仓储层补齐。 */
+export interface LocalContainerInput {
+  itemId: string;
+  type: string;
+  title: string;
+  contentHash: string;
   updatedAt: string;
 }
 
@@ -96,6 +106,16 @@ export interface LocalRepo {
   /** 删一行：用户对 `pending` / `failed` 项点「删除」。`sent` 不可删（它是台账本体）。 */
   removeSubmission(itemId: string): Promise<void>;
   /**
+   * 同事务落一条「本地乐观条目」（册子 #56 §2.1）：upsert `items`（写死 `source='local'` / `rev=''` / `state='active'`）
+   * 并**整体覆盖**该 id 的 `segments`（先删后插，按 seq 升序）。节点内容包后续同 id 落库即自然覆盖它。
+   */
+  upsertLocalContainer(item: LocalContainerInput, segments: SubmitSegmentRow[]): Promise<void>;
+  /**
+   * 置「仅本地留存」终态（册子 #56 §2.4）：`state='failed'` + 记原因 + `local_only=1`。
+   * 单向：置位后无任何自动路径把它送回重放队列。
+   */
+  markSubmissionLocalOnly(itemId: string, reason: string): Promise<void>;
+  /**
    * 写一条本地进度（#8 册子 §5.2）：同一事务 upsert `progress`（`dirty=1`）+ insert-or-ignore `checkin_days`。
    * upsert 受 §3.4 LWW 守卫（`progressWins`）；**打卡不受守卫**——打卡是**事件级**语义，
    * 即使进度行输了 LWW，该事件带来的打卡日照样写（否则同一 issue 的形态会丢打卡）。
@@ -145,7 +165,7 @@ export const SCHEMA_SQL: string[] = [
      item_id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, body_md TEXT NOT NULL,
      question_json TEXT NOT NULL, links_json TEXT NOT NULL DEFAULT '', segments_json TEXT NOT NULL DEFAULT '',
      state TEXT NOT NULL, reason TEXT, created INTEGER NOT NULL,
-     queued_at TEXT NOT NULL, sent_at TEXT NOT NULL)`,
+     queued_at TEXT NOT NULL, sent_at TEXT NOT NULL, local_only INTEGER NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS idx_my_submissions_queued ON my_submissions(queued_at)`,
   `CREATE TABLE IF NOT EXISTS groups(
      group_id TEXT PRIMARY KEY, name TEXT NOT NULL, creator_id TEXT NOT NULL, epoch INTEGER NOT NULL,
@@ -192,6 +212,9 @@ export async function ensureSubmissionColumns(db: LocalDb): Promise<void> {
   }
   if (!cols.has('segments_json')) {
     await db.execute(`ALTER TABLE my_submissions ADD COLUMN segments_json TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!cols.has('local_only')) {
+    await db.execute(`ALTER TABLE my_submissions ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0`);
   }
 }
 
@@ -553,18 +576,18 @@ export class SqlRepo implements LocalRepo {
 
   async saveSubmission(row: MySubmissionRow): Promise<void> {
     await this.db.execute(
-      `INSERT INTO my_submissions(item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO my_submissions(item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at,local_only)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(item_id) DO UPDATE SET type=excluded.type,title=excluded.title,body_md=excluded.body_md,
          question_json=excluded.question_json,links_json=excluded.links_json,segments_json=excluded.segments_json,
          state=excluded.state,reason=excluded.reason,
-         created=excluded.created,queued_at=excluded.queued_at,sent_at=excluded.sent_at`,
-      [row.itemId, row.type, row.title, row.bodyMd, row.questionJson, row.linksJson, row.segmentsJson, row.state, row.reason, row.created, row.queuedAt, row.sentAt],
+         created=excluded.created,queued_at=excluded.queued_at,sent_at=excluded.sent_at,local_only=excluded.local_only`,
+      [row.itemId, row.type, row.title, row.bodyMd, row.questionJson, row.linksJson, row.segmentsJson, row.state, row.reason, row.created, row.queuedAt, row.sentAt, row.localOnly ? 1 : 0],
     );
   }
 
   async listSubmissions(state?: 'pending' | 'sent' | 'failed'): Promise<MySubmissionRow[]> {
-    const cols = `item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at`;
+    const cols = `item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at,local_only`;
     const rows = state
       ? await this.db.select(`SELECT ${cols} FROM my_submissions WHERE state=? ORDER BY queued_at ASC`, [state])
       : await this.db.select(`SELECT ${cols} FROM my_submissions ORDER BY queued_at ASC`);
@@ -573,7 +596,7 @@ export class SqlRepo implements LocalRepo {
 
   async getSubmission(itemId: string): Promise<MySubmissionRow | null> {
     const rows = await this.db.select(
-      `SELECT item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at FROM my_submissions WHERE item_id=?`,
+      `SELECT item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at,local_only FROM my_submissions WHERE item_id=?`,
       [itemId],
     );
     return rows.length > 0 ? toMySubmissionRow(rows[0]) : null;
@@ -593,6 +616,31 @@ export class SqlRepo implements LocalRepo {
 
   async removeSubmission(itemId: string): Promise<void> {
     await this.db.execute(`DELETE FROM my_submissions WHERE item_id=?`, [itemId]);
+  }
+
+  async upsertLocalContainer(item: LocalContainerInput, segments: SubmitSegmentRow[]): Promise<void> {
+    const ordered = [...segments].sort((a, b) => a.seq - b.seq);
+    const stmts: Array<{ sql: string; params?: unknown[] }> = [
+      {
+        sql: `INSERT INTO items(item_id,source,type,title,rev,content_hash,state,updated_at)
+              VALUES(?,?,?,?,?,?,?,?)
+              ON CONFLICT(item_id) DO UPDATE SET source=excluded.source,type=excluded.type,title=excluded.title,
+                rev=excluded.rev,content_hash=excluded.content_hash,state=excluded.state,updated_at=excluded.updated_at`,
+        params: [item.itemId, 'local', item.type, item.title, '', item.contentHash, 'active', item.updatedAt],
+      },
+      { sql: `DELETE FROM segments WHERE item_id=?`, params: [item.itemId] },
+    ];
+    for (const s of ordered) {
+      stmts.push({
+        sql: `INSERT INTO segments(item_id,seq,kind,text,content_hash) VALUES(?,?,?,?,?)`,
+        params: [item.itemId, s.seq, s.kind, s.text, ''],
+      });
+    }
+    await this.db.tx(stmts);
+  }
+
+  async markSubmissionLocalOnly(itemId: string, reason: string): Promise<void> {
+    await this.db.execute(`UPDATE my_submissions SET state='failed', reason=?, local_only=1 WHERE item_id=?`, [reason, itemId]);
   }
 
   async saveProgressLocal(row: ProgressRow): Promise<void> {
@@ -769,6 +817,7 @@ function toMySubmissionRow(r: Record<string, unknown>): MySubmissionRow {
     created: Number(r.created ?? 0),
     queuedAt: String(r.queued_at ?? ''),
     sentAt: String(r.sent_at ?? ''),
+    localOnly: Number(r.local_only ?? 0) !== 0,
   };
 }
 

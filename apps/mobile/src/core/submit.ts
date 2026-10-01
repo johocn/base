@@ -288,6 +288,7 @@ async function writeLedger(o: SubmitOptions, draft: SubmitDraft, patch: Partial<
     created: prev?.created ?? 0,
     queuedAt: new Date().toISOString(),
     sentAt: '',
+    localOnly: false,
     ...patch,
   });
 }

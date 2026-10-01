@@ -262,7 +262,7 @@ describe('台账状态机与补发', () => {
     for (const id of ['article/one', 'article/two', 'article/three']) {
       await repo.saveSubmission({
         itemId: id, type: 'article', title: id, bodyMd: '正文', questionJson: '', linksJson: '', segmentsJson: '',
-        state: 'pending', reason: null, created: 0, queuedAt: `2026-09-28T00:00:0${id.slice(-1) === 'e' ? 1 : id.slice(-1) === 'o' ? 2 : 3}Z`, sentAt: '',
+        state: 'pending', reason: null, created: 0, queuedAt: `2026-09-28T00:00:0${id.slice(-1) === 'e' ? 1 : id.slice(-1) === 'o' ? 2 : 3}Z`, sentAt: '', localOnly: false,
       });
     }
     http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
@@ -281,7 +281,7 @@ describe('台账状态机与补发', () => {
     http.postRoutes.set(`${BASE}/v1/submit`, json({ created: true }));
     await repo.saveSubmission({
       itemId: 'article/one', type: 'article', title: '甲', bodyMd: '正文', questionJson: '', linksJson: '', segmentsJson: '',
-      state: 'pending', reason: null, created: 0, queuedAt: '2026-09-28T00:00:01Z', sentAt: '',
+      state: 'pending', reason: null, created: 0, queuedAt: '2026-09-28T00:00:01Z', sentAt: '', localOnly: false,
     });
     const [a, b] = await Promise.all([flushSubmissions(o), flushSubmissions(o)]);
     expect(a).toEqual(b);

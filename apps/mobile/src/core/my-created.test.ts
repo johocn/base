@@ -35,6 +35,7 @@ function row(over: Partial<MySubmissionRow> = {}): MySubmissionRow {
     created: 1,
     queuedAt: '2026-09-30T00:00:00Z',
     sentAt: '',
+    localOnly: false,
     ...over,
   };
 }

@@ -3,7 +3,8 @@ import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReade
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
 import type { ArticleRow, CheckinDayRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, ProgressRow, QuizRow, SegmentRow, TagLinkRow, TombstoneRow } from './types';
-import type { LocalRepo, PackApply } from './repo';
+import type { LocalContainerInput, LocalRepo, PackApply } from './repo';
+import type { SubmitSegmentRow } from './attrs';
 import { progressWins } from './progress';
 
 export class MemoryFs implements FsAdapter {
@@ -281,6 +282,24 @@ export class MemoryRepo implements LocalRepo {
   }
   async removeSubmission(itemId: string): Promise<void> {
     this.submissions.delete(itemId);
+  }
+
+  async upsertLocalContainer(item: LocalContainerInput, segments: SubmitSegmentRow[]): Promise<void> {
+    this.items.set(item.itemId, {
+      itemId: item.itemId, source: 'local', type: item.type, title: item.title,
+      rev: '', contentHash: item.contentHash, state: 'active', updatedAt: item.updatedAt,
+    });
+    this.segments.set(
+      item.itemId,
+      [...segments]
+        .sort((a, b) => a.seq - b.seq)
+        .map((s) => ({ itemId: item.itemId, seq: s.seq, kind: s.kind, text: s.text, contentHash: '' })),
+    );
+  }
+
+  async markSubmissionLocalOnly(itemId: string, reason: string): Promise<void> {
+    const r = this.submissions.get(itemId);
+    if (r) this.submissions.set(itemId, { ...r, state: 'failed', reason, localOnly: true });
   }
 
   progress = new Map<string, ProgressRow>(); // itemId -> row

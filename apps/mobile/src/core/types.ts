@@ -129,6 +129,12 @@ export interface MySubmissionRow {
   queuedAt: string;
   /** 送达时刻 ISO8601；未送达为空串 */
   sentAt: string;
+  /**
+   * 「仅本地留存」终态标记（册子 #56 §2.4）：为 true 时该行**不再进入重放队列**
+   * （其 `state` 恒为 `failed`，`runFlushSubmissions` 只取 `pending`，双保险）。
+   * 独立列而非复用 `reason` 前缀——文案可改、标记不可改。
+   */
+  localOnly: boolean;
 }
 
 /** 我参与的小组（本地 `groups` 表，本册 §5.1）。名单是**快照**，以节点读回为准。 */
