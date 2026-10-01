@@ -58,6 +58,9 @@ export function newLessonID(courseId: string): string {
   return `${courseId}/lesson/${bytesToHex(randomBytes(8))}`;
 }
 
+/** 「仅本地留存」的固定原因文案（重放与重投两处共用，册子 #56 §2.4 / #61 §4.3）。 */
+const LOCAL_ONLY_REASON = '本地数据无法还原，仅本地留存';
+
 /** kind 固定序：与 `core/tags.ts` 的 `TAG_KIND_ORDER`、节点 `store.tagKindRank` 同序。 */
 const TAG_KIND_RANK: Record<string, number> = { course: 0, lesson: 1, article: 2, comment: 3 };
 
@@ -374,7 +377,7 @@ async function runFlushSubmissions(o: SubmitOptions): Promise<FlushSubmissionsRe
       // ledgerSegmentsOf → containerFormFromLedger → buildContainerSegments，老数据由此自愈。
       const rebuilt = containerSegmentsFromLedger(row);
       if (rebuilt === null) {
-        await o.repo.markSubmissionLocalOnly(row.itemId, '本地数据无法还原，仅本地留存');
+        await o.repo.markSubmissionLocalOnly(row.itemId, LOCAL_ONLY_REASON);
         failed += 1;
         continue;
       }
@@ -409,7 +412,54 @@ async function runFlushSubmissions(o: SubmitOptions): Promise<FlushSubmissionsRe
   return { sent, failed, remaining, error };
 }
 
-/** 台账 `links_json` → 草稿 `links`；空串或解析失败按空数组（节点会拒，不会写出错数据）。 */
+/**
+ * 重投一条台账行（册子 #61 §4.3）：读台账行 → 容器行重用 `containerSegmentsFromLedger` 归一化重建
+ * （与 `runFlushSubmissions` 同一判据、同一文案）→ 走既有 `submitItem`。
+ * **不引入新的状态流转**：成功 `sent`；永久 4xx → `failed`；还原不出 → 终态「仅本地留存」；
+ * 暂时失败（断网 / 429 / 5xx）**不改台账状态**（把 `failed` 改回 `pending` 会违反 #56 §2.4 的单向性）。
+ */
+export async function retrySubmission(o: SubmitOptions, itemId: string): Promise<SubmitOutcome> {
+  if (o.nodeBaseUrl === '') throw new SubmitError('client', '未配置节点地址，无法投稿');
+  const row = await o.repo.getSubmission(itemId);
+  if (row === null) throw new SubmitError('client', '本地没有这条投稿记录');
+
+  let segments: SubmitSegmentRow[] | undefined;
+  if (row.type === 'course' || row.type === 'lesson') {
+    const rebuilt = containerSegmentsFromLedger(row);
+    if (rebuilt === null) {
+      await o.repo.markSubmissionLocalOnly(row.itemId, LOCAL_ONLY_REASON);
+      return { itemId: row.itemId, created: false, ledgerState: 'failed', message: LOCAL_ONLY_REASON };
+    }
+    segments = rebuilt;
+  }
+  const draft: SubmitDraft = {
+    itemId: row.itemId,
+    type: row.type,
+    title: row.title,
+    bodyMd: row.bodyMd,
+    questionJson: row.questionJson,
+    links: row.type === 'tag' ? decodeLedgerLinks(row.itemId, row.linksJson) : undefined,
+    segments,
+  };
+  try {
+    const r = await submitItem(o, draft);
+    await o.repo.markSubmissionSent(row.itemId, r.created ? 1 : 0, new Date().toISOString());
+    return { itemId: row.itemId, created: r.created, ledgerState: 'sent', message: '' };
+  } catch (e) {
+    const msg = e instanceof SubmitError ? e.message : `补发失败：${(e as Error).message ?? String(e)}`;
+    if (isPermanentSubmitFailure(e)) {
+      await o.repo.markSubmissionFailed(row.itemId, msg);
+      return { itemId: row.itemId, created: false, ledgerState: 'failed', message: msg };
+    }
+    // 暂时失败：只回文案，不动台账状态
+    return { itemId: row.itemId, created: false, ledgerState: row.state === 'failed' ? 'failed' : 'pending', message: msg };
+  }
+}
+
+/**
+ * 台账 `links_json` → 草稿 `links`；空串或解析失败按空数组（节点会拒，不会写出错数据）。
+ * 本模块内 `runFlushSubmissions` 与 `retrySubmission` 两处调用共用本私有版。
+ */
 function decodeLedgerLinks(tagId: string, raw: string): TagLinkRow[] {
   if (raw === '') return [];
   try {

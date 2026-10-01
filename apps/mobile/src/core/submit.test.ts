@@ -4,9 +4,10 @@ import { deriveIdentityId, sha256Hex, utf8, verifyAuthorSig, type Json } from '@
 
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { IDENTITY_REGISTERED_KEY } from './comment';
-import { buildArticlePayload, buildContainerPayload, buildQuizPayload, buildTagPayload, contentHashOf, enqueueOrSend, flushSubmissions, newItemID, submitItem, type SubmitDraft, type SubmitOptions } from './submit';
+import { buildArticlePayload, buildContainerPayload, buildQuizPayload, buildTagPayload, contentHashOf, enqueueOrSend, flushSubmissions, newItemID, retrySubmission, submitItem, type SubmitDraft, type SubmitOptions } from './submit';
 import { buildQuestionJSON } from './quizdoc';
 import { decodeUtf8 } from './sync';
+import type { MySubmissionRow } from './types';
 
 const BASE = 'https://node.test';
 const ID = 'a'.repeat(64);
@@ -393,5 +394,69 @@ describe('补发：容器行归一化重放（册子 #56 §2.3）', () => {
     const res = await flushSubmissions(o);
     expect(res).toEqual({ sent: 0, failed: 0, remaining: 0, error: '' });
     expect(http.posted.filter((p) => p.url.endsWith('/v1/submit'))).toHaveLength(0);
+  });
+});
+
+/** 造一条容器台账行（除需断言的字段外给中性默认值）。 */
+function containerRow(over: Partial<MySubmissionRow> = {}): MySubmissionRow {
+  return {
+    itemId: 'course/c1', type: 'course', title: '课程', bodyMd: '', questionJson: '', linksJson: '',
+    segmentsJson: JSON.stringify([
+      { seq: -1, kind: 'attr.instructor', text: '李老师' },
+      { seq: 1, kind: 'lesson', text: 'course/c1/lesson/l1' },
+    ]),
+    state: 'pending', reason: '网络不可达', created: 0,
+    queuedAt: '2026-10-01T00:00:00Z', sentAt: '', localOnly: false,
+    ...over,
+  };
+}
+
+/** 造一套依赖；`submit` 路由由调用方按需设置。 */
+function env() {
+  const http = new FakeHttp();
+  const repo = new MemoryRepo();
+  const o: SubmitOptions = { adapters: fakeAdapters(http, new MemoryFs(), new FakePackReader()), repo, nodeBaseUrl: BASE };
+  http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+  return { http, repo, o };
+}
+
+describe('retrySubmission：失败行重投（册子 #61 §4.3）', () => {
+  it('pending 容器行重建后重投成功 ⇒ 台账转 sent', async () => {
+    const { http, repo, o } = env();
+    http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'course/c1', created: false }));
+    await repo.saveSubmission(containerRow());
+
+    const out = await retrySubmission(o, 'course/c1');
+
+    expect(out.ledgerState).toBe('sent');
+    expect((await repo.getSubmission('course/c1'))!.state).toBe('sent');
+    expect(http.posted.some((p) => p.url === `${BASE}/v1/submit`)).toBe(true);
+  });
+
+  it('节点永久 4xx ⇒ 台账转 failed，且保留节点文案', async () => {
+    const { http, repo, o } = env();
+    http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8(JSON.stringify({ code: 'item_segments_invalid' })) });
+    await repo.saveSubmission(containerRow({ state: 'failed', reason: '旧原因' }));
+
+    const out = await retrySubmission(o, 'course/c1');
+
+    expect(out.ledgerState).toBe('failed');
+    expect(out.message).not.toBe('');
+    const got = (await repo.getSubmission('course/c1'))!;
+    expect(got.state).toBe('failed');
+    expect(got.reason).toBe(out.message);
+  });
+
+  it('容器行集还原不出（空 segments_json）⇒ 降级为「仅本地留存」终态，不发网络请求', async () => {
+    const { http, repo, o } = env();
+    await repo.saveSubmission(containerRow({ state: 'failed', segmentsJson: '' }));
+
+    const out = await retrySubmission(o, 'course/c1');
+
+    expect(out.ledgerState).toBe('failed');
+    expect(out.message).toBe('本地数据无法还原，仅本地留存');
+    const got = (await repo.getSubmission('course/c1'))!;
+    expect(got.localOnly).toBe(true);
+    expect(http.posted.some((p) => p.url === `${BASE}/v1/submit`)).toBe(false);
   });
 });
