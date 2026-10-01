@@ -3143,3 +3143,21 @@ Plan complete and saved to `docs/superpowers/plans/2026-10-01-base-progress-plan
 **更正 6（Task 9 · 2026-10-01）** 发布前硬检查 `git grep -nE '="[^"]*\.value|\{\{[^}]*\.value' -- apps/mobile/src/pages/*/*.vue` 在 **Windows PowerShell 5.1** 下会**吞掉模式里的 `"`**，使 `="[^"]*` 退化为 `=[^]*`（`[^]` 匹配非 `]` 任意字符），从而误报 `<script>` 里的 `.value`。**正确执行方式**：用本仓库的 Grep 工具（ripgrep）跑同一正则，或把命令写成转义形式；**判据不变，仍是「无输出」**。Task 10 / 11 / 12 照此执行，避免误判。
 
 **更正 7（Task 9 · 2026-10-01）** 审查暴露两处「**客户端上报了它并不想表达的值**」，已在 `af8dc6c` 修正：① `article.vue` —— `onLoad` 在 `try` 之前就设 `itemId.value = raw`，文章未命中时只设 `error` 就返回而 `itemId` 非空，离开时 `scrollable = 0` ⇒ `currentPosition()` 返回 `articlePosition(1) = 1000` ⇒ **把一篇没载入的文章写成「已读完」**（并污染课程完成度）；已改为 `reportNow` 要求「**已成功载入**（`error` 为空且内容存在）**且已 measure**」才上报，`measure` 的 exec 回调内置「已测量」标志。② `quiz.vue` —— 全答完复访时 `restoreProgress` 置 `index = total - 1`、`picked = null`，离开时 `answeredCount = total - 1` ⇒ 经 LWW **抹掉原 `done = true`**；已改为上报 `position = max(answeredCount, restoredPosition)`、`done` 由该 `position` 推出，使**上报值不回退**且 `done` 与 `position` 自洽。`paintProgress` 早退语义未变。
+
+**更正 8（Task 12 · 2026-10-01）** 计划 Task 12 Step 5 的探活命令写「在节点上 `curl http://127.0.0.1:8081/...`」，但 `base.service` 的 `-peer-addr :8081` 是**节点↔节点 TLS 监听**，明文 HTTP 打上去只会得到 `400 Client sent an HTTP request to an HTTPS server`（四项探针全 400，看起来像全面回归）。**正确做法**：路由存在性探活一律走 **`https://127.0.0.1/`（443）**（`curl -sk`）；发布文档对外仍走 **`http://<节点>/v1/release`（80，经 nginx → 缓存节点 `:8083`）**。实测：`comment=200`、`proposal=200`、`POST /v1/blob=400`（非 404）、`GET /v1/blob=405`、`/v1/blobzzz=404`（反向对照）、`/v1/me=400`（鉴权前置、路由在线）。
+
+---
+
+## 执行实况（Task 12 收口 · 2026-10-01）
+
+**代码 commits**：`62fc18f`/`6a6c8ad`（Task 1）、`2f512c9`（Task 2）、`41ef28b`（Task 3）、`a5b4436`（Task 4）、`1e7042d`（Task 5）、`2d2b312`（Task 6）、`5de6500`/`ca162e3`（Task 7）、`4c63547`（Task 8）、`3fd66ad`/`af8dc6c`（Task 9）、`003c583`（Task 10）、`df56d43`（Task 11）、`f081ca6`（Task 12：版本落 `0.17.0`/`22` + 本计划「执行期更正」）。Task 1–11 逐 Task 走「派发 → 两阶段审查（实现 + 规格）→ 必修则派回原实现者修补（新建 commit，不 amend）」。
+
+**门禁实况（Task 12 Step 3）**：`go build ./...` / `go vet ./...` 退出码 0，`go test ./...` 全包 `ok`；`npx vitest run` **31 文件 / 375 用例全绿**；`npx tsc --noEmit` 无输出；`npm run build:h5` 成功；模板 `.value` 硬检查（ripgrep，扫描 24 个 `.vue`）**无命中**；`powershell -File scripts/acceptance-d.ps1` **TC-D01–TC-D07 全 PASS**。
+
+**节点二进制**：`21841459` 字节 / sha256 `7b66c76260a6967f71e0cd9eee0dda71955093b74045bc52fc8d97507b579de4`；`mv` 原子替换 `/opt/base/based` + `chmod 0755`，旧件备份为 `/opt/base/based.bak-pre-0.17.0`；`base` 与 `base-cache` 重启后均 `active`；只读探活见「更正 8」。
+
+**手机端发布四步（REL）**：HBuilderX `cli pack` 云打包（09:29:26 提交、09:32:30 成功）→ APK **`27442676` 字节 / sha256 `6e911676c06614c6dc39b9880ea30803ab75b8f72f69b03a82d79cb9668290af`** / 包内 `"version":{"code":"22","name":"0.17.0"}` / 证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.6.0–0.16.0 一致，可覆盖安装）→ 上传 `/opt/appdl/base-0.17.0.apk`（远端 sha256 逐字一致）→ `/opt/appdl/index.html` 整页重写改指（仅含 `base-0.17.0.apk`，`0.16.x` 残留 **0** 命中）→ `based release` 签发落 `/opt/base-cache/data/release.json`（`/opt/base/data/release.json` 不存在，无游离副本）。
+
+**线上验证**：`GET http://118.190.217.242/v1/release` → `version_name=0.17.0`、`min_version_name=0.8.0`、`apk_size=27442676`、`apk_sha256` 与本地逐字一致、`issuer=base-node-1`；`HEAD http://118.190.217.242/dl/base-0.17.0.apk` → `200` 且 `Content-Length=27442676`；`GET http://118.190.217.242/dl/` 页内含 `base-0.17.0.apk`（1 命中）、无 `0.16.x`（0 命中）。
+
+**未实测（待人工）**：客户端 `verifyRelease` 对线上文档的实测验签、以及 §「待人工」登记的 5 条真机项（内容页续位与细进度条、课程页「已学 a / b 讲」、我的页进度卡与连续天数、跨设备收敛、断网写入后联网补发）。
