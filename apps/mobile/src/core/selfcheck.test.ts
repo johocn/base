@@ -74,13 +74,14 @@ const ARTICLE: ArticleRow = {
   rev: '1',
 };
 
-/** 12 条探测的展示顺序（spec §3）。 */
+/** 15 条探测的展示顺序（spec §3）。 */
 const ALL_IDS = [
   'crypto.sqlite_random',
   'crypto.pool',
   'crypto.sign',
   'fs.bigfile',
   'fs.meta',
+  'fs.root',
   'db.tx',
   'db.pack',
   'net.tls_get',
@@ -130,7 +131,7 @@ describe('runSelfCheck', () => {
 
     expect(r.degraded).toBe(false);
     expect(r.items.map((i) => i.id)).toEqual(ALL_IDS);
-    expect(r.items.map((i) => i.status)).toEqual(new Array(14).fill('ok'));
+    expect(r.items.map((i) => i.status)).toEqual(new Array(15).fill('ok'));
     expect(r.flags).toEqual({ cryptoOk: 'ok', fsOk: 'ok', dbOk: 'ok', writeOk: 'ok', pickOk: 'ok' });
     // 污染控制：probe.bin / meta.bin 已删，只剩 pack 文件；事务探测未留行
     expect([...env.fs.files.keys()]).toEqual(['/work/pack-p1.sqlite']);
@@ -175,7 +176,7 @@ describe('runSelfCheck', () => {
 
     const timedOut = r.items.filter((i) => i.detail.includes('超时')).map((i) => i.id);
     expect(timedOut).toEqual(['net.tls_get', 'net.release_verify']);
-    expect(r.items).toHaveLength(14);
+    expect(r.items).toHaveLength(15);
     expect(r.flags.cryptoOk).toBe('ok');
   });
 
@@ -202,6 +203,17 @@ describe('runSelfCheck', () => {
 
     expect(r.items.find((i) => i.id === 'db.pack')?.status).toBe('skip');
     expect(r.flags.dbOk).toBe('ok');
+  });
+
+  it('用例 15：落盘根明细 ok 且给出胜出全路径（册子 #63 §3.4）', async () => {
+    const env = makeEnv({ withPack: true });
+    const r = await runSelfCheck(env.ctx, { plus: FAKE_PLUS, pick: FAKE_PICK });
+
+    const p = r.items.find((i) => i.id === 'fs.root');
+    expect(p?.status).toBe('ok');
+    expect(p?.detail).toContain('/work');
+    // 污染控制：探测文件已删
+    expect([...env.fs.files.keys()]).toEqual(['/work/pack-p1.sqlite']);
   });
 });
 

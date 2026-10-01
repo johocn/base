@@ -128,7 +128,7 @@ const LOAD_DB_DOWN = '本地库不可用，未探测';
 const RENDER_SEGMENTS = 800;
 const B64_BYTES = 100 * 1024;
 
-/** 14 条探测（spec §3）。顺序即自检页的展示顺序。 */
+/** 15 条探测（spec §3）。顺序即自检页的展示顺序。 */
 const PROBES: Probe[] = [
   {
     id: 'crypto.sqlite_random',
@@ -220,6 +220,27 @@ const PROBES: Probe[] = [
       }
       if (await c.adapters.fs.exists(path)) throw new Error('remove 后 exists 仍为真');
       return 'size / exists / remove 一致';
+    },
+  },
+  {
+    id: 'fs.root',
+    group: '文件/库',
+    name: '落盘根可用（建目录 / 写 / 读回 / 删）',
+    affects: '封面 / 附件上传、编辑面日志',
+    flag: 'fsOk',
+    scope: 'local',
+    async run(c, _plus, _pick) {
+      // 落盘根候选链（册子 #63 §3.2）的胜出结果就在 c.workDir 里；此处再实做一次证明它可写可读。
+      // 用 writeFile 而非 ensureDir：ensureDir 不在 FsAdapter 接口上（adapter.ts:4-12）。
+      const path = `${c.workDir}/${PROBE_DIR}-root/root.bin`;
+      await c.adapters.fs.writeFile(path, new Uint8Array([1]));
+      try {
+        const back = await c.adapters.fs.readFile(path);
+        if (back.length !== 1 || back[0] !== 1) throw new Error(`读回 ${back.length} 字节，期望 1`);
+      } finally {
+        await c.adapters.fs.remove(path);
+      }
+      return `落盘根 ${c.workDir}`;
     },
   },
   {
