@@ -3,7 +3,7 @@
 <article>
 	<h1 class="{{if .TitleColor}}c-{{.TitleColor}}{{end}}">{{.Title}}</h1>
 	{{if .Badges}}<div class="meta">{{range .Badges}}<span class="badge">{{.}}</span>{{end}}</div>{{end}}
-	<div class="meta">{{.PublishedAt}}{{range .Tags}}<span class="tag">{{.}}</span>{{end}}</div>
+	<div class="meta">{{.PublishedAt}}{{range .TagViews}}<span class="tag">{{.Name}}{{if .Pending}} <span class="badge">待票选</span>{{end}}</span>{{end}}</div>
 	{{if .CoverBlobID}}<div class="cover"><img src="/v1/blob/{{.CoverBlobID}}" alt="{{.Title}}"></div>{{end}}
 	{{if .Digest}}<p class="meta">{{.Digest}}</p>{{end}}
 	{{.Body}}

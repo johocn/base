@@ -44,6 +44,8 @@ type pageProposal struct {
 	ActionLabel    string
 	ItemID         string
 	Title          string
+	TermName       string // directory_add 行的词条展示名（非空时替代 Title 渲染）
+	TermPending    bool   // 词条尚未 approved ⇒ 渲染「待票选」角标
 	Linkable       bool
 	ItemState      string
 	ItemStateLabel string
@@ -82,11 +84,17 @@ type pageArticle struct {
 	Title       string
 	Digest      string
 	PublishedAt string
-	Tags        []string
+	TagViews    []pageTag
 	Body        template.HTML
 	CoverBlobID string
 	Badges      []string
 	TitleColor  string
+}
+
+// pageTag 是文章标签 chip：Name 为原文（模板负责转义），Pending = 该标签词条尚未 approved。
+type pageTag struct {
+	Name    string
+	Pending bool
 }
 
 // handleIndex 渲染公开内容目录，只列 active + public 的 article 条目。
@@ -138,12 +146,19 @@ func (s *Server) handleArticlePage(w http.ResponseWriter, r *http.Request) {
 		segs = nil
 	}
 	badges, titleColor := articleMarks(segs)
+	// 三态判定：目录读失败 ⇒ 空集 ⇒ 保持遗留行为（全部按 approved，不加角标）。
+	approved := s.approvedTermSet()
+	views := []pageTag{}
+	for _, name := range decodeTags(art.TagsJSON) {
+		key, ok := store.NormalizeTermKey(name)
+		views = append(views, pageTag{Name: name, Pending: !ok || !approved[store.DirectoryKindTag+"\x00"+key]})
+	}
 	data := pageData{Title: art.Title, Issuer: s.opt.Issuer, PairingCode: s.opt.PairingCode, Fingerprint: s.opt.FingerprintHex, Article: &pageArticle{
 		ItemID:      art.ItemID,
 		Title:       art.Title,
 		Digest:      art.Digest,
 		PublishedAt: art.PublishedAt,
-		Tags:        decodeTags(art.TagsJSON),
+		TagViews:    views,
 		Body:        markdown.Render(art.BodyMD),
 		CoverBlobID: s.coverBlobID(itemID),
 		Badges:      badges,
@@ -224,6 +239,8 @@ func governActionLabel(action string) string {
 		return "改写"
 	case store.GovernActionRevive:
 		return "复活"
+	case store.GovernActionDirectoryAdd:
+		return "新增词条"
 	default:
 		return action
 	}
@@ -272,6 +289,21 @@ func formatMillis(ms int64) string {
 	return time.UnixMilli(ms).Local().Format("2006-01-02 15:04")
 }
 
+// approvedTermSet 读目录的 approved 词条，折成 "kind\x00term_key" 集合。
+// 读失败返回空集：这是**有意的降级**——宁可全部按 approved 显示（不加角标），
+// 也不因目录不可用把存量词条集体误标为「待票选」（册子 #58 §9 风险 2）。
+func (s *Server) approvedTermSet() map[string]bool {
+	terms, _, err := s.st.ListDirectory()
+	if err != nil {
+		return map[string]bool{}
+	}
+	set := make(map[string]bool, len(terms))
+	for _, t := range terms {
+		set[t.Kind+"\x00"+t.TermKey] = true
+	}
+	return set
+}
+
 // handleGovernancePage 渲染治理看板：服务端直接读库，**不调接口**（册子 §7.2）。
 //
 // 复用 governRoster() 而不是自己建集合，是为了继承它的降级口径：
@@ -305,14 +337,15 @@ func (s *Server) handleGovernancePage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// ListProposalViews 按 proposal_id 升序（旧 → 新）返回；这里只做纯展示反转（新提案在前，册子 §7.4）
+	approved := s.approvedTermSet()
 	for i := len(views) - 1; i >= 0; i-- {
-		data.Proposals = append(data.Proposals, s.proposalPageRow(views[i], names))
+		data.Proposals = append(data.Proposals, s.proposalPageRow(views[i], names, approved))
 	}
 	s.renderPage(w, governanceTmpl, data)
 }
 
 // proposalPageRow 把一条提案视图折成看板行。**票数与门槛一律用 ListProposalViews 给的**，看板不自己算。
-func (s *Server) proposalPageRow(v store.ProposalView, names map[string]string) pageProposal {
+func (s *Server) proposalPageRow(v store.ProposalView, names map[string]string, approved map[string]bool) pageProposal {
 	row := pageProposal{
 		Action:      v.Action,
 		ActionLabel: governActionLabel(v.Action),
@@ -336,6 +369,13 @@ func (s *Server) proposalPageRow(v store.ProposalView, names map[string]string) 
 	}
 	if v.Action == store.GovernActionEdit {
 		row.Edit = &pageProposalEdit{Title: v.Title, BodyMD: v.BodyMD}
+	}
+	if v.Action == store.GovernActionDirectoryAdd {
+		// 目录提案没有目标条目（GetItem 恒 !ok），标题位改渲染词条展示名。
+		// 角标只在状态未定案（pending）时挂：册子 §5.1 的「待票选」定义 = 不在 approved 集；
+		// 已生效的目录提案在同一个看板上已有「已生效」状态标签，再挂「待票选」会自相矛盾。
+		row.TermName = store.CleanDisplayName(v.Title)
+		row.TermPending = v.Status == store.GovernStatusPending
 	}
 	// 两条可见性护栏（册子 §7.3）：标题只在 public 时显示；链接只挂 active + public
 	if it, ok, err := s.st.GetItem(v.ItemID); err == nil && ok {

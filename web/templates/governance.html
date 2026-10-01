@@ -11,7 +11,8 @@
 	<li>
 		<h2>
 			<span class="badge">{{.ActionLabel}}</span>
-			{{if .Linkable}}<a href="/a/{{.ItemID}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}
+			{{if .TermName}}{{.TermName}}{{else}}{{if .Linkable}}<a href="/a/{{.ItemID}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}{{end}}
+			{{if .TermPending}}<span class="badge">待票选</span>{{end}}
 			{{if .ItemStateLabel}}<span class="badge {{if eq .ItemState "removed"}}badge-off{{else}}badge-on{{end}}">{{.ItemStateLabel}}</span>{{end}}
 		</h2>
 		<div class="small">{{.Reason}}</div>
