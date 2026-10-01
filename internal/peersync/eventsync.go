@@ -396,7 +396,7 @@ func applySyncedGovernEvent(st *store.Store, it eventSyncItem, roster map[string
 	// 投影后 settle（册子 §4.3 / §4.4）：proposal 与 vote **两支都要**——反熵不保证
 	// proposal 事件先于 vote 事件到达。settle 失败只记日志、**不阻断整页反熵**
 	//（事件行才是权威来源，读接口可从事件重算）。
-	if err := st.SettleGovernProposal(pid, roster); err != nil {
+	if err := st.SettleGovernProposal(pid, roster, true); err != nil {
 		log.Printf("peersync: 治理提案 %d 生效判定失败（事件行已落，读接口可从事件重算）: %v", pid, err)
 	}
 	return true, nil

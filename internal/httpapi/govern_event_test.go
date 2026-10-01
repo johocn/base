@@ -149,7 +149,7 @@ func drainGovernFromPeer(t *testing.T, peerURL string, dst *store.Store) []map[s
 		}
 		// **必须与 applySyncedGovernEvent 的真实行为一致**：投影后 settle（proposal / vote 两支都要）。
 		// 镜像失真会让 AC 11 等用例验不到事件路径的生效闭环（缺陷 1 的洞）。
-		if err := dst.SettleGovernProposal(pid, testRoster(t, dst)); err != nil {
+		if err := dst.SettleGovernProposal(pid, testRoster(t, dst), true); err != nil {
 			t.Fatalf("SettleGovernProposal: %v", err)
 		}
 	}

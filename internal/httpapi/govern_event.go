@@ -171,7 +171,7 @@ func (s *Server) handleGovernEvent(w http.ResponseWriter, actor string, req even
 	// 反熵不保证 proposal 事件先于 vote 事件到达，故任一事件落地后都重新收敛一次（幂等）。
 	// settle 是派生、事件是权威：失败只记日志，**不拒事件**。（顺序与 peersync.applySyncedGovernEvent 一致。）
 	roster, _ := s.governRoster() // 派生失败按空名册降级（册子 §6.2），settle 会停在 pending
-	if err := s.st.SettleGovernProposal(pid, roster); err != nil {
+	if err := s.st.SettleGovernProposal(pid, roster, true); err != nil {
 		log.Printf("httpapi: 治理提案 %d 生效判定失败（事件行已落）: %v", pid, err)
 	}
 	if ev, ok, err := s.st.GetEventByID(req.EventID); err == nil && ok {

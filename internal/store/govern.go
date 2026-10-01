@@ -21,6 +21,16 @@ const (
 	governDefaultThreshold = 2
 )
 
+// 第四个受审动作：目录词条新增（册子 #58 §3.1）。与既有三动作共用提案 / 投票管线与事件。
+const (
+	GovernActionDirectoryAdd = "directory_add"
+	// DirectoryAddQuorum 与 #27 同档 2 票；名册 < DirectorySmallNodeRosterMax 的节点豁免为 1 票（册子 §3.2）。
+	DirectoryAddQuorum          = 2
+	DirectorySmallNodeRosterMax = 10
+	// directoryExecutedResult 是 directory_add 生效后的 executed_result（诊断信息，不构成契约）。
+	directoryExecutedResult = "directory_approved"
+)
+
 // Proposal status 的三值（册子 §4.4）。
 const (
 	GovernStatusPending   = "pending"
@@ -28,12 +38,24 @@ const (
 	GovernStatusVoid      = "void"
 )
 
-// GovernThreshold 返回某动作的授权门槛：remove 3 票，edit / revive 2 票（册子 §2.1）。
+// GovernThreshold 返回某动作的授权门槛：remove 3 票，edit / revive / directory_add 2 票（册子 §2.1 / #58 §3.2）。
 func GovernThreshold(action string) int {
 	if action == GovernActionRemove {
 		return governRemoveThreshold
 	}
+	if action == GovernActionDirectoryAdd {
+		return DirectoryAddQuorum
+	}
 	return governDefaultThreshold
+}
+
+// GovernThresholdForRoster 在名册语境下给出门槛：directory_add 且「名册就绪且 < DirectorySmallNodeRosterMax」⇒ 1（小节点豁免）。
+// 名册派生失败（rosterReady=false）**不豁免**（fail-closed，册子 #58 §9 风险 1）——否则名册抖动会把词条批量误批为公开可见。
+func GovernThresholdForRoster(action string, rosterLen int, rosterReady bool) int {
+	if action == GovernActionDirectoryAdd && rosterReady && rosterLen < DirectorySmallNodeRosterMax {
+		return 1
+	}
+	return GovernThreshold(action)
 }
 
 // GovernRequiredState 返回某动作要求的目标 state（册子 §2.1）。
@@ -272,6 +294,65 @@ func (s *Store) CreateProposal(p Proposal) (int64, error) {
 	return id, tx.Commit()
 }
 
+// CreateDirectoryProposal 单事务写目录提案 + 提案人第 1 票；autoApprove=true（小节点豁免）时
+// **同事务**批准词条、推 directory_version、记 executed_at（册子 #58 §3.2）。返回 (proposal_id, status)。
+//
+// 与 CreateProposal 的唯一差别是 autoApprove 分支把「生效」也收进同一事务，使名册 < 10 的节点
+// 提交即 approved（避免自己投自己）。item_id / title / body_md / base_content_hash 由调用方
+// 按目录契约填好（term_key 落 body_md、display_name 落 title），本函数只负责持久化与版本推进。
+func (s *Store) CreateDirectoryProposal(p Proposal, autoApprove bool) (int64, string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// 与 CreateProposal 同口径固化快照水位（册子 §4.3）。
+	cv, err := contentVersionTx(tx)
+	if err != nil {
+		return 0, "", err
+	}
+	rv, err := maxRevokedRevTx(tx)
+	if err != nil {
+		return 0, "", err
+	}
+	res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,base_content_hash,created_at,content_version,revoked_rev)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		p.Action, p.ItemID, p.ProposerID, p.Reason, p.Title, p.BodyMD, p.LinksJSON,
+		p.BaseContentHash, p.CreatedAt, cv, rv)
+	if err != nil {
+		return 0, "", fmt.Errorf("store: 写目录提案: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, "", err
+	}
+	if _, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,created_at) VALUES(?,?,?)`,
+		id, p.ProposerID, p.CreatedAt); err != nil {
+		return 0, "", fmt.Errorf("store: 写目录提案人第 1 票: %w", err)
+	}
+	if !autoApprove {
+		return id, GovernStatusPending, tx.Commit()
+	}
+	kind, ok := DirectoryKindOfItemID(p.ItemID)
+	if !ok {
+		return 0, "", fmt.Errorf("store: 目录提案 item_id 形态非法 %q", p.ItemID)
+	}
+	if err := approveDirectoryTermExec(tx, kind, p.BodyMD, p.Title, p.ProposerID); err != nil {
+		return 0, "", err
+	}
+	if _, err := bumpDirectoryVersionExec(tx); err != nil {
+		return 0, "", err
+	}
+	if _, err := tx.Exec(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`,
+		time.Now().UnixMilli(), directoryExecutedResult, id); err != nil {
+		return 0, "", fmt.Errorf("store: 记 executed_at: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, "", err
+	}
+	return id, GovernStatusEffective, nil
+}
+
 // contentVersionTx 读当前全局 content_version（meta 缺省视为 0），供 CreateProposal 固化水位。
 func contentVersionTx(tx *sql.Tx) (int64, error) {
 	var n int64
@@ -407,7 +488,8 @@ func addVoteTx(tx *sql.Tx, st *Store, proposalID int64, voterID string, roster m
 	out := VoteResult{
 		ProposalID: proposalID,
 		VoteCount:  len(filterRoster(voters, roster)),
-		Threshold:  GovernThreshold(p.Action),
+		// HTTP 投票路径的名册由 handler 派生；派生失败按空名册参与（rosterReady 恒 true，不因空名册而豁免）。
+		Threshold: GovernThresholdForRoster(p.Action, len(roster), true),
 	}
 
 	// 步 1：已定案（两个一次性事实任一非 0）→ 票已落库，不再判。
@@ -447,6 +529,11 @@ func addVoteTx(tx *sql.Tx, st *Store, proposalID int64, voterID string, roster m
 // governPreconditionTx 判前置条件（册子 §4.4）：目标仍在、state 与动作匹配、content_hash 未变。
 // 第 3 条是本册的乐观锁：授权针对的是**某一版内容**，那一版没了授权就永久作废。
 func governPreconditionTx(tx *sql.Tx, p Proposal) (bool, error) {
+	// directory_add 的目标不是内容条目，items 表无对应行（决策 3）：旧前置条件会因 ErrNoRows 恒判 false，
+	// 故直接放行——目录动作没有可锁定的目标版本。
+	if p.Action == GovernActionDirectoryAdd {
+		return true, nil
+	}
 	var state, hash string
 	err := tx.QueryRow(`SELECT state,content_hash FROM items WHERE item_id=?`, p.ItemID).Scan(&state, &hash)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -484,6 +571,19 @@ func governApplyTx(tx *sql.Tx, st *Store, p Proposal) (string, error) {
 		return "revived", nil
 	case GovernActionEdit:
 		return editItemTx(tx, st, p)
+	case GovernActionDirectoryAdd:
+		// 生效分支写目录（册子 #58 §3.4）：item_id = dir/<kind>/<hash16>，term_key 落 body_md、名落 title。
+		kind, ok := DirectoryKindOfItemID(p.ItemID)
+		if !ok {
+			return "", fmt.Errorf("store: 目录提案 item_id 形态非法 %q", p.ItemID)
+		}
+		if err := approveDirectoryTermExec(tx, kind, p.BodyMD, p.Title, p.ProposerID); err != nil {
+			return "", err
+		}
+		if _, err := bumpDirectoryVersionExec(tx); err != nil {
+			return "", err
+		}
+		return directoryExecutedResult, nil
 	default:
 		return "", fmt.Errorf("store: 不支持的治理动作 %q", p.Action)
 	}

@@ -146,7 +146,7 @@ func (s *Store) ProjectGovernVote(e GovernVoteEvent) error {
 // 名册（roster）与「水位加回集合」（restored）都在**事务外**派生：本库为纯 Go SQLite 且
 // SetMaxOpenConns(1)，在事务里调用 s.ListXxx / s.restoredRosterAuthors 必然死锁（拿不到连接）。
 // 事务内只调用已知的 exec 版本函数（governPreconditionTx / governApplyTx / proposalVotersExec）。
-func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool) error {
+func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool, rosterReady bool) error {
 	p, ok, err := s.GetProposal(proposalID)
 	if err != nil {
 		return err
@@ -166,7 +166,8 @@ func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool) e
 		return err
 	}
 	effective := filterRosterAtWatermarkSet(voters, roster, restored)
-	if len(effective) < GovernThreshold(p.Action) {
+	// 门槛按名册语境分档：directory_add 在就绪的小名册下豁免为 1（册子 #58 §3.2）；其余动作同既有口径。
+	if len(effective) < GovernThresholdForRoster(p.Action, len(roster), rosterReady) {
 		return nil // 未达门槛
 	}
 
