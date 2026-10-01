@@ -95,6 +95,10 @@
     {
       "path": "pages/tag/apply",
       "style": { "navigationBarTitleText": "补标签" }
+    },
+    {
+      "path": "pages/directory/apply",
+      "style": { "navigationBarTitleText": "补词条" }
     }
   ],
   "tabBar": {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { canonicalize, utf8, verify, type Json } from '@base/protocol-ts';
+import { canonicalize, sha256Hex, utf8, verify, type Json } from '@base/protocol-ts';
 
+import { normalizeTermKey } from './directory';
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { createProposal, listProposals, myIdentityId, vote, GovernError, type GovernOptions } from './govern';
 import { decodeUtf8 } from './sync';
@@ -142,6 +143,43 @@ describe('govern', () => {
     const err = (await createProposal(o, { action: 'remove', itemId: 'article/zzz', reason: 'x' }).catch((e: unknown) => e)) as GovernError;
     expect(err).toBeInstanceOf(GovernError);
     expect(err.code).toBe('client');
+  });
+
+  it('发起 directory_add：事件体只带三键 + 派生 id/hash，不带 title/body_md，且不依赖本地条目', async () => {
+    const http = new FakeHttp();
+    http.routes.set(`${BASE}/v1/proposal`, json({ proposals: [] }));
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'e', received_at: 1 }));
+    const repo = new MemoryRepo(); // 空仓库：无任何条目，验证跳过了 getItem 前置
+    const o: GovernOptions = { adapters: fakeAdapters(http, new MemoryFs(), new FakePackReader()), repo, nodeBaseUrl: BASE };
+
+    const kind = 'category';
+    const displayName = '数学';
+    const termKey = normalizeTermKey(displayName)!;
+    const res = await createProposal(o, { action: 'directory_add', itemId: '', reason: '', directory: { kind, termKey, displayName } });
+    expect(res.proposalId).toBe('1');
+
+    // 独立重算（不抄实现里的中间变量）
+    const digest = sha256Hex(utf8('dir\x00' + kind + '\x00' + termKey));
+    const env = parseEvent(http);
+    expect(env.body).toEqual({
+      action: 'proposal',
+      proposal_id: 1,
+      target_item_id: `dir/${kind}/${digest.slice(0, 16)}`,
+      verb: 'directory_add',
+      content_hash: digest,
+      content_version: 0,
+      revoked_rev: 0,
+      directory_kind: kind,
+      directory_term_key: termKey,
+      directory_display_name: displayName,
+    });
+    const body = env.body as Record<string, unknown>;
+    expect('title' in body).toBe(false);
+    expect('body_md' in body).toBe(false);
+    expect('reason' in body).toBe(false);
+    const pub = registeredPub(http);
+    expect(verify(pub, utf8(canonicalize({ event_id: env.event_id, type: env.type, created_at: env.created_at, body: env.body })), env.sig)).toBe(true);
   });
 
   it('失败映射：错误码转中文；429 与 5xx 各归其类', async () => {

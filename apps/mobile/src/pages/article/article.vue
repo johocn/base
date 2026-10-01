@@ -10,7 +10,8 @@
       </view>
       <text class="meta">{{ article?.publishedAt }}</text>
       <view class="tags">
-        <text v-for="t in articleTags" :key="t.tagId" class="tag" @click="openTag(t.tagId)">{{ tagLabel(t.tagId) }}</text>
+        <text v-for="t in tagChips(articleTags).chips" :key="t.tagId" class="tag" @click="openTag(t.tagId)">{{ t.label }}<text v-if="t.pending" class="term-badge">待票选</text></text>
+        <text v-if="tagChips(articleTags).overflow > 0" class="tag-more">+{{ tagChips(articleTags).overflow }}</text>
         <text v-if="pendingTag" class="tag-pending" @click="applyTag">待补标签 · 补标签</text>
         <text v-else-if="articleTags.length > 0" class="tag-note" @click="proposeTag">已有标签，改动需提案</text>
       </view>
@@ -55,7 +56,8 @@ import { attrsOf } from '../../core/container-view';
 import { setPendingTarget } from '../../core/comment';
 import { articleDone, articlePosition } from '../../core/progress';
 import { reportProgress } from '../../core/progress-store';
-import { canGovern, tagsOf, untaggedTargets } from '../../core/tags';
+import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
+import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
 import { renderMarkdown } from '../../core/markdown';
 import type { ArticleRow, TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
@@ -74,6 +76,8 @@ interface SiblingQuiz {
 }
 const siblingQuizzes = ref<SiblingQuiz[]>([]);
 const articleTags = ref<TagLinkRow[]>([]);
+/** 目录快照（三态判定用）：进入页面时读本地缓存，模板只读 */
+const directory = ref<DirectorySnapshot>({ version: 0, approved: new Map(), pending: new Map() });
 const tagTitles = ref<Record<string, string>>({});
 const untagged = ref<Set<string>>(new Set());
 const governor = ref(false);
@@ -98,6 +102,7 @@ onLoad(async (query) => {
   itemId.value = raw;
   try {
     const { opts, repo } = await bootstrap();
+    directory.value = await loadDirectory(repo);
     // from=ledger：从「我创建的」区进入 → 正文取台账行，不读包表（册子 #51 §3.3）。
     if (q.from === 'ledger') {
       const sub = await repo.getSubmission(raw);
@@ -287,8 +292,38 @@ function openGovernance() {
   uni.navigateTo({ url: `/pages/governance/governance?itemId=${encodeURIComponent(itemId.value)}` });
 }
 
-function tagLabel(tagId: string): string {
-  return tagTitles.value[tagId] ?? tagId;
+/** 原文 → 词条键；非法/空归空串（按 empty 态处理） */
+function termKeyOf(raw: string): string {
+  return normalizeTermKey(raw) ?? '';
+}
+
+interface TagChip {
+  tagId: string;
+  label: string;
+  pending: boolean;
+}
+
+/** 标签 chip 视图（#58 §5.1/§5.3）：名称段走目录展示名，pending 加角标；待票选最多 3 个，超出「+n」。 */
+function tagChips(tags: TagLinkRow[]): { chips: TagChip[]; overflow: number } {
+  const chips: TagChip[] = [];
+  let pendingTotal = 0;
+  let pendingShown = 0;
+  for (const t of tags) {
+    const p = decodeTagPath(t.tagId);
+    const key = p ? termKeyOf(p.name) : '';
+    if (p === null || key === '') {
+      chips.push({ tagId: t.tagId, label: tagTitles.value[t.tagId] ?? t.tagId, pending: false });
+      continue;
+    }
+    const pending = termState(directory.value, 'tag', key) === 'pending';
+    if (pending) {
+      pendingTotal++;
+      if (pendingShown >= 3) continue;
+      pendingShown++;
+    }
+    chips.push({ tagId: t.tagId, label: tagTitle(displayOf(directory.value, 'tag', key), p.chapter, p.section), pending });
+  }
+  return { chips, overflow: Math.max(0, pendingTotal - 3) };
 }
 
 function openTag(tagId: string) {
@@ -340,6 +375,8 @@ function decodedId(raw: string): string {
 .tag { padding: 2px 8px; margin: 0 8px 6px 0; background: #ebf8ff; color: #2b6cb0; border-radius: 10px; font-size: 12px; }
 .tag-pending { padding: 2px 8px; margin: 0 8px 6px 0; background: #fffaf0; color: #b7791f; border-radius: 10px; font-size: 12px; }
 .tag-note { margin: 0 0 6px; color: #888888; font-size: 12px; }
+.tag-more { margin: 0 8px 6px 0; color: #888888; font-size: 12px; }
+.term-badge { display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 6px; background: #edf2f7; color: #718096; font-size: 11px; }
 .chips { display: flex; flex-wrap: wrap; margin-top: 4px; }
 .badge { display: inline-block; font-size: 12px; color: #666666; border: 1px solid #dddddd; border-radius: 10px; padding: 0 8px; margin-right: 6px; }
 

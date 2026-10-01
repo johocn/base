@@ -1,6 +1,7 @@
 import { blobId, sha256Hex, utf8, verifyManifest, type Manifest } from '@base/protocol-ts';
 
 import type { Adapters, SqliteConnection } from '../platform/adapter';
+import { pullDirectory } from './directory';
 import { migrateLegacyIds } from './id-migrate';
 import type { LocalRepo } from './repo';
 import type { ArticleRow, ItemRow, QuizRow, SegmentRow, TombstoneRow } from './types';
@@ -147,7 +148,7 @@ async function assertPackOnDisk(o: SyncOptions, path: string, expected: Uint8Arr
  * 同步一轮。顺序即不变量：先验签 → 再校验 pack → 再拉块 → 最后一次性落库。
  * 任何一步失败都不会在本地留下半截数据。
  */
-export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
+async function syncContentOnce(o: SyncOptions): Promise<SyncResult> {
   const localVersion = Number((await o.repo.getConfig('content_version')) ?? '0');
   const pubHex = await o.repo.getConfig('pubkey_hex');
   if (!pubHex) throw new Error('未配置节点公钥（pubkey_hex），无法验签');
@@ -275,4 +276,18 @@ export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
   // 一次性幂等平移：把旧形态 id（<source>:<slug>）上的用户数据改指到新形态
   await migrateLegacyIds(o.repo);
   return { status: 'updated', contentVersion: cat.content_version, items: items.length, blobs };
+}
+
+/**
+ * 同步一轮：内容同步 + **同轮**拉一次目录（册子 #58 §4.2）。
+ * 目录是旁路：`noop` 与 `updated` 两条路径都拉，但拉取失败**不得**让整轮同步失败。
+ */
+export async function syncOnce(o: SyncOptions): Promise<SyncResult> {
+  const result = await syncContentOnce(o);
+  try {
+    await pullDirectory(o);
+  } catch {
+    // 目录失败静默：内容同步结果已确定，旁路不该拖垮整轮
+  }
+  return result;
 }

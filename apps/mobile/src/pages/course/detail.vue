@@ -7,9 +7,11 @@
         <image v-if="coverPath" :src="coverPath" mode="widthFix" class="cover" />
         <text class="title">{{ courseTitle }}</text>
         <text v-if="digest !== ''" class="digest">{{ digest }}</text>
+        <text v-if="instructor !== ''" class="meta">讲师 {{ instructorDisplay }}<text v-if="instructorPending" class="term-badge">待票选</text></text>
         <text v-if="metaLine !== ''" class="meta">{{ metaLine }}</text>
         <view class="tags">
-          <text v-for="t in courseTags" :key="t.tagId" class="tag" @click="openTag(t.tagId)">{{ tagLabel(t.tagId) }}</text>
+          <text v-for="t in tagChips(courseTags).chips" :key="t.tagId" class="tag" @click="openTag(t.tagId)">{{ t.label }}<text v-if="t.pending" class="term-badge">待票选</text></text>
+          <text v-if="tagChips(courseTags).overflow > 0" class="tag-more">+{{ tagChips(courseTags).overflow }}</text>
           <text v-if="pendingOf(courseId)" class="tag-pending" @click="applyTag(courseId, 'course')">待补标签 · 补标签</text>
           <text v-else-if="courseTags.length > 0" class="tag-note" @click="proposeTag(courseTags[0]!.tagId)">已有标签，改动需提案</text>
         </view>
@@ -28,7 +30,8 @@
           <text class="lesson-title">第 {{ ls.no }} 讲 · {{ ls.title }}</text>
           <text class="meta">{{ ls.sub }}</text>
           <view class="tags">
-            <text v-for="t in ls.tags" :key="t.tagId" class="tag" @click.stop="openTag(t.tagId)">{{ tagLabel(t.tagId) }}</text>
+            <text v-for="t in tagChips(ls.tags).chips" :key="t.tagId" class="tag" @click.stop="openTag(t.tagId)">{{ t.label }}<text v-if="t.pending" class="term-badge">待票选</text></text>
+            <text v-if="tagChips(ls.tags).overflow > 0" class="tag-more">+{{ tagChips(ls.tags).overflow }}</text>
             <text v-if="pendingOf(ls.itemId)" class="tag-pending" @click.stop="applyTag(ls.itemId, 'lesson')">待补标签 · 补标签</text>
           </view>
         </view>
@@ -38,13 +41,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
 import { fetchBlob } from '../../core/blob';
 import { attrsOf, childCounts, childrenRowsOf, digestOf, type AttachmentVM } from '../../core/container-view';
 import { lessonNo } from '../../core/course-tree';
-import { canGovern, tagsOf, untaggedTargets } from '../../core/tags';
+import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
+import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
 import { containerFormFromLedger } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
@@ -61,7 +65,10 @@ interface LessonVM {
 const courseId = ref('');
 const courseTitle = ref('');
 const digest = ref('');
+const instructor = ref('');
 const metaLine = ref('');
+/** 目录快照（三态判定用）：进入页面时读本地缓存，模板只读 */
+const directory = ref<DirectorySnapshot>({ version: 0, approved: new Map(), pending: new Map() });
 const coverPath = ref('');
 const attachments = ref<AttachmentVM[]>([]);
 const lessons = ref<LessonVM[]>([]);
@@ -80,6 +87,7 @@ onLoad(async (query) => {
   const raw = String(q.courseId ?? '');
   try {
     const { opts, repo } = await bootstrap();
+    directory.value = await loadDirectory(repo);
     // from=ledger：从「我创建的」区进入 → 只用台账行集渲染，不读包表（册子 #51 §3.3）。
     if (q.from === 'ledger') {
       const row = await resolveBy(raw, (id) => repo.getSubmission(id));
@@ -91,8 +99,8 @@ onLoad(async (query) => {
       courseId.value = form.itemId;
       courseTitle.value = form.title || form.itemId;
       digest.value = form.digest;
+      instructor.value = form.instructor;
       const meta: string[] = [];
-      if (form.instructor !== '') meta.push(`讲师 ${form.instructor}`);
       if (form.difficulty !== '') meta.push(`难度 ${difficultyLabel(form.difficulty)}`);
       if (form.durationSec > 0) meta.push(`共约 ${Math.round(form.durationSec / 60)} 分钟`);
       metaLine.value = meta.join(' · ');
@@ -122,8 +130,8 @@ onLoad(async (query) => {
     digest.value = digestOf(segs);
     attachments.value = attrs.attachments;
 
+    instructor.value = attrs.instructor;
     const meta: string[] = [];
-    if (attrs.instructor !== '') meta.push(`讲师 ${attrs.instructor}`);
     if (attrs.difficulty !== '') meta.push(`难度 ${difficultyLabel(attrs.difficulty)}`);
     if (attrs.duration > 0) meta.push(`共约 ${Math.round(attrs.duration / 60)} 分钟`);
     metaLine.value = meta.join(' · ');
@@ -194,8 +202,50 @@ function difficultyLabel(d: string): string {
   return d === 'intro' ? '入门' : d === 'basic' ? '基础' : d === 'advanced' ? '进阶' : d;
 }
 
-function tagLabel(tagId: string): string {
-  return tagTitles.value[tagId] ?? tagId;
+/** 原文 → 词条键；非法/空归空串（按 empty 态处理） */
+function termKeyOf(raw: string): string {
+  return normalizeTermKey(raw) ?? '';
+}
+
+const instructorDisplay = computed(() => {
+  const key = termKeyOf(instructor.value);
+  return key === '' ? instructor.value : displayOf(directory.value, 'instructor', key);
+});
+const instructorPending = computed(() => {
+  const key = termKeyOf(instructor.value);
+  return key !== '' && termState(directory.value, 'instructor', key) === 'pending';
+});
+
+interface TagChip {
+  tagId: string;
+  label: string;
+  pending: boolean;
+}
+
+/**
+ * 标签 chip 视图（#58 §5.1/§5.3）：名称段走目录展示名，pending 加灰角标；
+ * **单条目待票选词最多显示 3 个**，超出折叠为「+n」（只数待票选，已通过不受限）。
+ */
+function tagChips(tags: TagLinkRow[]): { chips: TagChip[]; overflow: number } {
+  const chips: TagChip[] = [];
+  let pendingTotal = 0;
+  let pendingShown = 0;
+  for (const t of tags) {
+    const p = decodeTagPath(t.tagId);
+    const key = p ? termKeyOf(p.name) : '';
+    if (p === null || key === '') {
+      chips.push({ tagId: t.tagId, label: tagTitles.value[t.tagId] ?? t.tagId, pending: false });
+      continue;
+    }
+    const pending = termState(directory.value, 'tag', key) === 'pending';
+    if (pending) {
+      pendingTotal++;
+      if (pendingShown >= 3) continue;
+      pendingShown++;
+    }
+    chips.push({ tagId: t.tagId, label: tagTitle(displayOf(directory.value, 'tag', key), p.chapter, p.section), pending });
+  }
+  return { chips, overflow: Math.max(0, pendingTotal - 3) };
 }
 
 function pendingOf(id: string): boolean {
@@ -262,4 +312,6 @@ async function openAttachment(a: AttachmentVM) {
 .tag { padding: 2px 8px; margin: 0 8px 6px 0; background: #ebf8ff; color: #2b6cb0; border-radius: 10px; font-size: 12px; }
 .tag-pending { padding: 2px 8px; margin: 0 8px 6px 0; background: #fffaf0; color: #b7791f; border-radius: 10px; font-size: 12px; }
 .tag-note { margin: 0 0 6px; color: #888888; font-size: 12px; }
+.tag-more { margin: 0 8px 6px 0; color: #888888; font-size: 12px; }
+.term-badge { display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 6px; background: #edf2f7; color: #718096; font-size: 11px; }
 </style>

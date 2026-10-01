@@ -14,6 +14,7 @@
       <view v-for="row in myCreated" :key="row.itemId" class="item" @click="openMyCreated(row)">
         <text class="item-title">{{ typeLabel(row.type) }} · {{ row.title }}</text>
         <text class="meta" :style="`color:${statusColor(row.state)}`">{{ row.statusLabel }}</text>
+        <text v-if="categoryHint(row.itemId) !== ''" class="hint">{{ categoryHint(row.itemId) }}</text>
         <text v-if="row.reason !== ''" class="reason">{{ row.reason }}</text>
         <text v-if="row.localOnly" class="act" @click.stop="removeMyCreated(row)">删除</text>
       </view>
@@ -25,7 +26,7 @@
     <block v-if="groups.length > 0">
       <block v-for="g in groups" :key="g.slug">
         <text class="group group-cat" @click="toggle(g.slug)">
-          {{ collapsed[g.slug] ? '▸ ' : '▾ ' }}{{ g.title }}
+          {{ collapsed[g.slug] ? '▸ ' : '▾ ' }}{{ groupTitle(g) }}<text v-if="groupPending(g)" class="term-badge">待票选</text>
         </text>
         <block v-if="!collapsed[g.slug]">
           <view v-for="it in g.courses" :key="it.itemId" class="item" @click="openCourse(it.itemId)">
@@ -86,7 +87,8 @@ import { syncOnce } from '../../core/sync';
 import { runCreatorVisibilityMigration } from '../../core/creator-migrate';
 import { childrenOf, groupCoursesByCategory, splitCourses } from '../../core/course-tree';
 import { attrsOf } from '../../core/container-view';
-import { buildMyCreatedView, type MyCreatedRow, type MyCreatedType } from '../../core/my-created';
+import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot, type PendingTerm } from '../../core/directory';
+import { buildMyCreatedView, containerFormFromLedger, type MyCreatedRow, type MyCreatedType } from '../../core/my-created';
 import type { ItemRow, ProgressRow, SegmentRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 import { canSync } from '../../core/selfcheck';
@@ -105,6 +107,10 @@ const unclassified = ref<ItemRow[]>([]);
 const standalone = ref<ItemRow[]>([]);
 const collapsed = ref<Record<string, boolean>>({});
 const myCreated = ref<MyCreatedRow[]>([]);
+/** 「我创建的」提示行：itemId -> 「分类待票选 · 已有 n/N 票」（#58 §5.2） */
+const categoryHints = ref(new Map<string, string>());
+/** 目录快照（三态判定用）：进入页面时读本地缓存，模板只读 */
+const directory = ref<DirectorySnapshot>({ version: 0, approved: new Map(), pending: new Map() });
 // 图章与标题色（册子 #53 §2.5）：只读派生映射，仅供展示；无属性行则空数组 / 空串
 const marksByItemId = ref(new Map<string, { badge: string[]; titleColor: string }>());
 /** 每门课的完成度（已学 a / b 讲）；分母为 0 的课**不入 Map** ⇒ 模板不显示该行（#8 册子 §6） */
@@ -156,6 +162,7 @@ function completionText(courseId: string): string {
 async function load() {
   try {
     const { repo, capabilities, opts } = await bootstrap();
+    directory.value = await loadDirectory(repo);
     syncBlocked.value = !canSync(capabilities);
     // 一次性自愈迁移（册子 #56 §2.4）：幂等——标志位已存在即零动作；未配置节点则跳过。
     if (opts.nodeBaseUrl !== '') {
@@ -209,6 +216,23 @@ async function load() {
     const packIds = new Set(all.filter((i) => i.source !== 'local').map((i) => i.itemId));
     myCreated.value = buildMyCreatedView(subs, packIds);
 
+    // 「分类待票选 · 已有 n/N 票」提示行（#58 §5.2）：只加提示行，不改主展示。
+    const hints = new Map<string, string>();
+    for (const sub of subs) {
+      if (sub.type !== 'course') continue;
+      const key = normalizeTermKey(containerFormFromLedger(sub).category) ?? '';
+      if (key === '') continue;
+      let term: PendingTerm | undefined;
+      for (const cand of directory.value.pending.values()) {
+        if (cand.kind === 'category' && cand.termKey === key) {
+          term = cand;
+          break;
+        }
+      }
+      if (term) hints.set(sub.itemId, `分类待票选 · 已有 ${term.votes}/${term.threshold} 票`);
+    }
+    categoryHints.value = hints;
+
     error.value = '';
   } catch (e) {
     error.value = (e as Error).message;
@@ -221,6 +245,23 @@ function badgesOf(itemId: string): string[] {
 
 function titleColorOf(itemId: string): string {
   return marksByItemId.value.get(itemId)?.titleColor ?? '';
+}
+
+/** 分类分组头的展示名（#58 §5.2）：词条键走目录展示名，键非法则回落既有组标题。 */
+function groupTitle(g: CategoryGroupVM): string {
+  const key = normalizeTermKey(g.slug) ?? '';
+  return key === '' ? g.title : displayOf(directory.value, 'category', key);
+}
+
+/** 分类分组头三态（#58 §5.1）：词条键非空且未 approved ⇒ 加「待票选」角标。 */
+function groupPending(g: CategoryGroupVM): boolean {
+  const key = normalizeTermKey(g.slug) ?? '';
+  return termState(directory.value, 'category', key) === 'pending';
+}
+
+/** 「我创建的」提示行文案（无则空串 ⇒ 模板不显示）。 */
+function categoryHint(itemId: string): string {
+  return categoryHints.value.get(itemId) ?? '';
 }
 
 function toggle(itemId: string) {
@@ -336,6 +377,7 @@ onShow(() => {
 .act { display: inline-block; color: #2b6cb0; font-size: 14px; margin-top: 4px; }
 .group { display: block; margin: 16px 0 4px; color: #888888; font-size: 13px; }
 .group-cat { color: #2b6cb0; }
+.term-badge { display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 6px; background: #edf2f7; color: #718096; font-size: 11px; }
 .chips { display: flex; flex-wrap: wrap; margin-top: 4px; }
 .badge { display: inline-block; font-size: 12px; color: #666666; border: 1px solid #dddddd; border-radius: 10px; padding: 0 8px; margin-right: 6px; }
 .c-red { color: #C53030; }

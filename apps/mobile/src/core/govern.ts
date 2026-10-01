@@ -6,7 +6,7 @@
  * 承担跨节点传播；老路径 `POST /v1/proposal` 仍服务未升级的客户端、行为不变（册子 §4.4）。
  * 只依赖注入的 `Adapters` / `LocalRepo`，不 import 'uni'。
  */
-import { bytesToHex, canonicalize, randomBytes, sign, utf8, type Json } from '@base/protocol-ts';
+import { bytesToHex, canonicalize, randomBytes, sha256Hex, sign, utf8, type Json } from '@base/protocol-ts';
 
 import { CommentError, ensureRegistered, type CommentOptions } from './comment';
 import { errorCodeOf, errorText } from './errors';
@@ -22,8 +22,8 @@ const GOVERN_EVENT_TYPE = 'govern.v1';
 /** 提案撞号（conflict）时的重取重发上限：重取最大 id 再发，避免会话内无限循环。 */
 const PROPOSAL_CONFLICT_ATTEMPTS = 3;
 
-/** 三个受审动作（#27 §2.1）。 */
-export type GovernAction = 'remove' | 'edit' | 'revive';
+/** 受审动作（#27 §2.1）+ 词条补录 `directory_add`（#58 §3.1）。 */
+export type GovernAction = 'remove' | 'edit' | 'revive' | 'directory_add';
 
 /** 提案状态三值（#27 §4.4）。 */
 export type GovernStatus = 'pending' | 'effective' | 'void';
@@ -167,10 +167,18 @@ async function snapshotWatermark(o: GovernOptions): Promise<{ contentVersion: nu
 
 export interface CreateProposalInput {
   action: GovernAction;
+  /** 仅非 `directory_add` 需要（词条无对应内容条目） */
   itemId: string;
   reason: string;
   /** 仅 `edit` 需要（#27 §3.1） */
   edit?: { title: string; bodyMd: string };
+  /** 仅 `directory_add` 需要（#58 §3.1）：kind ∈ category/instructor/tag，termKey 必须等于 NormalizeTermKey(displayName) */
+  directory?: { kind: string; termKey: string; displayName: string };
+}
+
+/** `directory_add` 的条目 id 与载荷哈希同源派生（#58 §3.1，与节点侧逐字节同构）。 */
+function directoryDigest(kind: string, termKey: string): string {
+  return sha256Hex(utf8(`dir\x00${kind}\x00${termKey}`));
 }
 
 /**
@@ -180,10 +188,26 @@ export interface CreateProposalInput {
  */
 export async function createProposal(o: GovernOptions, input: CreateProposalInput): Promise<{ proposalId: string }> {
   const ident = await ensureIdentity(o);
-  const item = await o.repo.getItem(input.itemId);
-  const contentHash = item?.contentHash ?? '';
-  if (!/^(?:[0-9a-fA-F]{2})+$/.test(contentHash)) {
-    throw new GovernError('client', '本地缺少该条目的内容哈希，请同步后再试');
+  // directory_add 无对应内容条目：跳过本地内容哈希前置，改用派生载荷哈希与派生 item_id（#58 §3.1）。
+  let dir: { kind: string; termKey: string; displayName: string; targetItemId: string } | null = null;
+  let contentHash = '';
+  if (input.action === 'directory_add') {
+    if (!input.directory) throw new GovernError('client', '缺少词条信息（kind / termKey / displayName）');
+    const digest = directoryDigest(input.directory.kind, input.directory.termKey);
+    dir = {
+      kind: input.directory.kind,
+      termKey: input.directory.termKey,
+      displayName: input.directory.displayName,
+      targetItemId: `dir/${input.directory.kind}/${digest.slice(0, 16)}`,
+    };
+    contentHash = digest;
+  } else {
+    const item = await o.repo.getItem(input.itemId);
+    contentHash = item?.contentHash ?? '';
+    if (!/^(?:[0-9a-fA-F]{2})+$/.test(contentHash)) {
+      throw new GovernError('client', '本地缺少该条目的内容哈希，请同步后再试');
+    }
+    dir = null;
   }
   const { contentVersion, revokedRev } = await snapshotWatermark(o);
   for (let attempt = 0; attempt < PROPOSAL_CONFLICT_ATTEMPTS; attempt++) {
@@ -192,7 +216,7 @@ export async function createProposal(o: GovernOptions, input: CreateProposalInpu
     const body: Record<string, Json> = {
       action: 'proposal',
       proposal_id: proposalId,
-      target_item_id: input.itemId,
+      target_item_id: dir ? dir.targetItemId : input.itemId,
       verb: input.action,
       content_hash: contentHash,
       content_version: contentVersion,
@@ -204,6 +228,12 @@ export async function createProposal(o: GovernOptions, input: CreateProposalInpu
     if (input.action === 'edit') {
       body.title = input.edit?.title ?? '';
       body.body_md = input.edit?.bodyMd ?? '';
+    }
+    // 词条三键：与 title / body_md 互斥（目录动作混带即整条被拒）
+    if (dir) {
+      body.directory_kind = dir.kind;
+      body.directory_term_key = dir.termKey;
+      body.directory_display_name = dir.displayName;
     }
     const { conflict } = await postGovernEvent(o, ident, body);
     if (!conflict) return { proposalId: String(proposalId) };

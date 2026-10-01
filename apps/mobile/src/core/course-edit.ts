@@ -67,7 +67,7 @@ export interface ContainerForm {
   attachments: AttachmentRow[];
   /** 仅课时：Markdown 正文 → `attr.body_md`；course 恒忽略 */
   bodyMd: string;
-  /** 仅课程：分类 slug；空则不产 `attr.category` 行（lesson 恒忽略） */
+  /** 仅课程：分类**词条键**（可中文，已规范化）；空则不产 `attr.category` 行（lesson 恒忽略） */
   category: string;
   /** 图章（多值；空数组 = 不产该行） */
   badge: string[];
