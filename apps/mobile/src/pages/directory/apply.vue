@@ -1,7 +1,7 @@
 <template>
   <view class="wrap">
     <text class="title">补{{ kindLabel }}</text>
-    <text class="hint">任何已登记身份均可提交；词条需票选通过后才公开可见（提交后显示「待票选」）。</text>
+    <text class="hint">任何已登记身份均可提交；人数不足 10 的节点提交即通过，其余需票选（提交后显示「待票选」）。</text>
 
     <view class="field">
       <text class="label">{{ kindLabel }}名称</text>
@@ -17,7 +17,7 @@
 import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
-import { normalizeTermKey, type TermKind } from '../../core/directory';
+import { loadDirectory, normalizeTermKey, pullDirectory, termState, type TermKind } from '../../core/directory';
 import { createProposal, GovernError } from '../../core/govern';
 import { bootstrap } from '../../platform';
 
@@ -55,7 +55,16 @@ async function submit() {
       { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl },
       { action: 'directory_add', itemId: '', reason: '', directory: { kind: kind.value, termKey, displayName: raw } },
     );
-    uni.showToast({ title: '已提交 · 待票选', icon: 'none' });
+    // 节点在同一请求内已投影 + 结算（govern_event.go 投影后立即 settle），故此处重拉即见最终态。
+    // 不重拉则本地缓存仍是旧版本 ⇒ 小节点上已通过的词条仍显示「待票选」（册子 #65 §2.2 附带核对）。
+    let approved = false;
+    try {
+      await pullDirectory({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
+      approved = termState(await loadDirectory(repo), kind.value, termKey) === 'approved';
+    } catch {
+      // 目录拉取失败静默：提交本身已成功，旁路不该把成功报成失败（与 sync.ts 的 pullDirectory 同口径）。
+    }
+    uni.showToast({ title: approved ? '已通过' : '已提交 · 待票选', icon: 'none' });
     setTimeout(() => uni.navigateBack(), 600);
   } catch (e) {
     error.value = e instanceof GovernError ? e.message : (e as Error).message;
