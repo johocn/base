@@ -51,6 +51,10 @@
 5. **§3.5 的改标载荷存储**：原文只写「载荷为 `links[]`」未定义存储。实施口径为**新列 `govern_proposals.links_json TEXT NOT NULL DEFAULT ''`**（走既有 `governColumnMigrations` 幂等补列），存 `links[]` 的规范 JSON；**不复用 `body_md`**（`body_md` 是 article 载体的语义，混用会让 `scanProposal` 与前端看板都需要按载体二次解释）。空串按「空关联集」解（合法）。
 6. **§4 的改动面漏了三处节点侧改动**：① `internal/httpapi/govern.go` 的 `edit` 校验必须从「写死 `it.SQLiteTable != "articles"` 就拒」改成**按载体系分流**（`articles` 走 `title`+`body_md`，`tag` 型走 `links[]`），且载体相关校验要挪到 `GetItem` **之后**；② 资格判定落在 **`internal/store` 的 `GovernorSet() map[string]bool`**（#23 名册 ∪ 各圈 `DeriveSeats().Governors` 的去重并集），`submit.go` 只调用它、不自己拼集合；③ 客户端侧新增本地列 `my_submissions.links_json`（离线标签投稿补发时重建草稿用，见本册 §5.2 的「断网入网 → 联网补发」链路）。
 
+### 0.3 2026-10-01 上游回填（#58 立册）
+
+标签**名称段**纳入节点级目录（`kind=tag`）；未 approved 的名称在全端显示「待票选」角标（`#58 §5`）。三元组编码、`tag_links` 表、直打与改标路径、软规则口径**一字不改**。
+
 ## 1. 目标与判定
 
 | # | 目标 | 判定 |
