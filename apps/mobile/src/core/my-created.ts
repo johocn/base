@@ -4,7 +4,7 @@
  * 本模块只把行集收窄成列表视图、并从 `segments_json` 还原容器详情所需的读取视图。
  */
 import { attrsOf, childrenRowsOf, digestOf } from './container-view';
-import { buildContainerSegments, emptyContainerForm, type ContainerForm, type ContainerType } from './course-edit';
+import { buildContainerSegments, emptyContainerForm, isLegalContainerId, type ContainerForm, type ContainerType } from './course-edit';
 import type { SubmitSegmentRow } from './attrs';
 import type { MySubmissionRow, SegmentRow } from './types';
 
@@ -110,4 +110,46 @@ export function containerFormFromLedger(row: MySubmissionRow): ContainerForm {
 export function containerSegmentsFromLedger(row: MySubmissionRow): SubmitSegmentRow[] | null {
   const segs = buildContainerSegments(containerFormFromLedger(row));
   return segs.length === 0 ? null : segs;
+}
+
+/**
+ * 「我创建的」行的删除入口判据（册子 #61 §4.2）：**只增不减**——
+ * `localOnly` 行原有的删除入口一字不动保留，`pending` / `failed` 行新增。
+ */
+export function canRemoveMyCreated(row: MyCreatedRow): boolean {
+  return row.state !== 'sent' || row.localOnly;
+}
+
+/** 台账失败行在详情页可用的动作集（册子 #61 §4.2）。 */
+export interface LedgerActions {
+  /** 进入编辑页 */
+  edit: boolean;
+  /** 立即重投这一条 */
+  retry: boolean;
+  /** 本地删除（台账行 + 本机乐观条目） */
+  removeLocal: boolean;
+  /** 复建为新课程（内容照搬、身份重生成） */
+  rebuild: boolean;
+  /** 走既有 `remove` 提案下架（仅已收录内容） */
+  proposeRemove: boolean;
+}
+
+/**
+ * 出路矩阵（册子 #61 §4.2）：**id 非法优先级最高**——任何 state 下都不给「编辑 / 重试」
+ * （原样重投只会再被拒一次），只剩「删除」与「复建」。
+ * `localOnly` 是终态（#56 §2.4），故不给重试。
+ */
+export function ledgerActionsOf(
+  type: MyCreatedType,
+  itemId: string,
+  state: MySubmissionRow['state'],
+  localOnly: boolean,
+): LedgerActions {
+  if (!isLegalContainerId(type as ContainerType, itemId)) {
+    return { edit: false, retry: false, removeLocal: true, rebuild: true, proposeRemove: false };
+  }
+  if (state === 'sent') {
+    return { edit: true, retry: false, removeLocal: false, rebuild: false, proposeRemove: true };
+  }
+  return { edit: true, retry: !localOnly, removeLocal: true, rebuild: false, proposeRemove: false };
 }

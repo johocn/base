@@ -14,10 +14,13 @@ import { loadContainerForm } from './course-edit';
 import { MemoryRepo } from './fakes';
 import {
   buildMyCreatedView,
+  canRemoveMyCreated,
   containerFormFromLedger,
   containerSegmentsFromLedger,
+  ledgerActionsOf,
   ledgerSegmentsOf,
   statusLabelOf,
+  type MyCreatedRow,
   type MyCreatedType,
 } from './my-created';
 import type { MySubmissionRow, SegmentRow } from './types';
@@ -40,6 +43,14 @@ function row(over: Partial<MySubmissionRow> = {}): MySubmissionRow {
     localOnly: false,
     ...over,
   };
+}
+
+/**
+ * 造一条列表行（MyCreatedRow）：复用 `row()` 的中性默认值，再经既有视图收窄器产出真实列表行——
+ * `MySubmissionRow` 缺 `statusLabel` 且 `type`/`reason` 更宽，不能直接喂给收 `MyCreatedRow` 的纯函数。
+ */
+function listRow(over: Partial<MySubmissionRow> = {}): MyCreatedRow {
+  return buildMyCreatedView([row(over)], new Set())[0]!;
 }
 
 function seg(itemId: string, seq: number, kind: string, text: string): SegmentRow {
@@ -243,5 +254,54 @@ describe('containerFormFromLedger：台账行集 → 详情渲染（与 loadCont
     expect(got.instructor).toBe('王老师');
     expect(got.digest).toBe('课时简介');
     expect(got.children).toEqual([{ kind: 'quiz', itemId: 'course/c1/lesson/l1/quiz/q1' }]);
+  });
+});
+
+describe('canRemoveMyCreated：列表删除入口判据（册子 #61 §4.2，只增不减）', () => {
+  it('localOnly 行原样保留删除入口', () => {
+    expect(canRemoveMyCreated(listRow({ state: 'failed', localOnly: true }))).toBe(true);
+  });
+
+  it('pending / failed 行新增删除入口', () => {
+    expect(canRemoveMyCreated(listRow({ state: 'pending' }))).toBe(true);
+    expect(canRemoveMyCreated(listRow({ state: 'failed' }))).toBe(true);
+  });
+
+  it('sent 且非 localOnly ⇒ 不出删除入口', () => {
+    expect(canRemoveMyCreated(listRow({ state: 'sent', localOnly: false }))).toBe(false);
+  });
+});
+
+describe('ledgerActionsOf：失败行出路矩阵（册子 #61 §4.2）', () => {
+  it('sent + id 合法 ⇒ 编辑 + 提案下架（不给本地删除）', () => {
+    expect(ledgerActionsOf('course', 'course/c1', 'sent', false)).toEqual({
+      edit: true, retry: false, removeLocal: false, rebuild: false, proposeRemove: true,
+    });
+  });
+
+  it('pending + id 合法 ⇒ 编辑 + 重试 + 本地删除', () => {
+    expect(ledgerActionsOf('course', 'course/c1', 'pending', false)).toEqual({
+      edit: true, retry: true, removeLocal: true, rebuild: false, proposeRemove: false,
+    });
+  });
+
+  it('failed + id 合法 ⇒ 编辑 + 重试 + 本地删除（无复建）', () => {
+    expect(ledgerActionsOf('course', 'course/c1', 'failed', false)).toEqual({
+      edit: true, retry: true, removeLocal: true, rebuild: false, proposeRemove: false,
+    });
+  });
+
+  it('id 非法 ⇒ 任意 state 都只剩 本地删除 + 复建（最高优先级）', () => {
+    for (const s of ['pending', 'sent', 'failed'] as const) {
+      expect(ledgerActionsOf('course', 'course%2Fc1', s, false)).toEqual({
+        edit: false, retry: false, removeLocal: true, rebuild: true, proposeRemove: false,
+      });
+    }
+  });
+
+  it('「仅本地留存」终态 ⇒ 不给重试（永不自动重放）', () => {
+    const a = ledgerActionsOf('course', 'course/c1', 'failed', true);
+    expect(a.retry).toBe(false);
+    expect(a.removeLocal).toBe(true);
   });
 });
