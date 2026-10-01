@@ -3125,3 +3125,21 @@ Plan complete and saved to `docs/superpowers/plans/2026-10-01-base-progress-plan
 
 - 若选 1：**REQUIRED SUB-SKILL** `superpowers:subagent-driven-development`（fresh subagent per task + two-stage review）。
 - 若选 2：**REQUIRED SUB-SKILL** `superpowers:executing-plans`（batch execution with checkpoints）。
+
+---
+
+## 执行期更正
+
+**更正 1（Task 7 · 2026-10-01）** `SqlRepo.mergeProgress` 在「同一批次内出现重复 `item_id`」时退化为**末条胜**，与 `MemoryRepo` 的 LWW 语义分歧；因本仓库 `SqlRepo` 无单测（语义一律经 `MemoryRepo` 断言），该分歧会静默漏网。已改为循环内**写后回填 `cur`**（`cur.set(row.itemId, { ...row, dirty: false })`），判据仍复用 `core/progress.ts` 的 `progressWins`；并补回归用例「同批同 `item_id` 按 LWW 取胜者，而非末条」。commit `ca162e3`。
+
+**更正 2（Task 1 / Task 2 · 2026-10-01）** 计划 Task 2 Step 4 的 `internal/protocol/progress.go` 与 Step 1 的测试代码块**不是 gofmt-canonical**（缺 EOF 换行、匿名 struct 字段对齐时 `Version int` 少一个空格）。执行时以 `gofmt` 输出为准；**逐字语义未变**，不计为口径偏差。后续 Task 照抄计划代码块时同理。
+
+**更正 3（Task 1 · 2026-10-01）** Task 1 与 Task 2 存在**交叉编译依赖**：`internal/store/progress.go` 调用 `protocol.ProgressWins`，而该符号由 Task 2 创建。执行 Task 1 时按计划 Task 2 Step 4 的原文**提前写入** `internal/protocol/progress.go`（当时未纳入 Task 1 的提交），由 Task 2 的 Step 7 一并提交。故 `62fc18f` 单独检出不可编译，`2f512c9` 起闭合——计划 Task 1 已明示此依赖与自救办法（L502）。
+
+**更正 4（Task 8 · 2026-10-01）** 节流用例末行断言由计划写的 `http.posted` 长度 **`4` 改为 `3`**：`ensureRegistered` 会缓存 `identity.registered`，第二轮真投递**不再重登记**（首轮 `register + event` = 2，第三轮 `event` = 1）。断言语义（「满 5s 才再发」）不变。
+
+**更正 5（Task 8 · 2026-10-01）** `pullProgress` 中 `signRequestHeaders(...)` 原计划**直传** `http.get`，但 `SignedHeaders` 是 interface、无索引签名，而 `HttpAdapter.get` 要 `Record<string, string>`（`tsc` 报 TS2345）。已按仓库既有写法（`group.ts:882`）改为 `{ ...signRequestHeaders(...) }`——**纯类型层修正，行为不变**（`FakeHttp.get` 本就忽略 headers）。
+
+**更正 6（Task 9 · 2026-10-01）** 发布前硬检查 `git grep -nE '="[^"]*\.value|\{\{[^}]*\.value' -- apps/mobile/src/pages/*/*.vue` 在 **Windows PowerShell 5.1** 下会**吞掉模式里的 `"`**，使 `="[^"]*` 退化为 `=[^]*`（`[^]` 匹配非 `]` 任意字符），从而误报 `<script>` 里的 `.value`。**正确执行方式**：用本仓库的 Grep 工具（ripgrep）跑同一正则，或把命令写成转义形式；**判据不变，仍是「无输出」**。Task 10 / 11 / 12 照此执行，避免误判。
+
+**更正 7（Task 9 · 2026-10-01）** 审查暴露两处「**客户端上报了它并不想表达的值**」，已在 `af8dc6c` 修正：① `article.vue` —— `onLoad` 在 `try` 之前就设 `itemId.value = raw`，文章未命中时只设 `error` 就返回而 `itemId` 非空，离开时 `scrollable = 0` ⇒ `currentPosition()` 返回 `articlePosition(1) = 1000` ⇒ **把一篇没载入的文章写成「已读完」**（并污染课程完成度）；已改为 `reportNow` 要求「**已成功载入**（`error` 为空且内容存在）**且已 measure**」才上报，`measure` 的 exec 回调内置「已测量」标志。② `quiz.vue` —— 全答完复访时 `restoreProgress` 置 `index = total - 1`、`picked = null`，离开时 `answeredCount = total - 1` ⇒ 经 LWW **抹掉原 `done = true`**；已改为上报 `position = max(answeredCount, restoredPosition)`、`done` 由该 `position` 推出，使**上报值不回退**且 `done` 与 `position` 自洽。`paintProgress` 早退语义未变。
