@@ -18,10 +18,13 @@ import {
   ATTR_TITLE_COLOR,
   DIGEST_KIND,
   assignAttrSeqs,
+  attrSeqsCanonical,
+  isAttrKind,
   isTitleColor,
   segmentsContentHash,
   serializeBadge,
   type AttrLine,
+  type AttrSlot,
   type SubmitSegmentRow,
 } from './attrs';
 import { attrsOf, childrenRowsOf, digestOf } from './container-view';
@@ -134,6 +137,56 @@ export function buildContainerSegments(form: ContainerForm): SubmitSegmentRow[] 
 }
 
 /**
+ * 容器子项词表（与 `internal/httpapi/submit.go` 的 `childKindsByContainer` **同值同义**）。
+ * 这是「客户端可判」与「节点裁决」的唯一交集，改一处必须改两处。
+ */
+const CHILD_KINDS_BY_CONTAINER: Record<ContainerType, string[]> = {
+  course: ['lesson'],
+  lesson: ['article', 'video', 'audio', 'quiz'],
+};
+
+/**
+ * 行集预检（本册 §4）：判据与节点 `validateSubmitSegments` 同构，**失败指名到行**。
+ * 目的是把「提交后只看到兜底 400」提前到「保存前看到是哪一行」——尤其是 `loadContainerForm`
+ * 会把库里原样的 kind 带回表单、原样发回，而客户端新增行恒合法，故非法来源只能是既有清单行。
+ */
+export function validateContainerSegments(
+  type: ContainerType,
+  rows: SubmitSegmentRow[],
+): { ok: boolean; message: string } {
+  const ordered = [...rows].sort((a, b) => a.seq - b.seq);
+  const allowed = new Set(CHILD_KINDS_BY_CONTAINER[type]);
+  const attrs: AttrSlot[] = [];
+  let childNo = 0;
+  for (let i = 0; i < ordered.length; i++) {
+    const s = ordered[i]!;
+    if (i > 0 && s.seq === ordered[i - 1]!.seq) {
+      return { ok: false, message: `第 ${i + 1} 行的 seq=${s.seq} 与上一行重复` };
+    }
+    if (s.seq < 0) {
+      if (!isAttrKind(s.kind)) {
+        return { ok: false, message: `属性行的 kind=${s.kind} 不合法（seq=${s.seq}）` };
+      }
+      attrs.push({ seq: s.seq, kind: s.kind, text: s.text });
+    } else if (s.seq === 0) {
+      if (s.kind !== DIGEST_KIND) {
+        return { ok: false, message: `seq=0 的简介行 kind 必须是 ${DIGEST_KIND}，实际是 ${s.kind}` };
+      }
+    } else {
+      childNo += 1;
+      if (!allowed.has(s.kind)) {
+        const scope = type === 'course' ? '课程只能挂课时' : '课时只能挂文章 / 视频 / 音频 / 测验';
+        return { ok: false, message: `第 ${childNo} 个子项的 kind=${s.kind} 不合法：${scope}` };
+      }
+    }
+  }
+  if (!attrSeqsCanonical(attrs)) {
+    return { ok: false, message: '属性行未按规范排布（seq<0 须按 kind 字典序分配）' };
+  }
+  return { ok: true, message: '' };
+}
+
+/**
  * 容器表单 → 本地乐观条目 + 行集（册子 #56 §2.1）：`content_hash` 用现行
  * `segmentsContentHash(orderedRows)` 算（与节点 `store.SegmentsContentHash` 逐字节同构）。
  * `saveContainer` 与 `core/creator-migrate.ts` 共用这一出口，避免两处各算一份哈希。
@@ -177,6 +230,35 @@ export async function loadContainerForm(repo: LocalRepo, itemId: string, type: C
 }
 
 /**
+ * 预检失败写台账 `failed`（字段与 `core/submit.ts` 的 `writeLedger` 同口径）。
+ * 本函数**不导出**、也**不发网络请求**：行集非法时提交必然被节点判 `item_segments_invalid`，
+ * 与其等一个兜底 400，不如本地就写明是哪一行（AC 4）。
+ */
+async function writeFailedLedger(
+  o: SubmitOptions,
+  form: ContainerForm,
+  segments: SubmitSegmentRow[],
+  reason: string,
+): Promise<void> {
+  const prev = await o.repo.getSubmission(form.itemId);
+  await o.repo.saveSubmission({
+    itemId: form.itemId,
+    type: form.type,
+    title: form.title.trim(),
+    bodyMd: '',
+    questionJson: '',
+    linksJson: '',
+    segmentsJson: JSON.stringify([...segments].sort((a, b) => a.seq - b.seq)),
+    state: 'failed',
+    reason,
+    created: prev?.created ?? 0,
+    queuedAt: new Date().toISOString(),
+    sentAt: '',
+    localOnly: false,
+  });
+}
+
+/**
  * 落一条容器投稿。新建与编辑同一条路径——`enqueueOrSend` 本身就是 upsert（本册 §4.1）：
  * 送达 → 台账 `sent`；断网 / 429 / 5xx → `pending` 待补发；其余 4xx → `failed`。
  * 三种结果都会留台账行（「我的条目」的列表本体）。
@@ -185,6 +267,12 @@ export async function saveContainer(o: SubmitOptions, form: ContainerForm): Prom
   const { item, segments } = toLocalContainer(form, new Date().toISOString());
   // 先本地乐观落库（册子 #56 §2.1）：本机立刻可读、可点开、可编辑，不依赖节点重建内容包。
   await o.repo.upsertLocalContainer(item, segments);
+  // 行集预检（本册 §4）：客户端能判的先判、指名到行、不发网络请求。
+  const check = validateContainerSegments(form.type, segments);
+  if (!check.ok) {
+    await writeFailedLedger(o, form, segments, check.message);
+    return { itemId: form.itemId, created: false, ledgerState: 'failed', message: check.message };
+  }
   return enqueueOrSend(o, {
     itemId: form.itemId,
     type: form.type,

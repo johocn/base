@@ -10,6 +10,7 @@ import {
   startNewCourse,
   startNewLesson,
   toLocalContainer,
+  validateContainerSegments,
   type ContainerForm,
 } from './course-edit';
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
@@ -242,5 +243,48 @@ describe('saveContainer：本地乐观落库 + 投稿（册子 #56 §2.1）', ()
     };
     await expect(saveContainer(o, lessonForm())).rejects.toThrow('未配置节点地址，无法投稿');
     expect((await repo.getItem('course/c1/lesson/l1'))!.source).toBe('local');
+  });
+});
+
+describe('validateContainerSegments / saveContainer 预检（本册 §4）', () => {
+  it('合法行集 ⇒ ok', () => {
+    expect(validateContainerSegments('lesson', buildContainerSegments(lessonForm())).ok).toBe(true);
+    expect(validateContainerSegments('course', buildContainerSegments(emptyContainerForm('course', 'course/c1'))).ok).toBe(true);
+  });
+
+  it('course 挂 article 子项 ⇒ 指名到行，且 saveContainer 不发网络请求', async () => {
+    const bad: ContainerForm = {
+      ...emptyContainerForm('course', 'course/c1'),
+      title: '课',
+      children: [{ kind: 'article', itemId: 'course/c1/article/a1' }],
+    };
+    const check = validateContainerSegments('course', buildContainerSegments(bad));
+    expect(check.ok).toBe(false);
+    expect(check.message).toContain('第 1 个子项');
+    expect(check.message).toContain('article');
+
+    const http = new FakeHttp();
+    const repo = new MemoryRepo();
+    const o: SubmitOptions = { adapters: fakeAdapters(http, new MemoryFs(), new FakePackReader()), repo, nodeBaseUrl: BASE };
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'course/c1', created: true }));
+
+    const out = await saveContainer(o, bad);
+    expect(out.ledgerState).toBe('failed');
+    expect(out.message).toContain('第 1 个子项');
+    expect(http.posted.some((p) => p.url === `${BASE}/v1/submit`)).toBe(false);
+    expect((await repo.getSubmission('course/c1'))!.state).toBe('failed');
+  });
+
+  it('seq 重复 ⇒ 判否；seq=0 非 digest ⇒ 判否（镜像三区间铁律）', () => {
+    const dup = validateContainerSegments('course', [
+      { seq: 0, kind: 'digest', text: 'x' },
+      { seq: 0, kind: 'digest', text: 'y' },
+    ]);
+    expect(dup.ok).toBe(false);
+    expect(dup.message).toContain('重复');
+
+    const wrongDigest = validateContainerSegments('course', [{ seq: 0, kind: 'lesson', text: 'course/c1/lesson/l1' }]);
+    expect(wrongDigest.ok).toBe(false);
   });
 });
