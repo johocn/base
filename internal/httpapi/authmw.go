@@ -51,7 +51,7 @@ var authErrText = map[string]string{
 	"item_id_taken":            "该 item_id 已被占用",
 	"item_rate_limited":        "投稿过于频繁",
 
-	"proposal_action_unsupported": "action 只能是 remove / edit / revive",
+	"proposal_action_unsupported": "action 只能是 remove / edit / revive / directory_add",
 	"proposal_reason_invalid":     "reason 必须是去首尾空白后 1..200 个字符，且不含控制字符",
 	"proposal_edit_invalid":       "edit 载荷不合法：title 须为去首尾空白后 1..200 个字符且不含控制字符，body_md 必填，且目标必须是 article 载体",
 	"proposal_directory_invalid":  "directory 载荷不合法：kind 须为 category/instructor/tag，display_name 规范化后须与 term_key 一致",
