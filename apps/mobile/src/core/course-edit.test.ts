@@ -5,6 +5,7 @@ import { attrSeqsCanonical, segmentsContentHash } from './attrs';
 import {
   buildContainerSegments,
   emptyContainerForm,
+  isLegalContainerId,
   loadContainerForm,
   saveContainer,
   startNewCourse,
@@ -331,5 +332,28 @@ describe('loadContainerForm：参数解码（册子 #61 §2）', () => {
     const form = await loadContainerForm(new MemoryRepo(), 'course%ZZ', 'course');
     expect(form.itemId).toBe('course%ZZ');
     expect(form.title).toBe('');
+  });
+});
+
+describe('isLegalContainerId：容器 id 形态判据（册子 #61 §4.3）', () => {
+  it('合法形态：course/<段> 与 course/<段>/lesson/<段>', () => {
+    expect(isLegalContainerId('course', 'course/0123456789abcdef')).toBe(true);
+    expect(isLegalContainerId('lesson', 'course/0123456789abcdef/lesson/fedcba9876543210')).toBe(true);
+    expect(isLegalContainerId('course', 'course/c1')).toBe(true);
+    expect(isLegalContainerId('lesson', 'course/c1/lesson/l1')).toBe(true);
+    expect(isLegalContainerId('course', 'course/a-b-9')).toBe(true);
+  });
+
+  it('含 % / 大写 / 空段 / 段长越界 / 段结构不符 ⇒ 非法', () => {
+    expect(isLegalContainerId('course', 'course%2Fc1')).toBe(false);
+    expect(isLegalContainerId('course', 'Course/c1')).toBe(false);
+    expect(isLegalContainerId('course', 'course//c1')).toBe(false);
+    expect(isLegalContainerId('course', `course/${'a'.repeat(65)}`)).toBe(false);
+    expect(isLegalContainerId('course', 'article/a1')).toBe(false);
+    expect(isLegalContainerId('course', 'course')).toBe(false);
+    expect(isLegalContainerId('lesson', 'course/c1')).toBe(false);
+    expect(isLegalContainerId('lesson', 'course/c1/lesson')).toBe(false);
+    expect(isLegalContainerId('lesson', 'course/c1/article/a1')).toBe(false);
+    expect(isLegalContainerId('lesson', 'course/c1/lesson/l1/x')).toBe(false);
   });
 });

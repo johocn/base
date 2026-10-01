@@ -100,6 +100,20 @@ export function emptyContainerForm(type: ContainerType, itemId: string): Contain
   };
 }
 
+/** id 段形态：与 `submit.ts` 注释的节点 item_id 口径同源（`[a-z0-9][a-z0-9-]{0,63}`）。 */
+const ID_SEGMENT = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * 容器 id 形态判据（册子 #61 §4.3）：段级字符与长度 + 容器段结构。
+ * 用于详情页/编辑页判「这条台账行能不能原样重投」——含 `%` 或段结构不符者不可救，只能复建为新 id。
+ */
+export function isLegalContainerId(type: ContainerType, id: string): boolean {
+  const segs = id.split('/');
+  if (!segs.every((s) => ID_SEGMENT.test(s))) return false;
+  if (type === 'course') return segs.length === 2 && segs[0] === 'course';
+  return segs.length === 4 && segs[0] === 'course' && segs[2] === 'lesson';
+}
+
 /** 新建课程：生成新 id 并回填。页面打开即调用，使「+ 加一课」能立刻拼出子项 id。 */
 export function startNewCourse(): ContainerForm {
   return emptyContainerForm('course', newItemID('course'));
