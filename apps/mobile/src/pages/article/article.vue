@@ -38,7 +38,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { onLoad, onPageScroll } from '@dcloudio/uni-app';
+import { onHide, onLoad, onPageScroll, onUnload } from '@dcloudio/uni-app';
 
 import {
   READER_FONT_SIZE,
@@ -53,6 +53,8 @@ import {
 import { childrenOf, lessonOfCarrier } from '../../core/course-tree';
 import { attrsOf } from '../../core/container-view';
 import { setPendingTarget } from '../../core/comment';
+import { articleDone, articlePosition } from '../../core/progress';
+import { reportProgress } from '../../core/progress-store';
 import { canGovern, tagsOf, untaggedTargets } from '../../core/tags';
 import { renderMarkdown } from '../../core/markdown';
 import type { ArticleRow, TagLinkRow } from '../../core/types';
@@ -83,6 +85,8 @@ const titleColor = ref('');
 /** 可滚动高度 = 正文实际高度 − 视口高度；为 0 表示还没量到，此时不显示进度条 */
 const scrollable = ref(0);
 const scrolled = ref(0);
+/** 待续位的滚动比例 0..1（进入时从本地 progress 读出）；0 = 不续位 */
+const pendingRestore = ref(0);
 
 const themeLabel = computed(() => READER_THEME_LABEL[theme.value]);
 
@@ -114,6 +118,7 @@ onLoad(async (query) => {
       theme.value = normalizeTheme(await repo.getConfig('reader_theme'));
       fontScale.value = normalizeFontScale(await repo.getConfig('reader_font_scale'));
       fav.value = await repo.isFavorite(sub.itemId);
+      await restoreProgress(sub.itemId);
       await nextTick();
       measure();
       return;
@@ -155,6 +160,7 @@ onLoad(async (query) => {
     governor.value = await canGovern({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
     // 进入即标记已读；readAtNext 保证只写首次
     await repo.markRead(row.itemId, new Date().toISOString());
+    await restoreProgress(row.itemId);
     await nextTick();
     measure();
   } catch (e) {
@@ -168,12 +174,13 @@ onPageScroll((e) => {
 });
 
 /**
- * 进度 = 已滚 / 可滚。可滚高度必须实测：正文长短与字号都影响它，
- * 用固定除数（如 scrollTop/6）会让长文滚一小段就顶到 100%，是误导。
+ * 进度 = 已滚 / 可滚。可滚高度必须实测：正文长短与字号都影响它。
+ * 未量到 / 无需滚动（短文全可见）时**保留本地续位画出的初值**，不归零——
+ * 否则推进去的一瞬间会把「上次读到哪」洗掉。
  */
 function paintProgress() {
-  progress.value =
-    scrollable.value > 0 ? Math.min(100, Math.max(0, Math.round((scrolled.value / scrollable.value) * 100))) : 0;
+  if (scrollable.value <= 0) return;
+  progress.value = Math.min(100, Math.max(0, Math.round((scrolled.value / scrollable.value) * 100)));
 }
 
 /** 正文渲染完、以及每次改字号之后都要重新量（字号变则总高变） */
@@ -186,9 +193,58 @@ function measure() {
     .exec((res) => {
       const rect = res && res[0] ? (res[0] as { height?: number }) : undefined;
       scrollable.value = Math.max(0, (rect?.height ?? 0) - winH);
+      // 续位只能在量到可滚高度之后做：`Math.round(scrollable * fraction)` 才是千分比对应的像素位
+      if (pendingRestore.value > 0 && scrollable.value > 0) {
+        const top = Math.round(scrollable.value * pendingRestore.value);
+        pendingRestore.value = 0;
+        uni.pageScrollTo({ scrollTop: top, duration: 0 });
+      }
       paintProgress();
     });
 }
+
+/** 进入时按本地 progress 续位：细进度条先画到上次位置，正文渲染完（`measure`）后再滚过去（#8 册子 §6）。 */
+async function restoreProgress(id: string) {
+  try {
+    const { repo } = await bootstrap();
+    const p = await repo.getProgress(id);
+    if (!p) return;
+    progress.value = Math.round(Math.min(1000, Math.max(0, p.position)) / 10);
+    if (p.position > 0 && p.position < 1000) pendingRestore.value = p.position / 1000;
+  } catch {
+    // 读本地失败不影响阅读
+  }
+}
+
+/** 当前位置的归一化千分比：无需滚动（短文全可见）即视为读完。 */
+function currentPosition(): number {
+  return articlePosition(scrollable.value > 0 ? scrolled.value / scrollable.value : 1);
+}
+
+/**
+ * 离开页面 / 切前后台时上报一次（§5.3 触发点；不做「滚动即写」——队列会被滚动淹没并撞节点限速）。
+ * 失败静默：本地已由 `reportProgress` 写入，离开动作不该弹错。
+ */
+async function reportNow() {
+  if (itemId.value === '') return;
+  try {
+    const { opts, repo } = await bootstrap();
+    const position = currentPosition();
+    await reportProgress(
+      { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl },
+      { itemId: itemId.value, position, done: articleDone(position) },
+    );
+  } catch {
+    // 静默
+  }
+}
+
+onHide(() => {
+  void reportNow();
+});
+onUnload(() => {
+  void reportNow();
+});
 
 async function toggleFav() {
   const { repo } = await bootstrap();

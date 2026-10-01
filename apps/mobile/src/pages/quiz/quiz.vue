@@ -26,9 +26,11 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onLoad } from '@dcloudio/uni-app';
+import { onHide, onLoad, onUnload } from '@dcloudio/uni-app';
 
 import { gradeAnswer, parseQuestionDoc, shuffleAll, type ShuffledQuestion } from '../../core/quiz';
+import { quizDone, quizPosition } from '../../core/progress';
+import { reportProgress } from '../../core/progress-store';
 import { bootstrap } from '../../platform';
 
 const questions = ref<ShuffledQuestion[]>([]);
@@ -60,6 +62,7 @@ onLoad(async (query) => {
       }
       itemId.value = sub.itemId;
       questions.value = shuffleAll(parsed, sub.itemId);
+      await restoreProgress();
       return;
     }
     const alt = decodedId(raw);
@@ -75,6 +78,7 @@ onLoad(async (query) => {
       return;
     }
     questions.value = shuffleAll(parsed, row.itemId);
+    await restoreProgress();
   } catch (e) {
     error.value = (e as Error).message;
   }
@@ -108,6 +112,49 @@ async function next() {
   }
   finished.value = true;
 }
+
+/** 已作答题数：已翻过的题 + 当前题（已作答则计入）——#8 册子 §3.2 的 quiz 量纲。 */
+function answeredCount(): number {
+  return index.value + (picked.value !== null ? 1 : 0);
+}
+
+/** 进入时续位到上次题号（§6 内容页续位）；全答完时落在最后一题。 */
+async function restoreProgress() {
+  if (questions.value.length === 0) return;
+  try {
+    const { repo } = await bootstrap();
+    const p = await repo.getProgress(itemId.value);
+    if (!p) return;
+    index.value = Math.min(Math.max(0, p.position), questions.value.length - 1);
+  } catch {
+    // 读本地失败不影响答题
+  }
+}
+
+/**
+ * 离开页面 / 切前后台时上报一次（§5.3 触发点）。`done` = 全答完（空题库不算完成）。
+ * 失败静默：本地已写入。
+ */
+async function reportNow() {
+  if (itemId.value === '' || questions.value.length === 0) return;
+  try {
+    const { opts, repo } = await bootstrap();
+    const position = quizPosition(answeredCount(), questions.value.length);
+    await reportProgress(
+      { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl },
+      { itemId: itemId.value, position, done: quizDone(position, questions.value.length) },
+    );
+  } catch {
+    // 静默
+  }
+}
+
+onHide(() => {
+  void reportNow();
+});
+onUnload(() => {
+  void reportNow();
+});
 
 function restart() {
   finished.value = false;
