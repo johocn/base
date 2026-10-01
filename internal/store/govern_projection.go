@@ -166,8 +166,18 @@ func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool, r
 		return err
 	}
 	effective := filterRosterAtWatermarkSet(voters, roster, restored)
-	// 门槛按名册语境分档：directory_add 在就绪的小名册下豁免为 1（册子 #58 §3.2）；其余动作同既有口径。
-	if len(effective) < GovernThresholdForRoster(p.Action, len(roster), rosterReady) {
+	// 门槛按名册语境分档（册子 #58 §3.2）；remove 另加免票选旁路（本册 §5）。
+	threshold := GovernThresholdForRoster(p.Action, len(roster), rosterReady)
+	freeResult := ""
+	if p.Action == GovernActionRemove {
+		// 在 Begin 之前用 s.db 判定：单连接池下事务内再发查询会死锁。
+		// 判定异常按「不可免票选」处理（fail-closed），退回既有 3 票。
+		if free, ferr := freeRemoveEligible(s.db, p.ItemID, p.ProposerID); ferr == nil && free {
+			threshold = 0
+			freeResult = freeRemoveExecutedResult
+		}
+	}
+	if len(effective) < threshold {
 		return nil // 未达门槛
 	}
 
@@ -199,6 +209,9 @@ func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool, r
 	result, err := governApplyTx(tx, s, cur)
 	if err != nil {
 		return err
+	}
+	if freeResult != "" {
+		result = freeResult // 免票选删除：executed_result 记 'free_remove'（仅诊断，不影响读路径）
 	}
 	if _, err := tx.Exec(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`,
 		now, result, proposalID); err != nil {

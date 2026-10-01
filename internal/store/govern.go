@@ -491,6 +491,15 @@ func addVoteTx(tx *sql.Tx, st *Store, proposalID int64, voterID string, roster m
 		// HTTP 投票路径的名册由 handler 派生；派生失败按空名册参与（rosterReady 恒 true，不因空名册而豁免）。
 		Threshold: GovernThresholdForRoster(p.Action, len(roster), true),
 	}
+	// 免票选删除（本册 §5）：remove 提案若可免票选，门槛降为 0 并立即生效。
+	// 用 **tx** 判定（本函数已在事务内，走 exec 版本查询符合 SetMaxOpenConns(1)）；异常 fail-closed 退回 3 票。
+	freeResult := ""
+	if p.Action == GovernActionRemove {
+		if free, ferr := freeRemoveEligible(tx, p.ItemID, p.ProposerID); ferr == nil && free {
+			out.Threshold = 0
+			freeResult = freeRemoveExecutedResult
+		}
+	}
 
 	// 步 1：已定案（两个一次性事实任一非 0）→ 票已落库，不再判。
 	if p.ExecutedAt != 0 || p.VoidedAt != 0 {
@@ -517,6 +526,9 @@ func addVoteTx(tx *sql.Tx, st *Store, proposalID int64, voterID string, roster m
 	result, err := governApplyTx(tx, st, p)
 	if err != nil {
 		return VoteResult{}, err
+	}
+	if freeResult != "" {
+		result = freeResult // 免票选删除：executed_result 记 'free_remove'（仅诊断）
 	}
 	if _, err := tx.Exec(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`,
 		now, result, proposalID); err != nil {
