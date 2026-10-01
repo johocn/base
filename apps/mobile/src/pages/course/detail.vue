@@ -16,7 +16,10 @@
           <text v-else-if="courseTags.length > 0" class="tag-note" @click="proposeTag(courseTags[0]!.tagId)">已有标签，改动需提案</text>
         </view>
         <text v-if="canEdit" class="act" @click="openEdit">编辑本课程</text>
-        <text v-if="canEdit" class="act danger" @click="removeCourse">{{ busy ? '删除中…' : '删除本课程' }}</text>
+        <text v-if="fromLedger && actions.retry" class="act" @click="retrySubmit">{{ busy ? '重试中…' : '重试提交' }}</text>
+        <text v-if="fromLedger && actions.rebuild" class="act" @click="rebuildCourse">复建为新课程</text>
+        <text v-if="fromLedger && actions.removeLocal" class="act danger" @click="removeLocal">{{ busy ? '删除中…' : '删除这条记录' }}</text>
+        <text v-if="canProposeRemove" class="act danger" @click="removeCourse">{{ busy ? '删除中…' : '删除本课程' }}</text>
 
         <block v-if="attachments.length > 0">
           <text class="group">附件（{{ attachments.length }}）</text>
@@ -50,10 +53,11 @@ import { attrsOf, childCounts, childrenRowsOf, digestOf, type AttachmentVM } fro
 import { lessonNo } from '../../core/course-tree';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
-import { containerFormFromLedger } from '../../core/my-created';
+import { containerFormFromLedger, ledgerActionsOf, type LedgerActions } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
 import { createProposal, GovernError, listProposals } from '../../core/govern';
 import { bootstrap } from '../../platform';
+import { retrySubmission, SubmitError } from '../../core/submit';
 
 interface LessonVM {
   itemId: string;
@@ -81,6 +85,12 @@ const governor = ref(false);
 const loaded = ref(false);
 const busy = ref(false);
 const canEdit = ref(false);
+/** 「删除本课程」（既有 `remove` 提案）是否出现；台账分支按矩阵、普通入口随 `canEdit` */
+const canProposeRemove = ref(false);
+/** 台账入口标记：仅该分支启用出路矩阵动作 */
+const fromLedger = ref(false);
+/** 台账行出路矩阵（册子 #61 §4.2）：纯函数算，模板只消费 */
+const actions = ref<LedgerActions>({ edit: false, retry: false, removeLocal: false, rebuild: false, proposeRemove: false });
 const error = ref('');
 
 const KIND_LABEL: Record<string, string> = { article: '文章', quiz: '测验', video: '视频', audio: '音频' };
@@ -116,7 +126,10 @@ onLoad(async (query) => {
         sub: '本地未同步（点开按 id 直接查）',
         tags: [],
       }));
-      canEdit.value = row.state === 'sent';
+      fromLedger.value = true;
+      actions.value = ledgerActionsOf(form.type, row.itemId, row.state, row.localOnly);
+      canEdit.value = actions.value.edit;
+      canProposeRemove.value = actions.value.proposeRemove;
       loaded.value = true;
       return;
     }
@@ -176,6 +189,7 @@ onLoad(async (query) => {
     courseTags.value = tagsOf(links, course.itemId);
     governor.value = await canGovern({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
     canEdit.value = (await repo.getSubmission(course.itemId))?.state === 'sent';
+    canProposeRemove.value = canEdit.value;
     loaded.value = true;
   } catch (e) {
     error.value = (e as Error).message;
@@ -289,6 +303,46 @@ async function removeCourse() {
   } finally {
     busy.value = false;
   }
+}
+
+/** 重投这一条（册子 #61 §4.3）：成功即离开本页（台账行已转 `sent`，列表会自动去重）。 */
+async function retrySubmit() {
+  if (busy.value) return;
+  busy.value = true;
+  error.value = '';
+  try {
+    const { opts } = await bootstrap();
+    const out = await retrySubmission(opts, courseId.value);
+    uni.showToast({ title: out.ledgerState === 'sent' ? '已提交' : out.message || '仍未成功', icon: 'none' });
+    setTimeout(() => uni.navigateBack(), 600);
+  } catch (e) {
+    error.value = e instanceof SubmitError ? e.message : (e as Error).message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** 本地删除这一条（册子 #61 §4.3）：台账行 + 本机乐观条目一起清，否则课程列表里仍留着它。 */
+async function removeLocal() {
+  if (busy.value) return;
+  busy.value = true;
+  error.value = '';
+  try {
+    const { repo } = await bootstrap();
+    await repo.removeSubmission(courseId.value);
+    await repo.removeLocalContainer(courseId.value);
+    uni.showToast({ title: '已删除', icon: 'success' });
+    setTimeout(() => uni.navigateBack(), 600);
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** 复建为新课程（册子 #61 §4.3）：内容照搬台账行、身份在编辑页重生成。 */
+function rebuildCourse() {
+  uni.navigateTo({ url: `/pages/course/edit?rebuildFrom=${encodeURIComponent(courseId.value)}` });
 }
 
 function openTag(tagId: string) {

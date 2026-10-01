@@ -16,7 +16,7 @@
         <text class="meta" :style="`color:${statusColor(row.state)}`">{{ row.statusLabel }}</text>
         <text v-if="categoryHint(row.itemId) !== ''" class="hint">{{ categoryHint(row.itemId) }}</text>
         <text v-if="row.reason !== ''" class="reason">{{ row.reason }}</text>
-        <text v-if="row.localOnly" class="act" @click.stop="removeMyCreated(row)">删除</text>
+        <text v-if="canRemoveMyCreated(row)" class="act" @click.stop="removeMyCreated(row)">删除</text>
       </view>
     </view>
     <text v-if="tip" class="tip">{{ tip }}</text>
@@ -88,7 +88,7 @@ import { runCreatorVisibilityMigration } from '../../core/creator-migrate';
 import { childrenOf, groupCoursesByCategory, splitCourses } from '../../core/course-tree';
 import { attrsOf } from '../../core/container-view';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot, type PendingTerm } from '../../core/directory';
-import { buildMyCreatedView, containerFormFromLedger, type MyCreatedRow, type MyCreatedType } from '../../core/my-created';
+import { buildMyCreatedView, canRemoveMyCreated, containerFormFromLedger, type MyCreatedRow, type MyCreatedType } from '../../core/my-created';
 import type { ItemRow, ProgressRow, SegmentRow } from '../../core/types';
 import { bootstrap } from '../../platform';
 import { canSync } from '../../core/selfcheck';
@@ -347,10 +347,11 @@ function openMyCreated(row: MyCreatedRow) {
   uni.navigateTo({ url: `/pages/${page}?itemId=${id}&from=ledger` });
 }
 
-/** 删除「仅本地留存」台账行（册子 #56 §2.4 / §7 风险 4：终态必须有手动删除入口）。 */
+/** 删除台账行（册子 #61 §4.3）：台账行 + 本机乐观条目一起清，否则课程列表里仍留着它。 */
 async function removeMyCreated(row: MyCreatedRow) {
   const { repo } = await bootstrap();
   await repo.removeSubmission(row.itemId);
+  await repo.removeLocalContainer(row.itemId);
   await load();
 }
 
