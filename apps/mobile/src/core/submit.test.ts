@@ -134,7 +134,7 @@ describe('台账状态机与补发', () => {
     http.postRoutes.set(`${BASE}/v1/submit`, { status: 403, body: utf8(JSON.stringify({ code: 'item_id_taken' })) });
     const taken = await enqueueOrSend(o, articleDraft({ itemId: 'article/taken1' }));
     expect(taken.ledgerState).toBe('failed');
-    expect((await repo.getSubmission('article/taken1'))!.reason).toBe('该条目已被他人创建');
+    expect((await repo.getSubmission('article/taken1'))!.reason).toBe('该条目已被他人创建（item_id_taken）');
 
     // 5xx 视为暂时（口径填空 4）
     http.postRoutes.set(`${BASE}/v1/submit`, { status: 500, body: utf8('boom') });
@@ -237,7 +237,7 @@ describe('台账状态机与补发', () => {
 
       const r = await enqueueOrSend(o, containerDraft({ itemId: 'course/c1/lesson/l1/quiz/q1' }));
       expect(r.ledgerState).toBe('failed');
-      expect((await repo.getSubmission('course/c1/lesson/l1/quiz/q1'))!.reason).toBe('条目 id 不合法');
+      expect((await repo.getSubmission('course/c1/lesson/l1/quiz/q1'))!.reason).toBe('条目 id 不合法（item_id_invalid）');
     });
   });
 
@@ -458,5 +458,17 @@ describe('retrySubmission：失败行重投（册子 #61 §4.3）', () => {
     const got = (await repo.getSubmission('course/c1'))!;
     expect(got.localOnly).toBe(true);
     expect(http.posted.some((p) => p.url === `${BASE}/v1/submit`)).toBe(false);
+  });
+
+  it('码原文进文案：无码走裸兜底、有码追加（<code>）（册子 #63 §4.2.1）', async () => {
+    const a = env();
+    a.http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8('{"error":"boom"}') });
+    await a.repo.saveSubmission(containerRow({ state: 'failed', reason: '旧' }));
+    expect((await retrySubmission(a.o, 'course/c1')).message).toBe('提交失败（HTTP 400）');
+
+    const b = env();
+    b.http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8('{"code":"item_title_invalid"}') });
+    await b.repo.saveSubmission(containerRow({ state: 'failed', reason: '旧' }));
+    expect((await retrySubmission(b.o, 'course/c1')).message).toBe('标题需 1–200 字且不含控制字符（item_title_invalid）');
   });
 });

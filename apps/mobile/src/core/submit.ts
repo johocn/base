@@ -224,7 +224,9 @@ function mapSubmitFailure(status: number, raw: string, itemId: string): SubmitEr
   if (status === 429 || code === 'item_rate_limited') {
     return new SubmitError('rate_limited', errorText(code, '提交过于频繁，请稍后再试'));
   }
-  const message = errorText(code, `提交失败（HTTP ${status}）`);
+  // 码原文一并进文案（册子 #63 §4.2.1）：toast / 台账 reason / 编辑面日志一处改动全链路可见。
+  const base = errorText(code, `提交失败（HTTP ${status}）`);
+  const message = code === '' ? base : `${base}（${code}）`;
   // 4xx（除 429）= 永久失败；5xx = 节点侧问题，视为暂时（本计划口径填空 4）
   return new SubmitError(status >= 400 && status < 500 ? 'rejected' : 'server', message);
 }
