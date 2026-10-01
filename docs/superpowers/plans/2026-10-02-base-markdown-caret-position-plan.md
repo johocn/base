@@ -45,6 +45,13 @@
 - `pages/lesson/edit.vue` 页面里**有两个 `<textarea>`**（正文 `:37`、摘要 `:53`），所以 renderjs **不能**用 `document.querySelector('uni-textarea textarea')` 裸取（会取到正文，但顺序耦合、脆弱）⇒ 给正文 textarea 加固定 `id="body-caret-anchor"`，桥内按 `#body-caret-anchor textarea` 取。
 - 平台差异决定了「读光标」只能靠元素级事件：`document` 级 `selectionchange` 对 `<textarea>` 的光标移动**在旧版 Android WebView 上不触发**（Chrome 到 125 才补上元素级 `selectionchange`）⇒ 桥**不依赖** `selectionchange`，只挂元素上的 `focus` / `blur` / `input`。用户口径「输入完成，或光标指向其他位置，点快捷标签」这四种时序里，`input`（打字）与 `blur`（点标签前必然失焦）已全部覆盖。
 
+**执行期修正（Task 3 实测，计划初稿漏了这两条，Task 4 照此办）**：
+
+- **renderjs 模块声明块必须显式写**：只在模板里写 `:change:prop="caretBridge.setCaret"` **不会**注册模块，`build:app` 既不出 `app-renderjs.js`，`app-service.js` 里也没有注册语句（表现为「产物里搜不到 `caretBridge`」）。必须加：
+  `<script module="caretBridge" lang="renderjs" src="src/core/caret-bridge.renderjs.js"></script>`（放在 setup `</script>` 与 `<style>` 之间）。
+- **`src` 相对「项目根」（`apps/mobile`）解析，不是相对 `.vue` 文件**：写 `../core/…` 会被解析成 `apps/core/…` 并报 `ENOENT`；两页都用 `src/core/caret-bridge.renderjs.js`。
+- 该 `src` 写法下 `vue-tsc` 干净（不新增错），`build:app` 产物校验通过：`app-renderjs.js`（1040 B）含 `selectionStart` 与 `body-caret-anchor`，`app-service.js` 含 `caretBridge` 注册。
+
 > **对 spec §3.4「真机探针硬门」的处置**：spec 要求「执行时第一个 Task 先做真机探针，不通过即停」。其中**可由本机自动取证的两条已经做完并通过**（模块注册进 `app-renderjs.js`、`app-service.js` 注册语句）——即原方案最大的假设已被证据消除。剩下「真机 DOM 能否命中 / `callMethod` 回调是否到达」天然只能在设备上验，故本册把它落成 Task 6 Step 5 的**真机验收清单**（沿用本仓既有体例「真机验收待人工」），**不阻塞发布**；同时保留 spec 的兜底口径：取不到光标一律落正文末尾 + 一次轻提示，**任何情况下不静默插到「上一次落点」**，故即使真机发现 renderjs 不通，用户侧的缺陷（插错位置）也已消失，只是退化为「插到末尾 + 提示」，不会比现状更差。
 
 ---
@@ -360,7 +367,15 @@
         </view>
   ```
 
-- [ ] **Step 2: 脚本 —— 新增 import**
+- [ ] **Step 2: 模板 —— 加 renderjs 模块声明块（缺它 `:change:prop` 无从解析、`build:app` 不出 `app-renderjs.js`）**
+
+  在 setup 脚本的 `</script>` 与 `<style>` 之间加（`src` 相对**项目根**，见上方「执行期修正」）：
+
+  ```html
+  <script module="caretBridge" lang="renderjs" src="src/core/caret-bridge.renderjs.js"></script>
+  ```
+
+- [ ] **Step 3: 脚本 —— 新增 import**
 
   在 `apps/mobile/src/pages/lesson/edit.vue` 的 import 段（`:177-193`）里，按拼音顺序插到 `../../core/editlog` 之后：
 
@@ -368,7 +383,7 @@
   import { resolveCaret } from '../../core/editor-caret';
   ```
 
-- [ ] **Step 3: 脚本 —— 换掉 body 编辑态三行 + 改 `applyTool`**
+- [ ] **Step 4: 脚本 —— 换掉 body 编辑态三行 + 改 `applyTool`**
 
   `apps/mobile/src/pages/lesson/edit.vue:208-243` 整段由
 
@@ -472,7 +487,7 @@
   }
   ```
 
-- [ ] **Step 4: 全门禁**
+- [ ] **Step 5: 全门禁**
 
   ```powershell
   npm run typecheck
@@ -484,7 +499,7 @@
   git grep -nE '="[^"]*\.value|\{\{[^}]*\.value' -- apps/mobile/src/pages
   ```
 
-  （cwd = 仓库根）预期：无输出。
+  （cwd = 仓库根）预期：无输出。⚠️ PowerShell 5.1 会把内嵌双引号吞掉，实跑请改用 Grep 工具或写进文件再执行（本次执行即因此误报过一次）。
 
   ```powershell
   npm run build:h5
@@ -510,7 +525,7 @@
 
   预期：有命中（`$renderjs` / `$renderjsModules` 注册语句）。
 
-- [ ] **Step 5: 提交**
+- [ ] **Step 6: 提交**
 
   ```powershell
   git add apps/mobile/src/pages/lesson/edit.vue
@@ -555,7 +570,15 @@
         </view>
   ```
 
-- [ ] **Step 2: 脚本 —— 新增 import**
+- [ ] **Step 2: 模板 —— 加 renderjs 模块声明块（同 Task 3 Step 2，缺它不出 `app-renderjs.js`）**
+
+  在 setup 脚本的 `</script>` 与 `<style>` 之间加：
+
+  ```html
+  <script module="caretBridge" lang="renderjs" src="src/core/caret-bridge.renderjs.js"></script>
+  ```
+
+- [ ] **Step 3: 脚本 —— 新增 import**
 
   在 `apps/mobile/src/pages/submit/submit.vue` 的 import 段里，插到 `import { renderMarkdown } from '../../core/markdown';` 之后：
 
@@ -563,7 +586,7 @@
   import { resolveCaret } from '../../core/editor-caret';
   ```
 
-- [ ] **Step 3: 脚本 —— 换掉 `:106-141` 整段**
+- [ ] **Step 4: 脚本 —— 换掉 `:106-141` 整段**
 
   由
 
@@ -667,7 +690,7 @@
   }
   ```
 
-- [ ] **Step 4: 全门禁（同 Task 3 Step 4，逐条跑）**
+- [ ] **Step 5: 全门禁（同 Task 3 Step 5，逐条跑）**
 
   ```powershell
   npm run typecheck
@@ -699,7 +722,7 @@
 
   预期：≥ **2**（两页各注册一次）。
 
-- [ ] **Step 5: 提交**
+- [ ] **Step 6: 提交**
 
   ```powershell
   git add apps/mobile/src/pages/submit/submit.vue
