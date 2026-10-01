@@ -10,7 +10,7 @@ import { bytesToHex, canonicalize, randomBytes, sha256Hex, sign, utf8, type Json
 
 import { CommentError, ensureRegistered, type CommentOptions } from './comment';
 import { errorCodeOf, errorText } from './errors';
-import { peekLocalIdentity, type Identity } from './identity';
+import { peekLocalIdentity, signRequestHeaders, type Identity } from './identity';
 import { decodeUtf8 } from './sync';
 
 /** 与 `core/comment.ts` 同一组依赖（同一套 `ensureRegistered`，本册不另立会话模块）。 */
@@ -122,8 +122,21 @@ async function ensureIdentity(o: GovernOptions): Promise<Identity> {
 }
 
 /**
- * 构造并投递一条 `govern.v1` 事件。签名覆盖 `canonical({event_id, type, created_at, body})`
- * （与 `core/wire.ts` 的 `buildEventWire` 逐字同构；事件路径只验内容签名，不需要签名头）。
+ * 把本地步骤（编码 / 签名）的裸错误包成带原因的可读错误。
+ * 与 `core/comment.ts` 的 `localStep` 同口径，但抛 `GovernError`（本模块只暴露一种错误类型）。
+ */
+function localStep<T>(what: string, fn: () => T): T {
+  try {
+    return fn();
+  } catch (e) {
+    throw new GovernError('client', `${what}失败：${(e as Error).message ?? String(e)}`);
+  }
+}
+
+/**
+ * 构造并投递一条 `govern.v1` 事件。内容签名覆盖 `canonical({event_id, type, created_at, body})`
+ * （与 `core/wire.ts` 的 `buildEventWire` 逐字同构），**且必须再带 5 个请求签名头**——
+ * 节点 `authenticate` 第一步即判缺头（400 `auth_missing_header`），与事件内容签名无关（本册 §1）。
  * `event_id` 用 `randomBytes(16)` 保证幂等（同 id 重发由节点投影判重放、不报冲突）。
  * 返回节点的 `conflict` 标记：true = 同 `proposal_id` 已被更早的 `(created_at, event_id)` 占位。
  */
@@ -131,10 +144,17 @@ async function postGovernEvent(o: GovernOptions, ident: Identity, body: Json): P
   const eventId = bytesToHex(randomBytes(16));
   const payload: Json = { event_id: eventId, type: GOVERN_EVENT_TYPE, created_at: Date.now(), body };
   const sig = sign(ident.seedHex, utf8(canonicalize(payload)));
-  const wire = utf8(JSON.stringify({ ...(payload as Record<string, Json>), sig }));
+  const wire = JSON.stringify({ ...(payload as Record<string, Json>), sig });
+  const bytes = localStep('编码请求', () => utf8(wire));
+  const headers = localStep('签名请求', () =>
+    signRequestHeaders(ident, { method: 'POST', path: '/v1/event', body: bytes }),
+  );
   let res;
   try {
-    res = await o.adapters.http.post(`${o.nodeBaseUrl}/v1/event`, wire, { 'Content-Type': 'application/json' });
+    res = await o.adapters.http.post(`${o.nodeBaseUrl}/v1/event`, bytes, {
+      'Content-Type': 'application/json',
+      ...headers,
+    });
   } catch {
     throw new GovernError('network', '需要联网才能完成该操作');
   }

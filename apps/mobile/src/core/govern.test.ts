@@ -102,8 +102,12 @@ describe('govern', () => {
     expect(res.proposalId).toBe('8');
 
     const wire = lastEventPosted(http);
-    // 事件路径只验内容签名：不带 5 个 reqsig 头（本册 §4.2）
-    expect(Object.keys(wire.headers)).toEqual(['Content-Type']);
+    // 事件路径 = 内容签名 + 5 个请求签名头（本册 §1）：与 core/comment.ts 的 /v1/event 同口径，
+    // 否则节点 authenticate 步骤 1 直接回 400 auth_missing_header。
+    expect(wire.headers['Content-Type']).toBe('application/json');
+    for (const k of ['X-Base-Id', 'X-Base-Alg', 'X-Base-Ts', 'X-Base-Nonce', 'X-Base-Sig']) {
+      expect(wire.headers[k]).toBeTruthy();
+    }
     const env = parseEvent(http);
     expect(env.type).toBe('govern.v1');
     expect(env.body).toEqual({
