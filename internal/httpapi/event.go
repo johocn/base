@@ -23,10 +23,11 @@ const (
 // eventTypeRegistry 是节点放行的事件类型表。
 // 新增类型 = 在此加一行 + 在 handleEventPost 的 switch 里加一个分支，不改验签管线。
 var eventTypeRegistry = map[string]struct{}{
-	"comment.v1": {},
-	"group.v1":   {},
-	"dm.v1":      {},
-	"govern.v1":  {},
+	"comment.v1":  {},
+	"group.v1":    {},
+	"dm.v1":       {},
+	"govern.v1":   {},
+	"progress.v1": {},
 }
 
 type eventReq struct {
@@ -71,6 +72,9 @@ func (s *Server) handleEventPost(w http.ResponseWriter, r *http.Request) {
 		return
 	case "govern.v1":
 		s.handleGovernEvent(w, actor, req, createdAt)
+		return
+	case "progress.v1":
+		s.handleProgressEvent(w, actor, req, createdAt)
 		return
 	}
 	s.putBareEvent(w, actor, req, createdAt)
