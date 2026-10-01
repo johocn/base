@@ -82,7 +82,7 @@ onLoad(async (query) => {
     const { opts, repo } = await bootstrap();
     // from=ledger：从「我创建的」区进入 → 只用台账行集渲染，不读包表（册子 #51 §3.3）。
     if (q.from === 'ledger') {
-      const row = await repo.getSubmission(raw);
+      const row = await resolveBy(raw, (id) => repo.getSubmission(id));
       if (!row) {
         error.value = '本地没有这门课程，请返回先同步';
         return;
@@ -109,8 +109,7 @@ onLoad(async (query) => {
       loaded.value = true;
       return;
     }
-    const cid = decodedId(raw);
-    const course = (await repo.getItem(raw)) ?? (cid === raw ? null : await repo.getItem(cid));
+    const course = await resolveBy(raw, (id) => repo.getItem(id));
     if (!course) {
       error.value = '本地没有这门课程，请返回先同步';
       return;
@@ -178,6 +177,17 @@ function decodedId(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+/**
+ * 全页唯一的取键规则（册子 #56 §2.5）：先试原样 `raw`，再试解码态 `decodedId(raw)`。
+ * 台账入口（`from=ledger`）与普通入口共用它，避免两处再分叉。
+ */
+async function resolveBy<T>(raw: string, get: (id: string) => Promise<T | null>): Promise<T | null> {
+  const first = await get(raw);
+  if (first !== null) return first;
+  const cid = decodedId(raw);
+  return cid === raw ? null : await get(cid);
 }
 
 function difficultyLabel(d: string): string {
