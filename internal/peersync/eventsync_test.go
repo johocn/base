@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -442,5 +443,84 @@ func TestApplySyncedGroupEventIgnoresNonRosterAndEmptyRemove(t *testing.T) {
 	g, ok, err := st.GetGroup("g4")
 	if err != nil || !ok || g.Epoch != 1 || g.MemberIDsJSON != `["a1"]` {
 		t.Fatalf("投影不应被改动: %+v ok=%v err=%v", g, ok, err)
+	}
+}
+
+// seedProgressEvent 在源节点直接落一条 progress.v1（双投影 + 事件行）。
+// 写路径的验签由 internal/httpapi 覆盖，这里只造既成事实。
+func seedProgressEvent(t *testing.T, st *store.Store, eventID, actor string, createdAt int64,
+	itemID string, position int64, done bool, day string) {
+	t.Helper()
+	if err := st.PutProgressProjection(store.ProgressEvent{
+		ID: actor, ItemID: itemID, Position: position, Done: done, Day: day,
+		CreatedAt: createdAt, EventID: eventID,
+	}); err != nil {
+		t.Fatalf("PutProgressProjection(%s): %v", eventID, err)
+	}
+	body := fmt.Sprintf(`{"item_id":%q,"position":%d,"done":%t,"day":%q}`, itemID, position, done, day)
+	if err := st.PutEvent(store.Event{
+		EventID: eventID, ID: actor, Type: "progress.v1", BodyJSON: body,
+		CreatedAt: createdAt, TargetID: itemID,
+	}); err != nil {
+		t.Fatalf("PutEvent(%s): %v", eventID, err)
+	}
+}
+
+// #8 册子 §8.1 Go 反熵：两节点间 progress.v1 传播后，两侧 progress / checkin_days **逐字一致**；
+// 重复投递幂等（第二轮不得改变结果、不得产生第二行）。
+func TestSyncEventsProgressProjectionConverges(t *testing.T) {
+	src, url, tr, pub := newSourceNode(t)
+	dst := openTemp(t)
+
+	actor := commentActor
+	// article/a：先早后晚 —— 两端都只留 LWW 晚者。
+	seedProgressEvent(t, src, eventIDHex(21), actor, 1000, "article/a", 300, false, "2026-10-01")
+	seedProgressEvent(t, src, eventIDHex(22), actor, 2000, "article/a", 900, false, "2026-10-02")
+	// quiz/q1：先晚后早 —— 后到达的更早事件**不得**覆盖（输者静默）。
+	seedProgressEvent(t, src, eventIDHex(23), actor, 2000, "quiz/q1", 9, true, "2026-10-03")
+	seedProgressEvent(t, src, eventIDHex(24), actor, 1000, "quiz/q1", 2, false, "2026-10-01")
+
+	wantProgress := []store.ProgressRow{
+		{ItemID: "article/a", Position: 900, Done: false, Day: "2026-10-02", UpdatedAt: 2000, EventID: eventIDHex(22)},
+		{ItemID: "quiz/q1", Position: 9, Done: true, Day: "2026-10-03", UpdatedAt: 2000, EventID: eventIDHex(23)},
+	}
+	// 打卡日是事件级 insert-or-ignore：10-01 由 event21 首次写入并被 event24 复投而不改（§3.5）。
+	wantDays := []store.CheckinDayRow{
+		{Day: "2026-10-01", FirstEventID: eventIDHex(21), CreatedAt: 1000},
+		{Day: "2026-10-02", FirstEventID: eventIDHex(22), CreatedAt: 2000},
+		{Day: "2026-10-03", FirstEventID: eventIDHex(23), CreatedAt: 2000},
+	}
+
+	cfg := Config{TransportFor: tr, IssuerPubKeys: map[string]string{srcIssuer: pub}}
+	if _, err := cfg.SyncEvents(context.Background(), dst, Peer{URL: url}); err != nil {
+		t.Fatalf("SyncEvents: %v", err)
+	}
+
+	for _, node := range []struct {
+		name string
+		st   *store.Store
+	}{{"源节点", src}, {"缓存节点", dst}} {
+		rows, err := node.st.ListProgressByID(actor)
+		if err != nil || !reflect.DeepEqual(rows, wantProgress) {
+			t.Fatalf("%s progress 不符 err=%v got=%+v want=%+v", node.name, err, rows, wantProgress)
+		}
+		days, err := node.st.CheckinDaysOf(actor)
+		if err != nil || !reflect.DeepEqual(days, wantDays) {
+			t.Fatalf("%s checkin_days 不符 err=%v got=%+v want=%+v", node.name, err, days, wantDays)
+		}
+	}
+
+	// 第二轮：游标已推进 ⇒ 无事件可搬，结果一字不变。
+	ev, err := cfg.SyncEvents(context.Background(), dst, Peer{URL: url})
+	if err != nil || ev.Events != 0 {
+		t.Fatalf("第二轮应无事可做 ev=%+v err=%v", ev, err)
+	}
+	rows, _ := dst.ListProgressByID(actor)
+	if !reflect.DeepEqual(rows, wantProgress) {
+		t.Fatalf("第二轮后 progress 变了: %+v", rows)
+	}
+	days, _ := dst.CheckinDaysOf(actor)
+	if !reflect.DeepEqual(days, wantDays) {
+		t.Fatalf("第二轮后 checkin_days 变了: %+v", days)
 	}
 }

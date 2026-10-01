@@ -111,6 +111,10 @@ func (c Config) pullEvents(ctx context.Context, st *store.Store, hc *http.Client
 			if _, err := applySyncedGroupEvent(st, it); err != nil {
 				return total, err
 			}
+			// progress.v1 投影失败**阻断整页**（与 group 同强度：进度投影是纯本地双写，失败即真异常）。
+			if _, err := applySyncedProgressEvent(st, it); err != nil {
+				return total, err
+			}
 			// govern.v1 投影失败**不阻断整页反熵**：事件行才是权威来源，读接口可从事件重算。
 			if _, err := applySyncedGovernEvent(st, it, govRoster); err != nil {
 				log.Printf("peersync: govern.v1 投影失败（事件行已落，读接口可从事件重算）: %v", err)
@@ -243,6 +247,16 @@ func parseEventProjection(typ, bodyJSON string) commentProjection {
 			return commentProjection{}
 		}
 		return commentProjection{TargetID: "dm/" + m.To, PayloadCID: m.PayloadCID}
+	case "progress.v1":
+		// 进度的减化 body 是 {item_id,position,done,day}；target_id 直接取 item_id（#8 册子 §3.1）。
+		// 进度**不带正文块**，payload_cid 恒空（§3.1）——故 EventBlobIndex 的 type 白名单不用动。
+		var m struct {
+			ItemID string `json:"item_id"`
+		}
+		if err := json.Unmarshal([]byte(bodyJSON), &m); err != nil || m.ItemID == "" {
+			return commentProjection{}
+		}
+		return commentProjection{TargetID: m.ItemID}
 	default:
 		return commentProjection{}
 	}
@@ -300,6 +314,33 @@ func applySyncedGroupEvent(st *store.Store, it eventSyncItem) (bool, error) {
 		Encrypted: enc, MemberIDsJSON: string(membersJSON), KeyEnvelopesJSON: envelopesJSON,
 		EventID: it.EventID,
 	})
+}
+
+// applySyncedProgressEvent 把对端来的 progress.v1 事件投影进本地 progress + checkin_days（#8 册子 §4.3）。
+// 投影**幂等**（同 event_id 重放 no-op；输者静默 no-op，见 store.PutProgressProjection）。
+//
+// 与 group 同强度：投影失败**阻断整页反熵**。理由：进度投影是一次纯本地 SQL 双写，
+// 失败即真异常（磁盘 / schema），不像 govern 那样有「事件是权威、读接口可重算」的退路。
+func applySyncedProgressEvent(st *store.Store, it eventSyncItem) (bool, error) {
+	if it.Type != "progress.v1" {
+		return false, nil
+	}
+	var m struct {
+		ItemID   string `json:"item_id"`
+		Position int64  `json:"position"`
+		Done     bool   `json:"done"`
+		Day      string `json:"day"`
+	}
+	if err := json.Unmarshal([]byte(it.BodyJSON), &m); err != nil || m.ItemID == "" {
+		return false, nil // 形态不认识的事件：落行但不投影（与 parseEventProjection 的零值口径一致）
+	}
+	if err := st.PutProgressProjection(store.ProgressEvent{
+		ID: it.ID, ItemID: m.ItemID, Position: m.Position, Done: m.Done, Day: m.Day,
+		CreatedAt: it.CreatedAt, EventID: it.EventID,
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // applySyncedGovernEvent 把对端来的 govern.v1 事件投影进本地 govern_* 两表（册子 §4.3）。
