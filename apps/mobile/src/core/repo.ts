@@ -111,6 +111,12 @@ export interface LocalRepo {
    */
   upsertLocalContainer(item: LocalContainerInput, segments: SubmitSegmentRow[]): Promise<void>;
   /**
+   * 删一条「本地乐观条目」（册子 #61 §4.3）：同事务清 `segments` 与 `items`。
+   * `items` 带 `source='local'` 守卫——万一 id 与包内条目撞车，绝不误删节点已收录内容
+   * （取舍：宁可留一份包内数据，也不误删；见册子 §7 风险 5）。
+   */
+  removeLocalContainer(itemId: string): Promise<void>;
+  /**
    * 置「仅本地留存」终态（册子 #56 §2.4）：`state='failed'` + 记原因 + `local_only=1`。
    * 单向：置位后无任何自动路径把它送回重放队列。
    */
@@ -637,6 +643,13 @@ export class SqlRepo implements LocalRepo {
       });
     }
     await this.db.tx(stmts);
+  }
+
+  async removeLocalContainer(itemId: string): Promise<void> {
+    await this.db.tx([
+      { sql: `DELETE FROM segments WHERE item_id=?`, params: [itemId] },
+      { sql: `DELETE FROM items WHERE item_id=? AND source='local'`, params: [itemId] },
+    ]);
   }
 
   async markSubmissionLocalOnly(itemId: string, reason: string): Promise<void> {

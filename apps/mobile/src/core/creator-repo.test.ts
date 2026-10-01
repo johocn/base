@@ -61,3 +61,28 @@ describe('markSubmissionLocalOnly：终态标记（册子 #56 §2.4）', () => {
     expect((await repo.getSubmission('course/c1'))!.localOnly).toBe(false);
   });
 });
+
+describe('removeLocalContainer：失败行的本地删除（册子 #61 §4.3）', () => {
+  it('清 segments 与 items（source=local）', async () => {
+    const repo = new MemoryRepo();
+    await repo.upsertLocalContainer(
+      { itemId: 'course/c1', type: 'course', title: 'A', contentHash: 'h', updatedAt: 't' },
+      [{ seq: 1, kind: 'lesson', text: 'course/c1/lesson/l1' }],
+    );
+    await repo.removeLocalContainer('course/c1');
+    expect(await repo.getItem('course/c1')).toBeNull();
+    expect(await repo.listSegments('course/c1')).toEqual([]);
+  });
+
+  it('source!=local 时 items 保留（守卫：绝不误删节点已收录内容）', async () => {
+    const repo = new MemoryRepo();
+    repo.items.set('course/c1', {
+      itemId: 'course/c1', source: 'course', type: 'course', title: '同步来的',
+      rev: '1', contentHash: 'h', state: 'active', updatedAt: '',
+    });
+    repo.segments.set('course/c1', [{ itemId: 'course/c1', seq: 1, kind: 'lesson', text: 'x', contentHash: '' }]);
+    await repo.removeLocalContainer('course/c1');
+    expect((await repo.getItem('course/c1'))!.title).toBe('同步来的');
+    expect(await repo.listSegments('course/c1')).toEqual([]);
+  });
+});

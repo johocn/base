@@ -297,6 +297,11 @@ export class MemoryRepo implements LocalRepo {
     );
   }
 
+  async removeLocalContainer(itemId: string): Promise<void> {
+    this.segments.delete(itemId);
+    if (this.items.get(itemId)?.source === 'local') this.items.delete(itemId);
+  }
+
   async markSubmissionLocalOnly(itemId: string, reason: string): Promise<void> {
     const r = this.submissions.get(itemId);
     if (r) this.submissions.set(itemId, { ...r, state: 'failed', reason, localOnly: true });
