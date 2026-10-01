@@ -15,6 +15,7 @@
         <text class="item-title">{{ typeLabel(row.type) }} · {{ row.title }}</text>
         <text class="meta" :style="`color:${statusColor(row.state)}`">{{ row.statusLabel }}</text>
         <text v-if="row.reason !== ''" class="reason">{{ row.reason }}</text>
+        <text v-if="row.localOnly" class="act" @click.stop="removeMyCreated(row)">删除</text>
       </view>
     </view>
     <text v-if="tip" class="tip">{{ tip }}</text>
@@ -82,6 +83,7 @@ import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
 import { syncOnce } from '../../core/sync';
+import { runCreatorVisibilityMigration } from '../../core/creator-migrate';
 import { childrenOf, groupCoursesByCategory, splitCourses } from '../../core/course-tree';
 import { attrsOf } from '../../core/container-view';
 import { buildMyCreatedView, type MyCreatedRow, type MyCreatedType } from '../../core/my-created';
@@ -153,8 +155,12 @@ function completionText(courseId: string): string {
 
 async function load() {
   try {
-    const { repo, capabilities } = await bootstrap();
+    const { repo, capabilities, opts } = await bootstrap();
     syncBlocked.value = !canSync(capabilities);
+    // 一次性自愈迁移（册子 #56 §2.4）：幂等——标志位已存在即零动作；未配置节点则跳过。
+    if (opts.nodeBaseUrl !== '') {
+      await runCreatorVisibilityMigration(opts);
+    }
     const all = await repo.listItems();
     const active = all.filter((i) => i.state !== 'removed');
     const tree = splitCourses(active);
@@ -200,7 +206,8 @@ async function load() {
     // 「我创建的」区（册子 #51 §3）：台账行集 + 包表 id 集合（复用上面已取的 all，不重复查询）。
     // 去重全在 buildMyCreatedView 内，此处只消费结果。
     const subs = await repo.listSubmissions();
-    myCreated.value = buildMyCreatedView(subs, new Set(all.map((i) => i.itemId)));
+    const packIds = new Set(all.filter((i) => i.source !== 'local').map((i) => i.itemId));
+    myCreated.value = buildMyCreatedView(subs, packIds);
 
     error.value = '';
   } catch (e) {
@@ -240,7 +247,7 @@ async function doSync() {
     const res = await syncOnce(opts);
     tip.value =
       res.status === 'noop'
-        ? '已是最新版本'
+        ? '节点内容未更新'
         : `已更新到版本 ${res.contentVersion}（条目 ${res.items}，块 ${res.blobs}）`;
     await load();
   } catch (e) {
@@ -299,6 +306,13 @@ function openMyCreated(row: MyCreatedRow) {
   uni.navigateTo({ url: `/pages/${page}?itemId=${id}&from=ledger` });
 }
 
+/** 删除「仅本地留存」台账行（册子 #56 §2.4 / §7 风险 4：终态必须有手动删除入口）。 */
+async function removeMyCreated(row: MyCreatedRow) {
+  const { repo } = await bootstrap();
+  await repo.removeSubmission(row.itemId);
+  await load();
+}
+
 onShow(() => {
   void load();
 });
@@ -319,6 +333,7 @@ onShow(() => {
 .sec { margin-bottom: 18px; }
 .sec-title { display: block; font-size: 15px; font-weight: 600; margin-bottom: 6px; }
 .reason { display: block; color: #c53030; font-size: 13px; }
+.act { display: inline-block; color: #2b6cb0; font-size: 14px; margin-top: 4px; }
 .group { display: block; margin: 16px 0 4px; color: #888888; font-size: 13px; }
 .group-cat { color: #2b6cb0; }
 .chips { display: flex; flex-wrap: wrap; margin-top: 4px; }
