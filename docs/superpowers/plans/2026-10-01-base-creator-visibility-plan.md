@@ -1043,6 +1043,22 @@
 - 升级后**首次启动**的一次性迁移在真机**不重复触发**（`creator_visibility_migrated` 标志位生效）。
 - 对应册子 AC：AC 1（本地乐观立即可读）、AC 4（仅本地留存本地仍可见可编辑可删）、AC 5（本地没有这门课程不再误报）、AC 6（同步按钮三态）。
 
-## 执行实况（执行后回填）
+## 执行实况（2026-10-01 收口）
 
-> 执行后按本仓库惯例回填完整度与执行期更正（改动文件清单、`git diff --stat` 佐证、门禁跑分、发布与线上核对、真机验收状态）。
+**执行方式**：子代理驱动（每 Task 一个全新子代理，Task 间由主控审查 diff 后放行）。
+
+**代码 commits**：`9356e4e`（Task 1：`local_only` 列 + 两仓储方法）、`2cdb731`（Task 2：`toLocalContainer` + `saveContainer` 先落本地乐观）、`771456d`（Task 3：标签改口 + `containerSegmentsFromLedger`）、`db7f836`（Task 4：`runFlushSubmissions` 归一化重放 + 跳过 local-only）、`c535f44`（Task 5：`creator-migrate.ts` + 测试）、`001cc6e`（Task 6：`course.vue` 接线）、`43fbd55`（Task 7：`detail.vue` 取键统一）、`f821cb0`（Task 8：版本落 `0.18.0`/`23` + 本文档回填）。
+
+**改动文件清单（16 个，均在 `apps/mobile`）**：新增 `src/core/creator-repo.test.ts`、`src/core/creator-migrate.ts`、`src/core/creator-migrate.test.ts`；修改 `src/core/repo.ts`、`src/core/types.ts`、`src/core/fakes.ts`、`src/core/submit.ts`、`src/core/submit.test.ts`、`src/core/my-created.test.ts`、`src/core/course-edit.ts`、`src/core/course-edit.test.ts`、`src/core/my-created.ts`、`src/core/my-created.test.ts`、`src/pages/course/course.vue`、`src/pages/course/detail.vue`、`src/manifest.json`。
+
+**零节点改动佐证**：`git diff --stat HEAD~8 -- internal/` **无输出**；`vectors/**`、`schema_version`、内容包规范 v1 均未触碰。
+
+**门禁实况（Task 8 Step 1–3）**：`go build ./...` / `go vet ./...` 退出码 0，`go test ./...` 全包 `ok`；`npx vitest run` **33 文件 / 393 用例全绿**；`npx tsc --noEmit` 无输出；`npm run build:h5` → `DONE Build complete.`；模板 `.value` 硬检查（`Get-ChildItem … Select-String`，扫描 `src/pages` 下全部 `.vue`）**无命中**；`npm run build:app` 产物 `\.value\.value` 计数 = **1（仅框架自带 `uni-app-view.umd.js`，本次改动源文件零命中）**。
+
+**手机端四步发布（REL）**：HBuilderX `cli pack` 云打包（13:34:20 提交、13:36:23 成功）→ APK **`27443477` 字节 / sha256 `86b860bf9d81b4a821683bd8b7f459b8d20d16901fe584188b9c7da7e6016d5a`** / 包内 `"version":{"code":"23","name":"0.18.0"}` / 证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.6.0–0.17.0 一致，可覆盖安装）→ 上传 `/opt/appdl/base-0.18.0.apk`（远端 sha256 逐字一致）→ `/opt/appdl/index.html` 整页重写改指（`base-0.18.0.apk` 命中 1、`0.17` 残留 0）→ `based release` 签发落 `/opt/base-cache/data/release.json`（`/opt/base/data/release.json` 不存在，无游离副本）。**本册零节点改动 ⇒ 未交叉编译、未部署节点二进制（`/opt/base/based` 保持 0.17.0 件不变）。**
+
+**线上验证**：`GET http://118.190.217.242/v1/release` → `version_name=0.18.0`、`min_version_name=0.8.0`、`apk_size=27443477`、`apk_sha256` 与本地逐字一致、`issuer=base-node-1`；`HEAD http://118.190.217.242/dl/base-0.18.0.apk` → `200` 且 `Content-Length=27443477`。
+
+**执行期更正（1 条）**：**Task 2 的测试断言**——计划 Step 1 里 `saveContainer` 用例把 `repo.listSegments(...).map(kind)` 与 `buildContainerSegments(...).map(kind)` 直接 `toEqual`，但 `MemoryRepo.listSegments` 按 `seq` 升序返回（计划自身 Task 1 第 112 行即断言此点），而 `buildContainerSegments` 的属性行按 kind 字母序、`seq` 递减排布，二者顺序必然相反。已做**最小必要修正**：仅将期望侧按 `seq` 升序归一化后再比对，语义仍为「本地乐观落库后 segments 与表单一致」。
+
+**未实测（待人工，登记不阻塞）**：§「真机验收」3 条（断网创建 → 恢复网络后本地仍可见且台账转 `sent`；升级后首次启动迁移不重复触发；仅本地留存行的可见 / 可编辑 / 可删）与线上 `verifyRelease` 实测验签。
