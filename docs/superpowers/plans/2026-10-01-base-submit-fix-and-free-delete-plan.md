@@ -1405,12 +1405,96 @@
 
 ## 执行实况（执行后回填）
 
-**状态：待执行。** 执行者按 Task 1 → 11 顺序落地，每个 Task 结束以其 `git add` 列表提交一次（Task 8/9/10 无仓库改动、不提交），并在本节回填：
+**状态：已执行完毕并发布（2026-10-01）。** Task 1 → 11 顺序落地；Task 8/9/10 无仓库改动、不提交；全程**未 `git add -A`**，工作区既存遗留（` M .gitignore`、未跟踪 `based-linux-amd64`）未触碰、未提交。每个 Task 由主控 `git show <commit>` 复核实际 diff 后放行。
 
-- 提交序列表（Task → commit hash → 说明）。
-- `git diff --stat`（基线 → 交付 HEAD）。
-- 门禁跑分：`go test ./...` 与 `npx vitest run` 的文件 / 用例数。
-- Task 8 线上证据：nginx `client_max_body_size 12m;` 落位 + 2 MiB `curl` 的 `400 auth_missing_header`（非 nginx html）。
-- Task 9 清理证据：备份路径、删除前后 `COUNT`、`GET /v1/release` 与 `GET /v1/directory` 核对。
-- Task 10 核实结论：越界行的 `item_id` / `kind` 与来源判定。
-- 四步发布与线上核对结果、真机验收状态。
+### 1. 提交序列表
+
+| # | commit | 说明 |
+| --- | --- | --- |
+| Task 1 | `66499bb` | `fix(mobile): 治理事件补请求签名头，词条提案与投票不再 400（#60 §1/AC1）` |
+| Task 2 | `edb8b01` | `fix(mobile): 补 item_segments_invalid / auth_body_too_large 中文映射（#60 §4）` |
+| Task 3 | `047c5bc` | `feat(mobile): 容器行集预检，非法行指名到行且不发请求（#60 §4/AC4）` |
+| Task 4 | `79bac35` | `fix(mobile): 选文件能力收敛为唯一探针，自检按探针分支（#60 §3/AC3）` |
+| Task 5 | `54fdeec` | `fix(mobile): toPlusUrl 支持 file:// 与裸绝对路径（#60 §3）` |
+| Task 6 | `fd9f53d` | `feat(store): 免票选删除判据 freeRemoveEligible 接入 settle/vote（#60 §5/AC5/AC6）` |
+| Task 7 | `1ca39fc` | `feat(mobile): 课程详情页新增创建者删除入口（#60 §5/AC5）` |
+| Task 8 | — | 线上 nginx 配置（无仓库改动） |
+| Task 9 | — | 线上数据清理（无仓库改动） |
+| Task 10 | — | 线上只读核实（无仓库改动） |
+| Task 11 | 本次提交 | `chore(mobile): 版本落 0.20.0 / 25 并登记 #60 计划（#60 §8）`（本节随该提交一并落地，故不自引 hash） |
+
+### 2. 改动文件清单与 `git diff --stat`（基线 `8690082` → 代码交付 HEAD `1ca39fc`）
+
+```
+ apps/mobile/src/core/course-edit.test.ts |  44 ++++++++++
+ apps/mobile/src/core/course-edit.ts      |  88 ++++++++++++++++++++
+ apps/mobile/src/core/errors.test.ts      |  30 +++++++
+ apps/mobile/src/core/errors.ts           |   4 +
+ apps/mobile/src/core/govern.test.ts      |   8 +-
+ apps/mobile/src/core/govern.ts           |  30 +++++--
+ apps/mobile/src/core/selfcheck.test.ts   |   6 +-
+ apps/mobile/src/core/selfcheck.ts        |  20 +++--
+ apps/mobile/src/pages/course/detail.vue  |  30 +++++++
+ apps/mobile/src/platform/uni.test.ts     |  51 ++++++++++++
+ apps/mobile/src/platform/uni.ts          |  37 +++++++--
+ internal/store/free_remove.go            | 104 +++++++++++++++++++++++
+ internal/store/free_remove_test.go       | 137 +++++++++++++++++++++++++++++++
+ internal/store/govern.go                 |  12 +++
+ internal/store/govern_projection.go      |  17 +++-
+ 15 files changed, 592 insertions(+), 26 deletions(-)
+```
+
+Task 11 收口提交另动 3 个文件：`apps/mobile/src/manifest.json`（`0.19.0`/`24` → `0.20.0`/`25`）、`docs/README.md`（清单表追加 `| 60 |` 行）、本计划（本节回填）。零新表、零 schema 变更、零新 HTTP 接口。
+
+### 3. 门禁跑分
+
+- **Go**：`go build ./...` / `go vet ./...` 退出码 0；`go test ./...` **9 包全 `ok`**（`cmd/based`、`internal/{httpapi,importer,markdown,packexport,peersync,protocol,store}`、`tools/migrate`），`--- PASS` **565** / `--- FAIL` **0**。
+- **手机端**：`npx vitest run` → **36 文件 / 416 用例全绿**（新增 `errors.test.ts` 5 / `uni.test.ts` 6 / `course-edit.test.ts` 20；改 `govern.test.ts` 10 / `selfcheck.test.ts` 13）；`npx tsc --noEmit` 无输出；`npm run build:h5` → `Build complete.`。
+
+### 4. 交叉编译与两单元重启探活
+
+`go build -o based-linux-amd64 ./cmd/based`（**21919687 字节 / sha256 `050faba76481e53ad141e08c474a333f12cf4dad7e2ef5d4a21dc709ed1d068e`**）→ scp 至 `/opt/base/based.new`（远端 sha256 逐字一致）→ `cp -a /opt/base/based /opt/base/based.bak-pre-0.20.0 && mv /opt/base/based.new /opt/base/based && chmod 0755` → `systemctl restart base; systemctl restart base-cache` → 两单元 `active`；`/healthz` = 200；只读探活 `release=200 / proposal=200 / comment=200 / blob=400 / blobzzz=404`。
+
+### 5. Task 8 线上证据（含 1 条偏差）
+
+- `client_max_body_size 12m;` 落 `/etc/nginx/nginx.conf:33`（锚定 `listen 80 default_server;` 的 sed 插入，`grep -c` = **1**，位于 `:80` server 块内）；备份 `/etc/nginx/nginx.conf.bak-20261001`；`nginx -t` = `test is successful`；`systemctl reload nginx` 无报错、`is-active nginx` = `active`。
+- **放行证据**：`POST 2 MiB → /dl/`（python 静态上游）返回 **501 Unsupported method ('POST')** ⇒ 2 MiB 体已被 nginx 接受并转发（旧 1 MiB 上限下会是 413 且不转发）；`POST 1 KiB → /v1/blob` 返回 **400 `{"code":"auth_missing_header","error":"缺少签名头"}`**（Go JSON）。
+- **偏差（如实记录）**：计划判据「2 MiB POST `/v1/blob` 期望 400 + Go JSON」**未原样达成**，实测为 **502 nginx html**。根因链来自 `nginx error.log`：修复前（15:36）`client intended to send too large body: 2097345 bytes`（413）；修复后（16:40 / 16:51）`readv() failed (104: Connection reset by peer)` + `sendfile() failed (32: Broken pipe) while sending request to upstream`——即 `authmw` 步骤 1「缺签名头即返 400 且不读体」使上游提前关闭连接，nginx 在 sendfile 阶段破管道，**与体大小限制无关**（同尺寸体走 `/dl/` 已证明可转发）。「照抄会挂」第 7 条已预判该口径不实；**未改 Go 代码**。
+
+### 6. Task 9 清理证据
+
+- **计划前提被推翻**：计划假设「测试课程只在源节点、缓存节点由源节点重建」。实测相反——源节点 `/opt/base/data/base.db` 的 `items` 只有 3 篇种子 article、`type='course'` 为 **0**；目标课程全部在缓存节点 `/opt/base-cache/data/base.db`（14 items = 4 article + 10 course）。且 `复现E` 已改名为 `复现E-改名`，4 个精确标题实际只命中 **3** 门。经用户裁决：**只在缓存节点删**、**仅 3 门精确命中**（不含 `复现E-改名` / `复现H` / `复现用课程B`）。
+- **备份**：`/tmp/base-cache-backup-20261001.db`（含 `-wal` / `-shm` 伴随文件）；另 `sqlite3 .backup` 一致性副本 `/tmp/base-cache-consistent-20261001.db`（282624 字节，`PRAGMA integrity_check` = `ok`）；源节点 `/tmp/base-backup-20261001.db`（含 `-wal` / `-shm`）。
+- **持久性论证**（裸 DELETE 不会被未来 pack 复活）：缓存库 `events` 仅 `comment.v1`(17) / `group.v1`(4) / `progress.v1`(3)，**无课程创建事件**（按 `target_id` / `body_json` 命中均为 0）；`packs` 仅 v1/v2/v3（2026-09-26，早于 10-01 建课）；`peer_sync_cursor` 只有源节点 `https://127.0.0.1:8081`（其库内无课程）。与 `ImportPack` 语义一致：无墓碑时走 UPSERT、只有墓碑循环内才 `DELETE`，故本场景不会回卷。
+- **删除前关联计数**：`segments`=12、`identities`=3；`progress` / `blobs` / `quizzes` / `media_meta` / `tombstones` / `govern_proposals` / `tag_links` / `events` 全 **0**；3 个作者各只拥有 1 个 item ⇒ 删 `identities` 安全。缓存库**不存在 `submissions` 表**（与「照抄会挂」第 8 条一致）。
+- **执行**：`sqlite3 -bail` 跑单事务（`BEGIN IMMEDIATE` … `COMMIT`），删 3 门课（`course/e0145761dc7c5811` / `course/33d996ad807d130f` / `course/4b0f8f390874c21d`）的 `segments` / `progress` / `blobs` / `items` 及其 3 个 author `identities`，退出码 0。
+- **删后核对**：三类剩余命中全 **0**；`items` 14→**11**、`segments` 23→**11**、`identities` 16→**13**；`PRAGMA integrity_check` = `ok`、`foreign_key_check` 空；`GET /v1/catalog`（127.0.0.1:8083）返回 **11** 项、被删 3 门已不出现；`base` / `base-cache` / `nginx` 全 `active`；公网 `GET /v1/release` = 200、`GET /v1/directory` = 200。**无需重启即生效**。
+
+### 7. Task 10 核实结论
+
+- 全库 `segments.kind` 分布：`attr.difficulty` 3、`attr.instructor` 3、`digest` 3、`attr.duration` 1、`lesson` 1（属性行均位于 `seq<1`）。
+- 「`course` / `lesson` 容器内的非法 `kind` 子项」查询**两库均为空**；`items` 仅 `article`(4) 与 `course`(7)，**不存在 `type='lesson'` 的 item**。
+- **结论：当前线上不存在越界行**，计划设想的「编辑课程 400 由越界行引起」未复现。用户表示可提供复现课程的 `item_id`，**该项待用户给出后再针对性复核**（登记不阻塞）。
+
+### 8. 四步发布与线上核对
+
+| 步骤 | 结果 |
+| --- | --- |
+| ① 云打包 | HBuilderX `cli pack`（17:00:11 提交 → **17:01:35 成功**）；日志含 1 条隐私合规 Warning（历史版本同样存在、不阻塞） |
+| ② 上传 | APK 落 `apps/mobile/dist/release/apk/base-0.20.0.apk` = **27447397 字节 / sha256 `8ce5655ce7a6702fbc1d0f8031b675033e2f991c87e8f6cf2b7a3870b59c71b4`**；包内 `version.name=0.20.0` / `version.code=25`；证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.6.0–0.19.0 一致 ⇒ 可覆盖安装）；scp 至 `/opt/appdl/base-0.20.0.apk`，**远端 sha256 逐字一致** |
+| ③ 落地页 | `/opt/appdl/index.html` 整页重写改指 `./base-0.20.0.apk`（`0.19` 残留 **0**、`0.20` 命中 2）；旧页备份 `/opt/appdl/index.html.bak-0.19.0` |
+| ④ 签发 | `based release -version-name 0.20.0 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.20.0.apk -apk-file /opt/appdl/base-0.20.0.apk -notes '投稿与删除修复_…' -out /opt/base-cache/data/release.json` 成功（`apk_size=27447397`、`apk_sha256=8ce5655c…`、`public_key 48c33db9…`）；`/opt/base/data/release.json` **不存在**（无游离副本） |
+
+**线上核对（公网 :80）**：
+
+| 检查 | 结果 |
+| --- | --- |
+| `GET /v1/release` | `200`；`version_name=0.20.0`、`min_version_name=0.8.0`、`apk_size=27447397`、`apk_sha256=8ce5655c…`（与本地逐字一致）、`apk_url=http://118.190.217.242/dl/base-0.20.0.apk`、`issuer=base-node-1`、`signature` 已签发 |
+| `HEAD /dl/base-0.20.0.apk` | `200` / `application/octet-stream` / `Content-Length: 27447397` |
+| `GET /v1/directory` | `200` |
+| 远端 APK 校验 | `sha256sum /opt/appdl/base-0.20.0.apk` 与本地逐字一致 |
+
+### 9. 真机验收状态
+
+计划末尾 7 条（AC 1–AC 7）**待人工**：讲师 / 分类词条提交不再 400 且对端可投票；2 MiB 图片 / 附件可上传；基座自检 `pick.*` 按探针为 `ok` 且可选封面与附件；含非法子项的课程保存时指名到行、移除后成功；删空课程 toast「已删除」、有他人学习 toast「已提交，需 3 票」；测试课程线上查不到、正式课程与 `GET /v1/directory` / `GET /v1/release` 均正常。
+
