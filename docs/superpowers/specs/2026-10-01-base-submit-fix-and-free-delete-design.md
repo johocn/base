@@ -52,12 +52,12 @@
 
 ### 修法
 
-- `platform/uni.ts` 新增并导出唯一能力探针 `pickCapability(): 'album' | 'chooseFile' | 'none'`：
-  `plusRuntime() !== undefined && typeof uni.chooseImage === 'function'` → `'album'`；否则 `typeof uni.chooseFile === 'function'` → `'chooseFile'`；否则 `'none'`。
+- `platform/uni.ts` 新增唯一能力探针，拆两层：纯函数 `pickCapabilityOf(hasPlus, pick): 'album' | 'chooseFile' | 'none'`（可无全局依赖地测四种组合）+ 薄封装 `pickCapability()`（`pickCapabilityOf(plusRuntime() !== undefined, pickHandle())`）。判据：
+  `hasPlus && typeof pick.chooseImage === 'function'` → `'album'`；否则 `typeof pick.chooseFile === 'function'` → `'chooseFile'`；否则 `'none'`。
 - `pickLocalFile` 改为直接读该探针（行为不变，只是判定同源，不再各写一份）。
 - `selfcheck.ts` 的 `pick.choose_file` 改名为按分支断言：探针为 `'album'` 时断言 `uni.chooseImage` 存在并回「App 端以相册选取为准」；探针为 `'chooseFile'` 时断言 `uni.chooseFile` 存在。`pick.album` 项同样按探针分支断言。两项 `flag: 'pickOk'`、`scope: 'standalone'` 不变。
 - `canPickFile` / `pickBlockedReason` 的签名与语义不变（自检仍是用户主动触发的提示源）。
-- **附带修同一处的真机缺陷**：`platform/uni.ts` 的 `toPlusUrl` 目前只处理 `_doc` 前缀，`file:///storage/...` 这类绝对 URL 会被原样交给 `io.resolveLocalFileSystemURL` 而读取失败。改为对 `file://` 前缀统一走 `convertLocalFileSystemURL`。
+- **附带修同一处的真机缺陷**：`platform/uni.ts` 的 `toPlusUrl` 目前只处理 `_doc` 前缀，`file:///storage/...` 这类绝对 URL 会被原样交给 `io.resolveLocalFileSystemURL` 而读取失败。改为三种形态分支：① `file://` 前缀 → 统一过 `convertLocalFileSystemURL`；② `_doc` 平台路径 → 折成 `_doc/…`；③ 其余绝对路径 → 补 `file://` 前缀（否则 plus.io 把裸 `/storage/…` 当相对 URL）。同时 `PlusFs.dirEntry` 对 `file://` 结果**整串**交 `resolveUrl`（`'file:///a/b'.split('/')` 会切出 `'file:'` 段使下钻失败）。
 
 ---
 
@@ -80,7 +80,7 @@
 ### 修法（不放宽节点契约）
 
 1. `errors.ts` 补两条映射：`item_segments_invalid` → 「课程 / 课时的行集不合法：请检查属性与子项清单」；`auth_body_too_large` → 「提交内容超过 64KB」。这是当前唯一落回裸兜底串的码，补上等于把「无线索 400」变成可读原因。
-2. `apps/mobile/src/core/course-edit.ts` 新增 `validateContainerSegments(type, rows): { ok: boolean; message: string }`，判据与 `validateSubmitSegments` **同构**：重复 seq、`seq<0` 须属性行、`seq=0` 须 digest、`seq>=1` 须容器词表、属性行须 `attrSeqsCanonical`。新增客户端镜像常量 `childKindsByContainer`（与 Go 同值）。由 `saveContainer` 在 `enqueueOrSend` **之前**调用：失败**指名到行**（例：「第 3 个子项的 kind=article 不合法：课程只能挂课时」），直接返回 `ledgerState: 'failed'` 并写台账 `reason`，**不发网络请求**。
+2. `apps/mobile/src/core/course-edit.ts` 新增 `validateContainerSegments(type, rows): { ok: boolean; message: string }`，判据与 `validateSubmitSegments` **同构**：重复 seq、`seq<0` 须属性行、`seq=0` 须 digest、`seq>=1` 须容器词表、属性行须 `attrSeqsCanonical`。新增客户端镜像常量 `CHILD_KINDS_BY_CONTAINER`（camel 命名、与 Go 同值同义）。由 `saveContainer` 在 `enqueueOrSend` **之前**调用：失败**指名到行**（例：「第 3 个子项的 kind=article 不合法：课程只能挂课时」），直接返回 `ledgerState: 'failed'` 并写台账 `reason`（本地私有 `writeFailedLedger`，字段照 `core/submit.ts` 的 `writeLedger` 复刻，**不发网络请求**）。
 3. 节点侧 `validateSubmitSegments`、`childKindsByContainer`、错误码一字不改。
 
 ### 待坐实的一步（执行期）
@@ -95,19 +95,19 @@
 
 课程在「无课时」**或**「无其他用户参与学习」时，**创建者**可不经票选直接删除；只要涉及其他用户，一律回落到既有 3 票票选。
 
-### 判据（节点侧新增 `store.FreeRemoveEligible`）
+### 判据（节点侧新增 `store.freeRemoveEligible`，未导出）
 
-置于 `internal/store/govern.go`（与 settle 同文件），签名 `FreeRemoveEligible(tx, itemID, actor) (bool, error)`，在 remove 提案的 settle 生效判定**之前**调用：
+置于新建 `internal/store/free_remove.go`（与 `govern.go` / `govern_projection.go` 解耦、单文件可自洽测试），签名 `freeRemoveEligible(e sqlExec, itemID, actor string) (bool, error)`。第一参数取 `sqlExec`（`*sql.DB` 与 `*sql.Tx` 的公共面）以便两个调用点复用：settle 传 `s.db`（必须在 `tx, _ := s.db.Begin()` **之前**）、vote 传 `tx`——`SetMaxOpenConns(1)` 下事务内只能用 `tx`、事务外只能用 `s.db`，互换会死锁。在 remove 提案的 settle 生效判定**之前**调用：
 
 1. **主体（已收紧）**：`actor` 必须是该条目的**创建者**。创建者取 `items.author_id`（与 `UpsertSegmentSubmission` 落库同源）；为空（如导入器产出的课程）⇒ 免票选不成立。**名册内治理者不享免票选**，一律走既有 3 票——他们已有投票权，且 `progress` 只有本节点数据，放任会让治理者瞬时下架任意对端新课。
 2. **无课时**（`itemID` 形态为 `course/<cid>`）：该 course 的 `segments` 中不存在 `seq >= 1` 行 ⇒ 真。
 3. **无他人学习**：`progress` 表中 `item_id ∈ {course 自身} ∪ {该 course 全部课时 id}` 的行，扣掉 `id == actor` 的行后为空 ⇒ 真。课时 id 取该 course 的 `seq >= 1` 行的 `text`。
 4. **课时同规则（已收紧）**：`itemID` 形态为 `course/<cid>/lesson/<lid>` 时同样适用，只是条件 2 不适用（课时没有「课时」），退化为只看条件 3（以其自身 `item_id` 为准）。这两处一致，避免「删课程免票选、删课时仍需票选」的割裂。
-5. **fail-closed**：任何查询异常、名册 / 创建者不可得 ⇒ 返回 error，调用方**退回既有 3 票**，绝不因异常放行。
+5. **fail-closed**：任何查询异常、创建者不可得 ⇒ 返回 error，调用方**退回既有 3 票**（写成 `if free, ferr := …; ferr == nil && free { … }`，**不** abort settle / vote），绝不因异常放行。
 
 ### 生效路径
 
-- 为真 ⇒ 该 `remove` 提案门槛降为 0、**立即 effective**（与既有 `ProposalStatus` / `nextContentVersionExec` / `retireItemExec` 完全复用），`executed_result` 记 `'free_remove'`（仅诊断，不影响任何既有读路径）。
+- 为真 ⇒ 该 `remove` 提案门槛降为 0、**立即 effective**（与既有 `ProposalStatus` / `nextContentVersionExec` / `retireItemExec` 完全复用），`executed_result` 记 `'free_remove'`（仅诊断，不影响任何既有读路径）：在两处 `UPDATE govern_proposals SET executed_at=?,executed_result=?` 之前用局部变量覆盖 `governApplyTx` 的返回值。
 - 为假 ⇒ 一字不动走既有 `GovernThresholdForRoster(GovernActionRemove, rosterLen, rosterReady)`（= 3）。
 - **语义不变**：仍是 `govern.v1` 的 `remove` 提案 + 墓碑，因此**可 `revive` 复活**、经既有反熵传播到对端。跨节点盲区（对端有人学过而本端 `progress` 为空）由「墓碑可复活」兜底，不在本册解决。
 
@@ -127,7 +127,7 @@
 执行口径（先取证后删除，全程可回溯）：
 
 1. 定位线上库文件路径与 `base` / `base-cache` 两个 systemd 单元的实际数据目录，确认**只清一处**（缓存节点由源节点重建，不单独动）。
-2. **先导出**受影响的 `identities` / `items` / `segments` / `progress` / `submissions` / `blobs` 行到 `/tmp` 备份，再按**已知测试标题与身份 id**精确定位删除；**禁用**任何按前缀 / 模糊匹配的批量删除。
+2. **先备份**：整库 `cp -a` 到 `/tmp`（含 `-wal`/`-shm`），再按**精确标题**（四个已知测试课程标题）与 `author_id` 精确定位删除；**禁用**任何按前缀 / 模糊匹配的批量删除。涉及表以库内实际为准：`identities` / `items` / `segments` / `progress` / `blobs`（**库内无 `submissions` 表**，见 `internal/store/schema.go` 全表清单）。删除顺序固定：`segments` / `progress` / `blobs` 先于 `items`，`identities` 先于 `items`（否则拿不到 `author_id`）。
 3. 删除后核对：测试课程查不到、正式课程与词条目录（`GET /v1/directory`）不受影响、`GET /v1/release` 仍为当前版本。
 4. 备份文件留在服务器 `/tmp`，在用户确认无误前不删。
 
@@ -150,10 +150,10 @@
 | # | 判据 | 验证 |
 |---|---|---|
 | AC 1 | 词条提案与投票不再 400 | core 用例：fake http 断言 `POST /v1/event` 请求头含 `X-Base-Id/Alg/Ts/Nonce/Sig` 五项；线上真机提交一个讲师词条成功 |
-| AC 2 | 2 MiB 图片 / 附件可上传，9 MiB 仍被拒 | 线上 `curl` 2 MiB → `200`；9 MiB → `413 blob_too_large`（**非** nginx html） |
+| AC 2 | 2 MiB 图片 / 附件可上传 | 线上 `curl` 2 MiB（无签名头）→ 响应是 **Go 的 JSON**（`400 auth_missing_header`）而**非** nginx 的 `413 <html>`；即证明 nginx 已放行 2 MiB 体。（9 MiB 在无合法签名头时必先被 `authmw` 步骤 1 拦成 400，**不可能**验到 `blob_too_large`；Go 侧 8 MiB 上限由既有用例覆盖，本册不动。） |
 | AC 3 | App 端基座自检不再因 `chooseFile` 报错，封面 / 附件入口可用 | 真机跑自检 `pick.*` 两项通过；课程编辑页可成功选封面与附件 |
 | AC 4 | 编辑课程若行集非法，报错**指名到行**；合法则提交成功 | core 用例：构造 `kind=article` 的子项行 ⇒ 断言消息含行号与 kind、且**未发出网络请求**；用户那门课修复后保存成功 |
-| AC 5 | 无课时 / 无他人学习的课程，创建者可一步删除，不产生票选 | 节点用例：`FreeRemoveEligible` 四组（仅创建者 / 有他人 progress / 有课时且无 progress / 非创建者治理者）各断言；线上删一门自建空课程，返回 effective |
+| AC 5 | 无课时 / 无他人学习的课程，创建者可一步删除，不产生票选 | 节点用例：`freeRemoveEligible` 五组（仅创建者无课时 / 有他人 progress / 有课时且无 progress / 非创建者 / 非容器条目）各断言；线上删一门自建空课程，返回 effective |
 | AC 6 | 有他人参与学习的课程，创建者仍需 3 票 | 节点用例：`progress` 存在他人行 ⇒ 提案停留 pending，门槛为 3 |
 | AC 7 | 测试数据清理完成且无副作用 | 测试课程查不到；`GET /v1/directory`、`GET /v1/release`、正式课程读取均正常 |
 | AC 8 | 既有门禁回归全绿 | `go test ./...`、`apps/mobile` 下 `npx vitest run` |
