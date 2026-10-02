@@ -884,4 +884,61 @@
 
 ## 执行实况
 
-（执行时在此回填：各 Task commit、门禁实测数字、四步发布证据、线上核对结果、真机探针 5 条结论。）
+**状态：Task 1–6 全部落地，已发布 `0.20.4`/`29`。仅动 `apps/mobile`，零节点改动。**
+
+### 各 Task commit 与门禁
+
+| Task | commit | 门禁实测 |
+| --- | --- | --- |
+| Task 1 `core/editor-caret.ts` + 单测（TDD） | `97deccb` | 先写测试跑出 FAIL（`Failed to resolve import "./editor-caret"`）→ 实现后 5 用例全绿 |
+| Task 2 桥 `core/caret-bridge.renderjs.js` + `shims-vue.d.ts` 通配 | `47b6d33` | `npm run typecheck` 不新增错 |
+| Task 3 `pages/lesson/edit.vue` 接线 | `80b0a2c` | vitest / typecheck / `build:h5` / `build:app` 全过；产物 `dist/build/app/app-renderjs.js`（1040 B）含 `selectionStart` 与 `body-caret-anchor`，`app-service.js` 含 `caretBridge` 注册 |
+| Task 4 `pages/submit/submit.vue` 接线 | `75f4361` | 同上全过；`app-service.js` 中 `caretBridge` 出现 **2 次**（两页各注册一次）；全仓 `bodySelStart\|bodySelEnd` 零命中 |
+| Task 5 版本 `0.20.4`/`29` | `1b16e83` | 包外 `dist/build/app/manifest.json` 为 `version.name=0.20.4`/`code=29`；`\.value\.value` 计数 0 |
+| （计划补充）renderjs 声明块步骤回填 | `7e67e44` | — |
+
+- mobile 单测：`npx vitest run`（cwd `apps/mobile`）= **38 文件 / 460 用例**，与开工前基线 37/455 相比正好 +1 文件 / +5 用例。
+- mobile 类型：`npm run typecheck`（`vue-tsc --noEmit`）**不新增**，仍为册外既有 2 条（`governance.vue` TS2741、`submit.vue` TS2322）。
+- 构建：`npm run build:h5`、`npm run build:app` 均 `DONE Build complete.`。
+- 节点：`go test ./...` 全包 `ok`。
+- 节点改动面：`git diff --stat -- internal/` **空输出** ⇒ 不交叉编译、不部署节点二进制（与 `#57`/`#64` 同口径）。
+
+### 执行期更正（3 条）
+
+1. **renderjs 模块声明块必须显式写**：只在模板里写 `:change:prop="caretBridge.setCaret"` **不会**注册模块——`build:app` 既不出 `app-renderjs.js`，`app-service.js` 里也没有注册语句（表现为「产物里搜不到 `caretBridge`」）。必须补 `<script module="caretBridge" lang="renderjs" src="src/core/caret-bridge.renderjs.js"></script>`（放在 setup `</script>` 与 `<style>` 之间）。已回填进 Task 3/4 并重排 Step 编号（见 `7e67e44`）。
+2. **该 `src` 相对「项目根」`apps/mobile` 解析，不是相对 `.vue` 文件**：写 `../core/…` 会被解析成 `apps/core/…` 并报 `ENOENT`；两页统一写 `src/core/caret-bridge.renderjs.js`。
+3. **云打包前必须先让 HBuilderX 处于运行态**：`cli pack` 在 IDE 未启动时**不报错退出**，只在 stdout 打一行「未检测到已打开的HBuilderX，请先执行cli open启动HBuilderX后再重试」（退出码仍为 0）。须先 `& 'D:\HBuilderX\cli.exe' open` 并确认 `HBuilderX` 进程起来后再 pack；本次首跑即因此空转，已按此口径补跑成功。
+
+### 四步发布证据（仅手机端）
+
+1. **云打包**：`cli pack --project e:\code\base\apps\mobile --platform android --android.packagename uni.app.UNI936A667 --android.androidpacktype 3` → 09:43:25 打包成功。**APK 27450925 字节 / sha256 `9101b5ac3588796c703fa246b8266e94fe680494efe2a377d7d74ee71cf83d5b`**。
+   - 包内核对（`assets/apps/__UNI__936A667/www/manifest.json`）：`"version":{"code":"29","name":"0.20.4"}`。
+   - 证书 SHA1 = `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`，与 `0.6.0`–`0.20.3` 一致 ⇒ **可覆盖安装**。
+2. **上传**：`scp` 到 `/opt/appdl/base-0.20.4.apk`，远端 `sha256sum` 与本地**逐字一致**（同上哈希，27450925 字节）。
+3. **落地页**：`/opt/appdl/index.html` 整页重写改指 `0.20.4`，旧页备份为 `index.html.bak-0.20.3`；线上 `grep -c '0.20.3'` = **0**、`grep -c '0.20.4'` = 2。
+4. **签发**：服务器 `set -a; . /opt/base/base.secret.env; set +a; /opt/base/based release -version-name 0.20.4 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.20.4.apk -apk-file /opt/appdl/base-0.20.4.apk -notes 正文快捷标签插入到真实光标处 -out /opt/base-cache/data/release.json` → 输出 `apk_size=27450925`、`apk_sha256=9101b5ac…`、`public_key 48c33db9…24f4`；`find /opt -name 'release*.json'` 只有 `/opt/base-cache/data/release.json` ⇒ **无游离副本**。
+
+### 线上核对
+
+| 项 | 结果 |
+| --- | --- |
+| `GET /v1/release` | `version_name=0.20.4`、`min_version_name=0.8.0`、`apk_size=27450925`、`apk_sha256=9101b5ac…3d5b`（与本地逐字一致）、`apk_url=http://118.190.217.242/dl/base-0.20.4.apk`、`notes=正文快捷标签插入到真实光标处` |
+| `HEAD /dl/base-0.20.4.apk` | `200`、`Content-Length: 27450925`（与本地一致） |
+| `GET /dl/` | 落地页只出现 `0.20.4`，无 `0.20.3` 残留 |
+
+### 真机探针 5 条（**待人工，不阻塞发布**）
+
+沿用本仓既有体例「真机验收待人工」，按 Task 6 Step 3 逐条实测并如实记录：
+
+1. 编辑课时正文 → 光标点中间 → 点「加粗」：`**` 插在**点击处**、光标停在 `**` 中间；
+2. 接上一步直接打字：字落在 `**` 中间；
+3. 光标移到别处 → 点「标题」：`## ` 插在**新光标处**；
+4. 投稿页（文章）重复 1–3；
+5. 兜底：若 renderjs 未生效，应只出**一次**「未取到光标，已插入到正文末尾」+ 插到末尾。
+
+判读沿用 Step 3 口径：有「插到末尾 + 轻提示」⇒ renderjs 未通，**登记为真机缺陷并回退「事件台账」方案**，**不得静默降级、不得当作通过**。
+
+### 本册同批登记（不在本册范围，见 `docs/README.md` 的 `#67` 条目）
+
+1. 正文插图采用「**媒体段进内容包（相对引用）**」口径，需新增四块（正文相对引用 scheme / Go+TS 双侧渲染白名单与 `vectors/v1/markdown.json` 同步 / 渲染期把相对引用解析成本机 `{workDir}/blobs/<blob_id>` / 打包 `DeclaredChunks` 补齐），两条待实测风险（App 端 `rich-text` 能否渲染本机文件路径图片、新 scheme 与 vectors 的镜像纪律）——**尚未立册、未定编号**。
+2. 跨设备 / 跨节点分发现状：本地 SQLite 只有文本、元数据与块索引，图片本体落本机 `{workDir}/blobs/<blob_id>`；节点导出包 `pack.sqlite` **不含 blob 本体**，图片靠 `GET /v1/blob/{id}` 按需拉取 ⇒ **把 APK 装到另一台设备，既不带走数据库，也不带走任何图片**（口径 1 落地后，正文内嵌图片将随内容包分发，本地数据库仍不随 APK 走）。
