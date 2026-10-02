@@ -13,13 +13,14 @@ import { contributorsHandler } from "./routes/contributors";
 import { directoryHandler } from "./routes/directory";
 import { commentHandler } from "./routes/comment";
 import { dmHandler } from "./routes/dm";
+import { groupGetHandler } from "./routes/group";
 import {
   escrowGetHandler,
   escrowPutHandler,
   identityGetHandler,
   identityRegisterHandler,
 } from "./routes/identity";
-import { requireAuth, requireAuthLimit } from "./routes/authmw";
+import { optionalAuth, requireAuth, requireAuthLimit } from "./routes/authmw";
 import { meHandler } from "./routes/me";
 import { profilePutHandler } from "./routes/profile";
 import {
@@ -109,6 +110,9 @@ export async function startServer(
   adapters.http.handle("GET /v1/directory", directoryHandler({ db, storeKey, limiter: governLimiter }));
   adapters.http.handle("GET /v1/comment", commentHandler(db));
   adapters.http.handle("GET /v1/dm/{peer_id}", dmHandler(db));
+  // 小组读（批 B4b）：开放圈匿名可读；封闭圈需成员签名读权（optionalAuth 允许匿名进入，
+  // 由 handler 按形态分流）——对齐 server.go:133。
+  adapters.http.handle("GET /v1/group/{group_id}", optionalAuth({ db }, groupGetHandler({ db })));
   // 身份公开只读面（契约 5.2/5.4，批 A3）：公钥查询与 escrow 读取均匿名。
   adapters.http.handle("GET /v1/identity/{id}", identityGetHandler({ db }));
   adapters.http.handle("GET /v1/identity/escrow/{username}", escrowGetHandler({ db, limiter: escrowLimiter }));

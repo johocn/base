@@ -2,7 +2,7 @@
 
 - 日期：2026-10-02
 - 上游：路线计划 `#70`（§1 P3 行、§5 节点职能清单、§6 P5 等价判据）；首批计划 `#73`（§8 不做「P3 余下批次」、§9.2 执行期发现）；接口边界冻结面 `#72`
-- 状态：**批 A 已收口、批 B1–B3 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8、B3 实况见 §10.9；B4 未开工；批 C–E 未开工）
+- 状态：**批 A 已收口、批 B1–B4 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8、B3 实况见 §10.9、B4 实况见 §10.10；批 C–E 未开工）
 - 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）与**批 B**（§10，切 B1–B4）；批 C–E 只登记边界（§8）
 - 性质：任务级计划。契约一律回册子，本册不承载契约。
 
@@ -24,7 +24,7 @@
 | 批 | 范围 | 对应判据 | 状态 |
 |---|---|---|---|
 | **A** | **纯匿名公开读 JSON 面 12 条 + 门户页 3 个** | **判据 2**（字节级） | **已收口**（§9） |
-| B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **B1–B3 已收口**（§10，实况 §10.7 / §10.8 / §10.9）；B4 未开工 |
+| B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **B1–B4 已收口**（§10，实况 §10.7 / §10.8 / §10.9 / §10.10） |
 | C | 治理派生面：`proposal` POST / `proposal/{id}/vote` / `proposal` GET | 判据 5（含 `#65` 小节点豁免） | 未开工 |
 | D | 对端同步·反熵：`inventory` / `sync` / `fetch` / `scrub` / `event-sync` + CLI `peer-sync` / `scrub` | 判据 4（结果集一致 + 只增不减） | 未开工 |
 | E | `importer` 容器 / 题库 / 视频派生 + CLI `import-video` | 判据 6（pack_id 与 merkle_root 同一） | 未开工 |
@@ -138,7 +138,7 @@
 
 ## 8. 后续批次边界（只登记，不展开）
 
-- **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。**已切 4 子批 B1–B4，详列见 §10**（`govern.v1` 分支已定随 event 一起做，不留批 C；B1–B3 已收口）。
+- **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。**已切 4 子批 B1–B4，详列见 §10**（`govern.v1` 分支已定随 event 一起做，不留批 C；B1–B4 已收口）。
 - **批 C**：`govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`；验收 = 判据 5。
 - **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。
 - **批 E**：`internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = 判据 6。
@@ -202,7 +202,7 @@
 
 ## 10. 批 B：认证读写面（判据 3）
 
-**状态：B1–B3 已收口（实况见 §10.7 / §10.8 / §10.9），B4 未开工。**
+**状态：B1–B4 已收口（实况见 §10.7 / §10.8 / §10.9 / §10.10）。**
 
 **开工前决策（2026-10-02，用户拍板）**：
 
@@ -273,7 +273,7 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 
 ### 10.7 执行实况（B1）
 
-**状态：B1 已收口**（B2–B4 未开工）。
+**状态：B1 已收口**（B2 见 §10.8、B3 见 §10.9、B4 见 §10.10）。
 
 **产出**：
 - `routes/authmw.ts`：`authErrText` 全表（逐字取 `authmw.go:20-79`）+ `writeAuthErr`（`{"code":...,"error":...}`，Go map 字典序 code 在前）+ `authenticate` 契约 3.2 七步 + `requireAuth` / `requireAuthLimit` / `optionalAuth` / `hasAnyAuthHeader`。
@@ -313,11 +313,11 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 3. **register 的 `identity_pubkey_conflict` 分支在真实流量下不可达**（分析，非实跑）：handler 强制 `alg==ed25519`，conflict 条件是「同 id 不同 pubkey 或不同 alg」，而 id 由 pubkey 派生 ⇒ 需 sha256 前 128 bit 碰撞才可能触发。两侧等价性由「同输入同结果」覆盖，非分支级覆盖。
 4. **`rawQueryOf` 回构限制**（沿用 §10.0）：本壳 `ServerRequest` 未暴露 `RawQuery` 原文，B1 四条路由均无 query 故恒为 `""`；**B4 带 query 的签名读路由必须复核**。
 
-**待决点（登记）**：`decodeStrict` 未做 Go struct 键名 `EqualFold` 匹配（Go 精确优先、其次大小写不敏感）——B1 各路由结果不受影响，B2/B4 接 event/group body 时需复核。
+**待决点（登记）**：`decodeStrict` 未做 Go struct 键名 `EqualFold` 匹配（Go 精确优先、其次大小写不敏感）——B1 各路由结果不受影响，B2/B4 接 event/group body 时需复核。**B4 复核结果：已关闭**——`decode.ts:283-294` 的 `matchField` 实现「精确优先 + 唯一大小写不敏感（折叠命中多个即歧义不匹配）」，B4 读面 `parseEventBody` / `groupName` 均经 `jsonObjectField`（`:350-357`）走同一规则，与 Go 解到 `struct{Action;Epoch;PayloadCID;ReplyTo}` / `struct{Name}` 同语义（见 §10.10 发现 8）。
 
 ### 10.8 执行实况（B2）
 
-**状态：B2 已收口**（B3–B4 未开工）。
+**状态：B2 已收口**（B3 见 §10.9、B4 见 §10.10）。
 
 **内部切法**：B2 再切 B2a（`event` 骨架 + `comment.v1` / `dm.v1` / `progress.v1`）与 B2b（`govern.v1` body 校验 + 投影 + settle），**共用一个提交**（不制造中间破损态）。
 
@@ -364,11 +364,11 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 3. **`received_at` 回读是写面 body 的必然差异源**：两侧各自墙钟，唯有用「两侧各自回读自己写入的值」比较才等价（A 组 24 条即此口径）。
 4. **删除死代码 `encodeTagLinks`**：`store/governProjection.ts` 曾导出该函数，但 Node 侧尚无治理写面 `POST /v1/proposal`，**无任何调用方**（Go 侧同函数属后续批次）⇒ 本批删除，避免冗余。
 5. **`anyString` 数字分支的不可见发散**（`anyString` 取 `String(Math.trunc(v))`，Go 取 `strconv.FormatInt(int64(t),10)`）：仅在超出 int64 范围时两侧字符串不同，而下游 `parseProposalId` / `jsonInt` **同拒** ⇒ 无可见发散，不处置。
-6. **`decode.ts` 的 `NUM_FULL_RE` 假设已由 G4 证伪风险**：`created_at` 含 `.` / `e` 时 Go `json.Number.Int64()` 与 Node `parseGoInt64` **都先拒**（400 `event_param_invalid`），故该正则只影响**字符串形态** `created_at`；B 组 `created-at-float` / `created-at-string-space` 与 A 组 `created-at-as-string` 三向实测两侧一致，**§10.7 登记的第 5 条待决点至此关闭**（`EqualFold` 匹配仍待 B4 复核）。
+6. **`decode.ts` 的 `NUM_FULL_RE` 假设已由 G4 证伪风险**：`created_at` 含 `.` / `e` 时 Go `json.Number.Int64()` 与 Node `parseGoInt64` **都先拒**（400 `event_param_invalid`），故该正则只影响**字符串形态** `created_at`；B 组 `created-at-float` / `created-at-string-space` 与 A 组 `created-at-as-string` 三向实测两侧一致，**§10.7 登记的第 5 条待决点至此关闭**（`EqualFold` 匹配已由 B4 复核对齐，见 §10.10 发现 8）。
 
 ### 10.9 执行实况（B3）
 
-**状态：B3 已收口**（B4 未开工）。
+**状态：B3 已收口**（B4 见 §10.10）。
 
 **产出（13 文件）**：
 - `routes/submit.ts`（402 行）：`handleSubmitPost` 五形态（`article` / `quiz` / `tag` / `course` / `lesson`）+ **严格判定顺序**（decode → `author_id_forbidden` → 形态分流 → `content_hash` 服务端重算 → `author_sig` 校验）+ 双维度限速按 Go 的 `||` 短路序（`item_rate_limited`）。
@@ -412,3 +412,50 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 6. **IP 维度限速在取证件中同口径退化**（沿用 §10.8 发现 2）：`ServerRequest` 无 `RemoteAddr` ⇒ Node 侧 `clientIP` 恒为单桶键；Go 侧取证件经进程内分发亦无 `RemoteAddr` ⇒ 两侧同退化，IP 桶等价性在**单桶口径**下自证（ID 维度由 G 组覆盖切点）。
 7. **G4 任务书预期写反（H109）**：Go `quotedprintable` 依 issue 15486 **接受** EOF 前 `=` 软换行，故 `abc=` → 200（非任务书文字预期的 400）；实测两侧一致 200，**非移植差异**。单测用**单个 `=`** 仍正确判 400（该分支要求 `cur.length > 0`），并把真正的 `invalid bytes after =` 落点改为 `abc=\r`（两侧同 400）。
 8. **`group.v1` 缺口仍归 B4**（沿用 §10.8 发现 1）：B4 收口前，判据 3 **不得**对 `group.v1` 宣称等价。
+
+### 10.10 执行实况（B4）
+
+**状态：B4 已收口** ⇒ **批 B 全四子批 B1–B4 至此收口**（批 C–E 未开工）。
+
+**产出（7 文件）**：
+- `routes/groupEvent.ts`（718 行）：`group.v1` 写面——`parseGroupBody`（v2/v1 按 `sigs` **键存在性**分流，`null` 也算存在）/ `parseGroupMsg`（缺 `reply_to` 不补键）/ `parseGroupRoster`（`encrypted` 缺省 1）/ `parseGroupRosterV2`（`sigs` 条目**恰 2 键**、`from_epoch` **只判键存在不判类型**、`envelopes` 走 `Canonicalize({"envelopes":arr})`）+ `handleGroupEvent`（parse → `verifyEventSig` → 三 action 分流，**不做墓碑检查**）+ `putGroupMessage` / `putGroupRoster` / `handleGroupRosterV2` / `rosterApprovalPayload` / `verifyRosterApprovals`（按 id 去重保留首条）/ `rosterQuorumError`。
+- `store/group.ts`（193 行）：`putGroupRoster` / `putGroupRosterV2`（乐观锁 `WHERE` 携带读到的旧 `epoch`/`roster_rev`；错误 kind `owner_mismatch` / `epoch_stale` / `roster_rev_stale` / `form_locked`）/ `getGroup` / `listGroupEvents`（`created_at DESC, event_id DESC` 分页）/ `listGroupMsgEvents`（`ASC` 全量，供席位派生）。
+- `routes/group.ts`（213 行）：`GET /v1/group/{group_id}` 读面——非 hex16 → 400 `event_param_invalid`、无行 → 404 `group_not_found`、封闭圈非成员 → 404 `group_read_denied`（`memberOf` 对空 actor 恒 false，**不泄露存在性**）、`limit` 走 `parseGoInt` 且 `1..100` 否则回落 30、复用 `parseCommentCursor`、`deriveSeats` 派生席位、`envelopes` 三态（无键 / `null` ⇒ 输出 `null`）、事件循环只留 `action="msg"`、**满页才给** `next_cursor`。
+- `routes/event.ts`（289 行）扩：加 `case "group.v1": return groupEventHandler(...)` ⇒ **闭合 §10.8 发现 1 / §10.9 发现 8 登记的缺口**。
+- `serve.ts`（156 行）扩：装配 `GET /v1/group/{group_id}` = `optionalAuth({db}, groupGetHandler({db}))`（对齐 `server.go:133`）。
+- 测试：`groupEvent.test.ts`（**16 用例**）、`group.test.ts`（**12 用例**）。
+
+#### 10.10.1 门禁 G1–G6（逐条通过）
+
+| 门 | 结果 | 证据 |
+|---|---|---|
+| G1 | 通过 | `go build ./...` / `go vet ./...` / `go test ./...` 全绿（本批不动 Go，作基线回归） |
+| G2 | 通过 | `apps/node` `npx tsc --noEmit` **0 错误** |
+| G3 | 通过 | `apps/node` `npx vitest run`：**28 文件 / 296 用例全绿**（B3 收口时 26 文件 / 268 用例 ⇒ B4 净增 **2 文件 / 28 用例**） |
+| G4 | 通过 | **字节级对拍 0 分歧**（令牌 **179** 条，含 B4 新增 **60** 条，见 §10.10.2）；阶段 4 DB 快照 **111 行逐字节相同**（含新增 `groups` 表 6 行） |
+| G5 | 通过 | `git diff --stat -- internal/` **无输出**（`git status` 对 `internal/httpapi/web.go` 的 ` M` 为陈旧 stat 项，`git diff` 为空）；`packages/protocol-ts/**` 与 `#72` 冻结的 `ServerRequest` / `Adapters` / `ServerAdapters` 未动 |
+| G6 | 通过 | 只 `add` 本批 7 个代码文件 + 2 个文档文件；`.gitignore` / `internal/httpapi/web.go` / `based-linux-amd64` / `.tmp/`（含 G4 取证件）均未入暂存 |
+
+#### 10.10.2 G4 字节级对拍实况（B4）
+
+**方法**（沿用 §10.9.2）：Node `openDb` + `migrate()` 建全量 schema → 插种子（含身份 + 被标条目 + store 密钥文件）→ **复制两份**（`go/` / `node/`）→ Go `store.Open` **先于** Node `openDb`（§9.3 发现 2 的取数顺序硬约束）→ 两侧同一份 `tokens.json` 逐字节回放 → 比对 `status` + 4 对照头（`content-type` / `cache-control` / `x-content-type-options` / `access-control-allow-origin`）+ body 字节（**不比 `Content-Length`**）。取证件在 `e:\code\.tmp\g4\`，**未入提交**。
+
+**本批工装改造三处**：① 新增**保真 GET + query** 通道（成员签名读令牌的签名覆盖规范形态 query；GET body 0 字节按其 sha256 口径）；② 阶段 4 快照两侧各加 **`groups` 表**（`group_id,creator_id,epoch,roster_rev,encrypted,member_ids_json,key_envelopes,event_id,updated_at`，`updated_at` 归一化 `<ts>`）；③ **移除 D 组「group.v1 已知分歧」特殊处理**（`KNOWN_DIVERGENT_GROUP` / `dropKnownArtifact`）——旧反向项改由 I 组反向矩阵以「两侧同 400」等价覆盖。
+
+**结果：令牌 179 条（A14 / B34 / C12 / E5 / F34 / G4 / H16 + B4 新增 I 组 60 条），逐条 0 分歧。** I 组覆盖：
+- **写面正向 27 条**：roster v1 建封闭 / 建开放 / 更新（`encrypted` 键缺省验缺省语义）、msg（带 / 不带 `reply_to`）、roster v2 `join` / `rename` / `remove` / `rotate` / `leave` / `dissolve`、`envelopes` 三态（数组 / **无键** / 空数组）、`from_epoch:null` **应通过**、`sigs` 重复 id **按 id 去重保留首条**。
+- **写面反向 20 条**：非法 body（未知键 / `action` 非枚举 / 数组 / 标量 / 缺失）→ 400 `event_param_invalid`、`sigs:null`（键存在 ⇒ 走 v2 路径）→ 400、未登记签名者 → 403 `identity_unregistered`、签名不匹配 → 403 `event_sig_invalid`、quorum 不足 → 403 `group_roster_quorum_missing`、dissolve 发起段不足 → 403 `group_proposal_proposer_missing`、`encrypted` 切换 → 400 `event_param_invalid`（form_locked）、v1/v2 epoch 不递增与 rev 不递增 → 409、`group_id` / `epoch<1` / `text_cipher` 空或超 8192 / `reply_to` 非 hex16 / `member_ids` 空数组但 sub≠dissolve / `name` 超 64 / `sigs` 条目键数≠2 / `envelopes` 超 32 条 → 400。
+- **读面 13 条**：开放圈 + **匿名（零 auth 头）200** / 封闭圈 + 匿名 **404 `group_read_denied`** / 封闭圈 + 成员签名 **200** / 封闭圈 + 已登记非成员 **404** / 不存在 hex16 **404 `group_not_found`** / 非 hex16 **400** / **半 auth 头 400 `auth_missing_header`** / `limit=1` / `=100` / `=0`（回落 30）/ `=abc`（回落 30）/ 真实 `cursor` / `events` 只留 `action=msg`。
+- **`group.v1` 缺口闭合自证**：旧 D 组单条（非法 body）由 I 组反向等价覆盖，两侧**同 400** 且 DB 侧无 artifact 行 ⇒ §10.8 发现 1 / §10.9 发现 8 **至此关闭**。
+
+**阶段 4 DB 状态对拍**：固定列序、主键升序、`|` 连接 ⇒ **111 行逐字节相同**（含 `groups` 表 6 行）。
+
+**执行期发现（登记）**：
+1. **`group.v1` 缺口闭合**：原 §10.8 发现 1 / §10.9 发现 8 关闭；B4 起判据 3 可对 `group.v1` 与 `GET /v1/group/{group_id}` 宣称等价——**限规范 query 形态**（见第 3 条）。
+2. **`created_at` > 2^53 精度发散（残余缺口，登记）**：Go `eventReq.CreatedAt` 为 `json.Number` 保客户端字面量（`event.go:36-37`），Node `parseGoInt64` 内部虽用 `BigInt` 校验范围但 `return Number(v)` 会舍入（`derived.ts:53-63`）⇒ 客户端发 `created_at:9007199254740993` 时两侧**重建的待验字节不同**（Node 落 403 `event_sig_invalid`）且落库值不同。系 **B1/B2 既有管线缺陷**（非 B4 引入），修复需改仍属冻结面的 `packages/protocol-ts` `canonicalize`（§10.0 明定本批不改）⇒ **登记不改**。真实客户端毫秒时间戳 ≪ 2^53，**实际不可达**。
+3. **签名 query 非逐字节等价（残余缺口，登记；§10.7 待决点 4 的复核结论）**：Go 以 `r.URL.RawQuery` **原文**参与签名（`authmw.go:218`），Node 侧 `host/http.ts:165-183` 用 `URLSearchParams` 建 query map（**取首值**）后由 `authmw.ts:137-143` 的 `rawQueryOf` 用 `encodeURIComponent` **回构**。**参数选取语义与 Go `Get` 一致，仅签名串在非规范形态下分歧**：`?limit=10&limit=20`（重复键）、小写 `%hex`、值含 `+` 时 Node 落 401 `auth_bad_signature` 而 Go 200。修复须让 host 层透传原始 RawQuery，而 `ServerRequest` 属 `#72` 二次冻结面（`platform/server.ts:7-14`，**无 RawQuery 字段**）⇒ **登记不改**；故**判据 3 对 `GET /v1/group/{group_id}` 只在规范 query 形态下成立**（G4 I 组读面令牌全部用规范形态，已验证）。
+4. **重复键 / `null` 覆盖语义（残余缺口，登记）**：Go `json.Unmarshal` 进 struct 时重复键逐个解码、**任一次取值类型不符即整体报错**，`null` 对字段是 no-op 保留前值；Node `jsonObjectField`（`decode.ts:350-357`）只取末次匹配且不校验前值。差异仅在 `{"action":5,"action":"msg"}` / `{"action":"msg","action":null}` 一类形状可达，**正常客户端经 `Canonicalize` 写入故不可达**。
+5. **`member_ids_json` 为 `"null"` / `[null]` 的退化口径（残余缺口，登记）**：Go 解 `null` 进 `[]string` 置 nil ⇒ 读面输出 `null`、`[null]` ⇒ `[""]`；Node 读面统一退化 `[]`。**正常写入不可达**（写入侧经 `Canonicalize` 的元素恒为 hex 串）。
+6. **envelopes 非规范存量行（残余缺口，登记）**：Go 读面用 `json.RawMessage` 原样嵌入（compact 后保留数字字面量 / 键序 / 转义），Node 用 `canonicalize` 复现（会排序键、拒非整数）。仓里 `key_envelopes` 恒为 `Canonicalize` 产物故两侧字节相同；仅手工改库 / 反熵同步非规范行可达。
+7. **任务书预期校正（非移植差异）**：① 读面「半 auth 头」实测两侧**同为 400 `auth_missing_header`**（非任务书假定的 401）；② `group_id` 口径为 **32 hex**——`isHexN(s,16)` 的 16 指**字节数**（对齐 `group_test.go:17`），非任务书示例的 16 hex。两条均**两侧一致**，非差异。
+8. **§10.7 待决点「`EqualFold` 匹配」关闭（本批复核，非缺口）**：Go 读面解 `struct{Action;Epoch;PayloadCID;ReplyTo}` 与 `struct{Name string}` 用 struct 字段匹配（精确优先、其次**唯一**大小写不敏感，折叠命中多个即歧义不忽略）；Node 侧 `decode.ts:283-294` 的 `matchField` 逐条复刻该规则，`jsonObjectField`（`:350-357`）与 B4 读面 `parseEventBody` / `groupName` 皆经此路径 ⇒ **两侧等价**。写面 `parseGroupBody` 走 `map[string]any` **精确键**查表（键集白名单同时把大小写变体判为未知键 → 400），与 Go 同。故 §10.7 该待决点**关闭**。

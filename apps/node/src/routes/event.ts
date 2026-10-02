@@ -1,6 +1,7 @@
 // 逐行对齐 internal/httpapi/event.go 的 handleEventPost（:44-81）与 putBareEvent（:84-98），
 // 以及 comment 分支 handleCommentEvent（:108-168）/ verifyEventSig（:172-202）/
 // parseCommentBody（:207-243）/ validTargetID（:246-256）。
+// group.v1 分支见 routes/groupEvent.ts（内部 httpapi/group.go 的写面）。
 import type { ServerResponse } from "@base/core-ts";
 import { blobId, canonicalize, utf8, verify, type Json } from "@base/protocol-ts";
 import type { Db } from "../db";
@@ -10,6 +11,7 @@ import { decodeStrict } from "./decode";
 import { type IpLimiter, isHexN, onlyKeys, parseGoInt64, toStr } from "./derived";
 import { dmEventHandler } from "./dm";
 import { governEventHandler } from "./governEvent";
+import { groupEventHandler } from "./groupEvent";
 import { jsonResponse } from "./json";
 import { progressEventHandler } from "./progress";
 
@@ -209,7 +211,10 @@ async function handleCommentEvent(
   });
 }
 
-/** putBareEvent（event.go:84-98）：落不带投影的事件骨架；不验签、不查墓碑。 */
+/**
+ * putBareEvent（event.go:84-98）：落不带投影的事件骨架；不验签、不查墓碑。
+ * 五类放行类型均有真分支，故此处已是未列举类型的兜底（当前不可达）。
+ */
 function putBareEvent(
   deps: EventDeps,
   actor: string,
@@ -238,7 +243,7 @@ function putBareEvent(
 
 /**
  * handleEventPost（event.go:44-81）按类型分流；已验签身份由 requireAuth 以形参传入。
- * group.v1 尚未写分支，自然落到 putBareEvent。
+ * 五类事件均有真分支；putBareEvent 仅作为未列举类型的骨架兜底（当前不可达）。
  */
 export function eventPostHandler(deps: EventDeps): AuthedHandler {
   return async (req, actor) => {
@@ -270,6 +275,8 @@ export function eventPostHandler(deps: EventDeps): AuthedHandler {
     switch (env.type) {
       case "comment.v1":
         return handleCommentEvent(deps, actor, env, createdAt);
+      case "group.v1":
+        return groupEventHandler(deps, actor, env, createdAt);
       case "dm.v1":
         return dmEventHandler(deps, actor, env, createdAt);
       case "progress.v1":
