@@ -18,6 +18,7 @@ import { releaseHandler } from "./routes/release";
 import { contributorsHandler } from "./routes/contributors";
 import { directoryHandler } from "./routes/directory";
 import { commentHandler } from "./routes/comment";
+import { requireReviewKey, reviewFetchHandler, reviewRejectHandler } from "./routes/review";
 import { dmHandler } from "./routes/dm";
 import { groupGetHandler } from "./routes/group";
 import {
@@ -74,6 +75,8 @@ export interface ServerOptions {
   dataDir?: string;
   fingerprintHex?: string;
   pairingCode?: string;
+  /** 运营审核密钥（env BASE_REVIEW_KEY）；为空表示本节点**不注册**审核路由（对齐 server.go:24-25、:145-149）。 */
+  reviewKey?: string;
 }
 
 export async function startServer(
@@ -156,6 +159,19 @@ export function mountPublicRoutes(adapters: ServerAdapters, db: Db, opts: Server
   adapters.http.handle("GET /v1/contributors", contributorsHandler({ db, storeKey }));
   adapters.http.handle("GET /v1/directory", directoryHandler({ db, storeKey, limiter: governLimiter }));
   adapters.http.handle("GET /v1/comment", commentHandler(db));
+  // 审核路由：**未配置 BASE_REVIEW_KEY 的节点上这两条根本不存在**（册子 §4.3、风险 9；对齐 server.go:145-149）。
+  const reviewKey = opts.reviewKey ?? "";
+  if (reviewKey !== "") {
+    const reviewDeps = { db, dataDir: dataDir ?? "", storeKey };
+    adapters.http.handle(
+      "POST /v1/admin/review/fetch",
+      requireReviewKey(reviewKey, reviewFetchHandler(reviewDeps)),
+    );
+    adapters.http.handle(
+      "POST /v1/admin/review/reject",
+      requireReviewKey(reviewKey, reviewRejectHandler(reviewDeps)),
+    );
+  }
   adapters.http.handle("GET /v1/dm/{peer_id}", dmHandler(db));
   // 小组读（批 B4b）：开放圈匿名可读；封闭圈需成员签名读权（optionalAuth 允许匿名进入，
   // 由 handler 按形态分流）——对齐 server.go:133。

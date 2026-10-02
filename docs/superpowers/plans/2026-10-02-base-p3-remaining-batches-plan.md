@@ -143,6 +143,7 @@
 - **批 F：开库引导等价（判据 7）**：**已收口**（全量见 §14；批 C §11.3 的 4 行 / 批 D §12.3 的 3 行 DB 快照对称差**归零**）。Go `internal/store/store.go:155-168` 的 `Open` = `schemaStatements` → `migrate` → `seedDirectoryFromExisting`（`internal/store/directory.go:294-442`：把存量 `items WHERE item_id LIKE 'tag/%'`、`source='category'`、`segments seq<0` 的 `attr.category` / `attr.instructor` 登记为 `directory_terms` 的 `approved` 词条，仅当确有存量词条时 `bumpDirectoryVersion` 一次并写 `meta.directory_seeded=1`；失败只打 stderr 不阻断 Open）。Node 侧现状：`openStore`（`apps/node/src/store/store.ts:244-267`）只跑 `migrate`、**不含 seed**；`main.ts:48` 的 `serve` 用裸 `openDb`（连 `migrate` 都无）。**验收 = 开库后 DB 快照与 Go 逐字节一致**（即批 C G4 阶段 4 的 4 行对称差归零，见 §11.3）。
 - **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。**已收口**（全量见 §12）——5 条对端路由全部落在 `routes/peer.ts`；出站侧拆为 `store/syncstore.ts`（`SyncStore` 端口）+ `store/packimport.ts` + `peersync/*`；对端监听由 `serve.ts` 的 `startPeerServer` 承载（公开路由 ∪ 内部路由，对齐 Go `PeerHandler()`）。**残余缺口**：Node 缺 Go `store.Open` 的 `seedDirectoryFromExisting` 开库引导（§12.3 的 3 行对称差，同下条边界项；**已由批 F 收口**，见 §14）。
 - **批 E**：`internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = 判据 6。**已收口**（全量见 §13）——Node 落点：core-ts 纯派生 `importer/{gojson,quiz,container,video}.ts` + 宿主编排 `apps/node/src/importer/{container,run}.ts` + CLI `import-video`。**判据 6 的非平凡证据由 G4-4（真实视频块）提供**（见 §13.2）。
+- **批 G：审核面等价（`POST /v1/admin/review/fetch` / `POST /v1/admin/review/reject`）**：**已收口**（全量见 §15）——`#70 §5` 运维组的 `admin/review/*` 是 HTTP 面最后两条未移植路由。Go 权威实现 `internal/httpapi/comment.go:87-164`：`requireReviewKey`（读头 `X-Base-Review-Key`、`subtle.ConstantTimeCompare` 不符回 **404 not_found**，不暴露路由存在性）+ `handleReviewFetch`（`protocol.IsBlobID` → `GetBlobBytes` → 200 明细文；`os.ErrNotExist` ⇒ 404 blob_not_found）+ `handleReviewReject`（`isHexN(event_id,16)` → `GetEventByID` → 写 `comment_tombstone` + `DeleteBlob` → 200 echo）；`server.go:145-149` **仅当 `ReviewKey != ""` 时注册两条路由**。Node 落点：`routes/review.ts`（`requireReviewKey` 中间件 + 两个 handler）+ `serve.ts` 条件注册 + `main.ts` 从 `BASE_REVIEW_KEY` 取值。**验收 = 两条路由 HTTP 字节级等价**（含「未配置即路由不存在」「密钥不符 404」「审核删后取正文/块 404 且列表不再含该条」）。
 
 ## 9. 执行实况
 
@@ -780,3 +781,53 @@ directory_terms   [{"kind":"category","term_key":"cats","display_name":"Cats","s
 5. **`serve` 引导口径本批统一（新增覆盖面）**：`main.ts` 的 `serve` 原走裸 `openDb`（连 `migrate` 都无），本批改走 `openBootstrapDb`（schema → migrate → seed + 同口径 pragma / journal），使**两条引导路径**口径一致；`openStore` 仍保留其原有 journal / 连接设置不动。
 
 **不做**：不改 `schema_version` / 内容包规范 v1；不新增适配器接口；不动 `internal/**`；不重建仓根陈旧 `based.exe`。
+
+## 15. 批 G：审核面等价（运维组收口）
+
+**状态：已收口**（§8「审核面等价」边界项由本批认领并关闭；`#70 §5` 运维组的 `admin/review/*` 是 HTTP 面**最后两条**未移植路由）。
+
+**范围**：把 Go `internal/httpapi/comment.go:87-164` 的审核面三件——`requireReviewKey` / `handleReviewFetch` / `handleReviewReject`——移植到 Node，并接进 `serve.ts` 的路由装配（**仅 `opts.reviewKey` 非空时注册**，对齐 `server.go:145-149`）。
+
+**分层（沿用 #73 §1）**：本批**不新增 core-ts 纯层**（审核面无纯派生）；路由层自带 SQL / IO，与 `routes/comment.ts`（自写 ListComments SQL）/ `routes/blob.ts`（自写 `blobPath` + decrypt）体例一致；**不新增适配器接口**（`#72` 冻结面未动）。
+
+**Task 拆解与产出**：
+
+| Task | 产出 | 提交 |
+|---|---|---|
+| G1 | 侦察：Go `comment.go` / `server.go:145-149` / `identity.go:40-48`（`decodeJSON` 口径）/ `store.go:381-395`（`GetBlobBytes`）/ `blobs.go:70-88`（`DeleteBlobFile`）+ Node `serve.ts` / `comment.ts` / `blob.ts` / `decode.ts` / `json.ts` / `store/events.ts` / `store/peersync.ts` | 见本次提交 |
+| G2 | 新 `apps/node/src/routes/review.ts`：`requireReviewKey(key, next)`（`X-Base-Review-Key` → `Buffer` + 长度判等 + `timingSafeEqual`，不符回 404 `{"error":"not_found"}`）+ `reviewFetchHandler`（`decodeStrict` → `isBlobId` → `getBlobBytes`，`ENOENT` ⇒ 404 `blob_not_found`）+ `reviewRejectHandler`（`isHexN(event_id,16)` → `getEventById` → `putCommentTombstone` + `deleteBlob` → 200 echo）；**私有 `asHostDb(db: Db): HostDb` shim** 以复用 `store/peersync.ts` 的块读写 / 墓碑 SQL（不重复 SQL、不用类型 hack）；`serve.ts` 加 `ServerOptions.reviewKey` 与条件注册；`main.ts` 从 `process.env.BASE_REVIEW_KEY ?? ""` 取值 | 见本次提交 |
+| G3 | 新 `apps/node/src/routes/review.test.ts` **11 用例**（真 `startServer` + 真库 + 真块文件）：未配密钥两路由 404 / 密钥不符 404 `not_found` / fetch 明文 / 非法 cid 400 / 不存在块 404 / `bad_json` 400 / reject 非法 `event_id` 400 / 未知 `event_id` 404 / 无 `payload_cid` 404 / 审核删后墓碑落库 + `blobs` 行删 + fetch 404 + blob 404 + `GET /v1/comment` 不再含该条 | 见本次提交 |
+| G4 | 门禁 G1–G6；G4 两条路由 HTTP 字节级对拍（工装 `.tmp/g4/`，**未入提交**） | 见本次提交 |
+| G5 | 回填本 §15 + §8 边界项 + `docs/README.md` 登记 + 只 add 本批文件 → `commit` → `push` | 见本次提交 |
+
+### 15.1 门禁 G1–G6
+
+| 门 | 结果 | 证据 |
+|---|---|---|
+| G1 | 通过 | `go build ./...` / `go vet ./...` / `go test ./...` 全绿（本批不动 Go，作基线回归） |
+| G2 | 通过 | `apps/node` `npx tsc --noEmit` **无输出** |
+| G3 | 通过 | `apps/node` `npx vitest run`：**49 文件 / 550 用例全绿**（批 F 收口时 48/539 ⇒ 净增 **1 文件 / 11 用例**）；`packages/core-ts` `npx vitest run`：**40 文件 / 412 用例全绿**（本批未动 core-ts，持平） |
+| G4 | 通过 | **HTTP 字节级等价**——`tokens=25 divergences=0`、三表（`events` / `blobs` / `comment_tombstone`）快照集合对称差 **0 行**，见 §15.2 |
+| G5 | 通过 | `git diff --stat -- internal/` **无输出**（`git status` 对 `internal/httpapi/web.go` 的 ` M` 为陈旧 stat 项，定向 `git diff` 为空）；`packages/protocol-ts/**` / `web/**` / `#72` 冻结的 `ServerRequest` / `Adapters` / `ServerAdapters` 未动 |
+| G6 | 通过 | 只 `add` 本批 **6 个文件**（4 代码 / 测试 + 2 文档）；`.gitignore` / `internal/httpapi/web.go` / `based-linux-amd64` / `.tmp/`（含 G4 取证件）均未入暂存 |
+
+### 15.2 G4 HTTP 字节级对拍（批 G）
+
+**方法**（进程内取证件，`.tmp/g4/`：`rg-build.probe.ts` / `rggoprobe/main.go` / `rg-node.probe.ts` / `rgcompare.mjs`，**未入提交**）：Node 造种子（`events` 两行——一条有 `payload_cid`、一条空；一条加密块文件；三表 schema）→ **复制两份**（`ggo/` / `gnode/`，各自 `<dir>.key` 同一密钥）→ Go 侧 `store.Open(ggo)` + 两个 `Handler()`（`ReviewKey="review-key"` 与零值）／Node 侧 `startServer` ×2（同法）→ 同一份 **25 token** 逐条回放（token 带 `target: key|nokey` 分发）→ 比 status + 4 头 + body 字节；并比三表快照。
+
+**结果：`tokens=25 divergences=0`；三表快照集合对称差 `0 行`。**覆盖分支：
+
+- **路由存在性**：`nokey` 侧两条路由 → 404（Go mux 默认 `404 page not found`，Node 路由器同口径）；`wrongkey` / 空密钥头 → **404 `{"error":"not_found"}`**（不暴露存在性）。
+- **fetch**：正常取明文 200 / 非法 cid 400 `event_param_invalid` / 合法但不存在块 404 `blob_not_found` / `{`、空体、`[]` → 400 `bad_json` / 顶层 `null` → 零值 cid → 400 `event_param_invalid` / cid 为数字 → 400 `bad_json` / 未知字段忽略 200。
+- **reject**：非法 `event_id` 400 / 未知 `event_id` 404 `event_not_found` / 事件无 `payload_cid` 404 `event_not_found` / `{`、空体 400 `bad_json` / 正常 200 `{"event_id":…,"payload_cid":…}` / 重删（事件行仍在）仍 200。
+- **删后状态**：`fetch` 404 `blob_not_found`、`GET /v1/blob/<cid>` 404、`GET /v1/comment` 不再含该条——**两侧三表快照一致**（墓碑 `at` / `received_at` 为墙钟，归一化为 `<ts>`）。
+
+### 15.3 执行期发现（登记）
+
+1. **`store/peersync.ts` 的 store 函数形参是 `HostDb`，而路由装配只持有 `Db`**：审核面需复用 `getBlobBytes` / `putCommentTombstone` / `deleteBlob`（逐字复用其 SQL 与错误文案，避免在 route 内重复 SQL）。处置 = 在 `routes/review.ts` 内加**私有** `asHostDb(db: Db): HostDb` 薄适配（`run`→`execute`、`get`/`all`→`select`），**不写 `as unknown as` 类型 hack、不新增适配器接口**。既有公开适配器 `hostDbAsDb` 是反向（`HostDb`→`Db`），本批新增的是其逆，故私有化在消费点内。
+2. **常量时间比较须先判长度**：Go `subtle.ConstantTimeCompare` 长度不等直接返回 0；Node `crypto.timingSafeEqual` 长度不等会**抛错**，故须 `got.length !== want.length` 先短路（空密钥头亦落此分支 → 404）。
+3. **`handleReviewFetch` 的「块不存在」判据是 `os.ErrNotExist` 单点**：Node 侧 `getBlobBytes` 以 `code === "ENOENT"` 对齐；`storeKey === null`（未配 dataDir）按既有 `routes/blob.ts` 先例退化 404 `blob_not_found`（Go 侧无对应分支，因 Go store 必有密钥）。
+4. **JSON 键序须按字典序构造**：`{payload_cid, text}` 与 `{event_id, payload_cid}` 的插入顺序须满足 `json.ts` 的字典序键序要求，否则 body 字节不等（G4 已逐字节验证）。
+5. **删除的块既无 `blobs` 行也无文件**：`DeleteBlob` 同时删文件与行，`comment_tombstone` 只增不改事件行 ⇒ 重删仍 200（事件行尚在，`payload_cid` 非空即通过校验）。
+
+**不做**：不改 `schema_version` / 内容包规范 v1；不新增适配器接口；不动 `internal/**`；不重建仓根陈旧 `based.exe`；不引入审核面 UI / 限速（Go 侧审核路由无限速层）。

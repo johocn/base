@@ -85,6 +85,8 @@ export async function main(): Promise<void> {
         dataDir,
         issuer: process.env.BASE_ISSUER || "base-node-1",
         signKeyHex: process.env.BASE_SIGN_KEY ?? "",
+        // 对齐 serve.go:93：未配置（空串）即不注册审核路由。
+        reviewKey: process.env.BASE_REVIEW_KEY ?? "",
       };
 
       const db = openBootstrapDb(dbPath);
