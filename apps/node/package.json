@@ -6,6 +6,8 @@
   "main": "./src/main.ts",
   "types": "./src/main.ts",
   "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/based-node.mjs --external:node-sqlite3-wasm",
+    "start": "node dist/based-node.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -16,6 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.10",
+    "esbuild": "^0.20.2",
     "typescript": "^5.9.0",
     "vitest": "^5.0.1"
   }
