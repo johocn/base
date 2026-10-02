@@ -2,8 +2,8 @@
 
 - 日期：2026-10-02
 - 上游：路线计划 `#70`（§1 P3 行、§5 节点职能清单、§6 P5 等价判据）；首批计划 `#73`（§8 不做「P3 余下批次」、§9.2 执行期发现）；接口边界冻结面 `#72`
-- 状态：**批 A 已收口、批 B1–B4 已收口、批 C 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8、B3 实况见 §10.9、B4 实况见 §10.10；批 C 全量见 §11；批 D–E 未开工）
-- 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）、**批 B**（§10，切 B1–B4）与**批 C**（§11 收口）；批 D–E 只登记边界（§8）
+- 状态：**批 A 已收口、批 B1–B4 已收口、批 C 已收口、批 D 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8、B3 实况见 §10.9、B4 实况见 §10.10；批 C 全量见 §11；批 D 全量见 §12；批 E 未开工）
+- 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）、**批 B**（§10，切 B1–B4）、**批 C**（§11 收口）与**批 D**（§12 收口）；批 E 只登记边界（§8）
 - 性质：任务级计划。契约一律回册子，本册不承载契约。
 
 ## 0. 本批为什么这么切
@@ -26,7 +26,7 @@
 | **A** | **纯匿名公开读 JSON 面 12 条 + 门户页 3 个** | **判据 2**（字节级） | **已收口**（§9） |
 | B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **B1–B4 已收口**（§10，实况 §10.7 / §10.8 / §10.9 / §10.10） |
 | C | 治理派生面：`proposal` POST / `proposal/{id}/vote` / `proposal` GET | 判据 5（含 `#65` 小节点豁免） | **已收口**（§11） |
-| D | 对端同步·反熵：`inventory` / `sync` / `fetch` / `scrub` / `event-sync` + CLI `peer-sync` / `scrub` | 判据 4（结果集一致 + 只增不减） | 未开工 |
+| D | 对端同步·反熵：`inventory` / `sync` / `fetch` / `scrub` / `event-sync` + CLI `peer-sync` / `scrub` | 判据 4（结果集一致 + 只增不减） | **已收口**（§12） |
 | E | `importer` 容器 / 题库 / 视频派生 + CLI `import-video` | 判据 6（pack_id 与 merkle_root 同一） | 未开工 |
 
 判据 1（黄金向量）已由 P1 / `#73` 覆盖，无需再切批。
@@ -141,7 +141,7 @@
 - **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。**已切 4 子批 B1–B4，详列见 §10**（`govern.v1` 分支已定随 event 一起做，不留批 C；B1–B4 已收口）。
 - **批 C**：`govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`；验收 = 判据 5。**已收口**（全量见 §11）——侦察后确认 `govern_event.go` 的 `govern.v1` 事件路径**已在 B2 收口**，故批 C 实做为 `govern.go` 的三条**签名**路由（`POST /v1/proposal` / `POST /v1/proposal/{proposal_id}/vote` / `GET /v1/proposal`）及其 store 依赖。**残余缺口**：Node 侧缺 Go `store.Open` 的 `seedDirectoryFromExisting` 开库引导（见 §11.4 发现 1）。
 - **开库引导等价（新增边界，待认领）**：Go `internal/store/store.go:155-168` 的 `Open` = `schemaStatements` → `migrate` → `seedDirectoryFromExisting`（`internal/store/directory.go:294-442`：把存量 `items WHERE item_id LIKE 'tag/%'`、`source='category'`、`segments seq<0` 的 `attr.category` / `attr.instructor` 登记为 `directory_terms` 的 `approved` 词条，仅当确有存量词条时 `bumpDirectoryVersion` 一次并写 `meta.directory_seeded=1`；失败只打 stderr 不阻断 Open）。Node 侧现状：`openStore`（`apps/node/src/store/store.ts:244-267`）只跑 `migrate`、**不含 seed**；`main.ts:48` 的 `serve` 用裸 `openDb`（连 `migrate` 都无）。**验收 = 开库后 DB 快照与 Go 逐字节一致**（即批 C G4 阶段 4 的 4 行对称差归零，见 §11.3）。
-- **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。
+- **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。**已收口**（全量见 §12）——5 条对端路由全部落在 `routes/peer.ts`；出站侧拆为 `store/syncstore.ts`（`SyncStore` 端口）+ `store/packimport.ts` + `peersync/*`；对端监听由 `serve.ts` 的 `startPeerServer` 承载（公开路由 ∪ 内部路由，对齐 Go `PeerHandler()`）。**残余缺口**：Node 缺 Go `store.Open` 的 `seedDirectoryFromExisting` 开库引导（§12.3 的 3 行对称差，同下条边界项）。
 - **批 E**：`internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = 判据 6。
 
 ## 9. 执行实况
@@ -531,3 +531,88 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 7. **`opt()` 指针三态为 additive 扩展（非缺口）**：`decode.ts` 原无「键缺失 / `null` / 有值」三态语义 ⇒ 新增 Symbol 标记 `OPT_SPEC` + `opt()`，`defaultOf` 与 `decodeField` 顶部各加一分支；既有 spec 行为不变（G3 356 用例全绿自证）。
 8. **5 条故意差异（复核结论，非缺口）**：C2 报告列出并逐条复核——① `auth_body_read_failed` 分支不可达（Node 体已在内存）；② `EncodeTagLinks` 的 error 分支不可达（无 IO 写）；③ store 包装文案（`store: 读提案 N: no rows` 等）逐字对齐 Go 的错误路径包装；④ IP 桶退化单键（见发现 5）；⑤ `Date.now()` 墙钟（对拍归一化口径处理）。
 9. **`handleVotePost` 体空判走 `trimGoSpace`（口径定死，非缺口）**：Go `strings.TrimSpace` 与 JS `.trim()` 的空白集不同（Go `unicode.IsSpace` 含 U+0085 不含 U+FEFF；JS 反之）⇒ 空体判定必须用 `trimGoSpace`；本批 `proposalVoteHandler` 照此，非空体再走 `parseJSONDocument`（全值语义，拒尾随）判定 `bad_json`。
+
+## 12. 批 D：对端同步·反熵（判据 4）
+
+**状态：批 D 已收口**（批 E 未开工）。
+
+**范围**：§8 登记的批 D = `internal/httpapi/peer.go`（334 行，5 条对端路由）+ `internal/peersync`（`peer.go` 122 / `remote.go` 339 / `packimport.go` 359 / `eventsync.go` 436 / `sync.go` 235 / `scrub.go` 165）+ CLI `peer-sync` / `scrub`。Node 落点：
+
+| # | 路由 | Go 落点 | Node 落点 |
+|---|---|---|---|
+| 1 | `GET /v1/inventory` | `peer.go:34-85` | `routes/peer.ts` `inventoryHandler` |
+| 2 | `POST /v1/sync` | `peer.go:87-111` | `routes/peer.ts` `syncHandler` |
+| 3 | `POST /v1/fetch` | `peer.go:114-240` | `routes/peer.ts` `fetchHandler` |
+| 4 | `POST /v1/event-sync` | `peer.go:243-312` | `routes/peer.ts` `eventSyncHandler` |
+| 5 | `POST /v1/scrub` | `peer.go:316-334` | `routes/peer.ts` `scrubHandler` |
+
+**切法（5 个 Task，逐 Task 两阶段审查）**：D1（读面 store 层：`store/peersync.ts` 块 / 副本 / 事件游标 / `verifyBlobs`）→ D2（入站五路由 `routes/peer.ts` + 对端监听装配 + `requireNodeKey`）→ D3（出站：`peersync/{peer,remote,packimport}.ts` + `store/{packimport,syncstore}.ts`）→ D4（`peersync/{eventsync,sync,scrub}.ts` 的 `syncEvents` / `RunOnce` / `RunForever` / `ScrubOnce` / `ScrubForever`）→ D5（CLI `{peerconfig,peer-sync,scrub}.ts` + `serve.ts` 对端监听 + `main.ts` 对端/调度装配）。
+
+**产出（13 个新代码文件 + 14 个新测试文件 + 3 处改动 + 2 文档）**：
+
+- `store/peersync.ts`（**新增 407 行**）+ `store/peersync.test.ts`（402 行）：逐行对齐 `internal/store` 的块 / 副本 / 事件游标 / 校验读面（`listAllBlobIDs` / `upsertBlobReplica` / `countBlobsWithoutReplica` / `replicaPeers` / `hasBlob` / `deleteBlob` / `verifyBlobs` / `listRevokedPayloads` / `eventsAfter` 等）。
+- `store/packimport.ts`（**新增 379 行**）+ 测试（264 行）：对齐 `internal/store/packimport.go`（229 行）的 `importPack`（**落库唯一实现**）。
+- `store/syncstore.ts`（**新增 314 行**）+ 测试（149 行）：`SyncStore` 端口 = Go `store.Store` 在出站侧所需子集（`contentVersion` / `mediaChunkIndex` / `eventBlobIndex` / `putBlob` / `isRevokedPayload` …）；`openSyncStore(data, {storeKeyHex})` 对齐 `store.Open` + `WithStoreKey`。
+- `peersync/peer.ts`（228 行）+ 测试（95 行）：`Config` / `Peer` / `REQUEST_TIMEOUT_MS` / `parseIssuerPubKeys`（对齐 `peersync/peer.go` 122 行）。
+- `peersync/remote.ts`（372 行）+ 测试（228 行）：`postSync` / `fetchInventory` / `fetchBlobs` / `fetchCatalog` / `fetchManifest` / `fetchPackTo`（对齐 `remote.go` 339 行；出站 HTTP + 双向 TLS + 指纹固定 + 块帧读写）。
+- `peersync/packimport.ts`（**新增 402 行**）+ 测试（451 行）：对齐 `internal/peersync/packimport.go`（359 行）的包级复制（目录水位 → 验签 → pack meta → 行级 → 才落库）；**复用** `store/packimport.ts` 的 `PackEntry` / `ImportResult`，不造第二份。
+- `peersync/sync.ts`（270 行）+ 测试（256 行）：`RoundResult` / `ownershipIndex` / `syncPeer` / `runOnce` / `runForever`（对齐 `sync.go` 235 行）。
+- `peersync/eventsync.ts`（624 行）+ 测试（436 行）：对齐 `eventsync.go` 436 行的事件 / 墓碑同步。
+- `peersync/scrub.ts`（191 行）+ 测试（164 行）：`scrubOnce` / `scrubForever`（对齐 `scrub.go` 165 行；含反熵护栏 3「墓碑块直接删本地副本」）。
+- `routes/peer.ts`（**新增 481 行**）+ `routes/peer.test.ts`（504 行）+ `routes/nodekey.test.ts`（40 行）：五 handler + `mountPeerRoutes(adapter, deps)` + 手写 JSON 扫描器（`skipWs` / `scanString` / `scanComposite` / `firstJSONValue`，复刻 Go `json.Decoder` 的裸字段语义）。
+- `cli/peerconfig.ts`（**新增 298 行**）+ 测试（153 行）：10 个 flag（默认值取同名 env）+ `peersFromRaw` + `certPaths` / `tlsInfo` + `openStore` + `config` + `parseGoDuration`（`time.ParseDuration` 等价，错误文案逐字）+ `logf`（`log.Printf` 默认格式化）。
+- `cli/peer-sync.ts`（47 行）+ 测试（30 行）、`cli/scrub.ts`（44 行）+ 测试（59 行）：对齐 `cmd/based/peersync.go`（44 行）与 `cmd/based/scrub.go`（48 行）。
+- `routes/authmw.ts`（+21 −2）：新增 `requireNodeKey(tls, key)`（对齐 `tlscfg.go:202-212`）。
+- `serve.ts`（+51 −）：`startServer` 拆出 `mountPublicRoutes`（**签名/行为不变**）+ 新增 `startPeerServer`（包整张 mux 对齐 Go `PeerHandler()` = 公开路由 ∪ 内部路由）。
+- `main.ts`（+112）：`serve` 追加对端监听 + 反熵 / scrub 调度装配（`-peer-addr` / `-peers` / `-node-key` / TLS / `fetch-max-blobs` / 两间隔），并注册 `peer-sync` / `scrub` 两个子命令（共 9 条）。
+
+### 12.1 门禁 G1–G6（逐条通过）
+
+| 门 | 结果 | 证据 |
+|---|---|---|
+| G1 | 通过 | `go build ./...` / `go vet ./...` / `go test ./...` 全绿（本批不动 Go，作基线回归） |
+| G2 | 通过 | `apps/node` `npx tsc --noEmit` **exit 0** |
+| G3 | 通过 | `apps/node` `npx vitest run`：**44 文件 / 492 用例全绿**（批 C 收口时 30/356 ⇒ 批 D 净增 **14 文件 / 136 用例**） |
+| G4 | 通过 | **HTTP 逐条 0 分歧**（P 组 **43 token**，见 §12.2）；阶段 4 DB 快照**对称差 3 行**（全为 go 侧多出，根因属开库引导，见 §12.3 / §12.4 发现 1）；**判据 4「只增不减」成立**（见 §12.2） |
+| G5 | 通过 | `git diff --stat -- internal/` **无输出**（`git status` 对 `internal/httpapi/web.go` 的 ` M` 为陈旧 stat 项，定向 `git diff` 为空）；`packages/protocol-ts/**` / `web/**` / `#72` 冻结的 `ServerRequest` / `ServerAdapters` 未动 |
+| G6 | 通过 | 只 `add` 本批 13 个新代码文件 + 14 个新测试文件 + 3 处改动 + 2 个文档；`.gitignore` / `internal/httpapi/web.go` / `based-linux-amd64` / `.tmp/`（含 G4 取证件）均未入暂存 |
+
+### 12.2 G4 字节级对拍实况（批 D）
+
+**方法**（沿用 §11.2，取件根 `e:\code\base\.tmp\g4\`，**未入提交**）：Node `openDb` + `migrate()` 建全量 schema → 插种子（7 个有效块 + 1 个 missing 块 `4444…` + 1 个 hash_mismatch 块 `7777…` + 事件 / 墓碑 / `tag/x` 存量词条 + store 密钥文件）→ **复制两份**（`pgo/` / `pnode/`）→ Go `store.Open(pgo)` **先于** Node 回放 → 两侧同一份 `ptokens.json`（43 token）逐字节回放 → 比对 `status` + 4 对照头（`content-type` / `cache-control` / `x-content-type-options` / `access-control-allow-origin`）+ body 字节（**不比 `Content-Length`**）。
+
+**取证件与命令**：`pbuild.probe.ts`（造种子 + `cpSync` 两份 + 出 43 token）→ `pgoprobe/main.go`（Go 侧走 **`(*httpapi.Server).PeerHandler()`** 进程内直分发——对端 5 路由注册在 `PeerHandler()`（`server.go:93`）而**非** `Handler()`）→ `pnode.probe.ts`（Node 侧走**真 `http.createServer` + `127.0.0.1` 回环**）→ `pcompare.mjs`。
+
+**结果：P 组 43 token，HTTP 逐条 0 分歧**（status / 4 头 / body 全一致，**无需 body 归一化**——五路由响应不含墙钟字段）。覆盖：
+
+- **`inventory`（P01–P10，10 条）**：默认 / `limit=1` / 真实 cursor 翻页 / `limit=0`（回落默认 500）/ `limit=5000`（>2000 回落）/ `limit=abc`（回落）/ `since=content_version` 与 `+1`（空 blobs + `merkle_root`）/ `since=0` / `since=abc`。
+- **`sync`（P11–P17，7 条）**：`equal=true` / 不等 / `{` 400 / 空体 400 / 数组 400 / `null` 200 / `content_version` 为字符串 400。
+- **`fetch`（P18–P28，11 条）**：1 块 / 2 块 / 空 400 / 65 块 413 / 非 32-hex 400 / 不存在块 200（0 帧）/ 已墓碑块 200 / `{` 400 / 重复块 / 数组含 `null` 400 / 有行无文件 200。
+- **`scrub`（P29–P33，5 条）**：**顺序为「子集先、全量后」**（单块 valid / missing / hash_mismatch → 再全量）→ 全量 200 / `{` 400。
+- **`event-sync`（P34–P43，10 条）**：事件增量 / `limit=1` / 复合游标翻页 / 非枚举 kind 400 / `{` 400 / 墓碑 / 墓碑 `limit=1` / `limit=5000` / `limit=0`（回落）/ `null` 400。
+
+**判据 4「只增不减」核验（Node 回放前后快照）**：
+
+- 受跟踪表（`blobs|` / `events|`）**新增行数 0**（五路由中 inventory / sync / fetch / event-sync 只读，仅 scrub 会删坏块）。
+- **删除行数 2**：`blobs|4444…4444|5|article/missing|0|<ts>`（missing）与 `blobs|7777…7777|28|article/bad|0|<ts>`（hash_mismatch）——恰为 P31 / P32 请求体指定的坏块，属**设计内**（`peer.go:316-334` → `store.VerifyBlobs`）；**events 删除 0 行**，其余行只增不减 ⇒ 断言成立。
+- **水位不回退**：`inventory` 各次 `content_version` 恒为 7（种子水位）非递减；全量列举的各次响应块集合一致。
+- 说明：服务端 `handleScrub` 的 `Repaired` **恒为 0**（跨节点补齐必须走出站请求，`httpapi` 包不依赖 `peersync`）——本批两侧同口径。
+
+### 12.3 阶段 4 DB 状态对拍（批 D）
+
+固定列序、主键升序、`|` 连接 ⇒ **集合对称差 3 行**（go 侧 27 行 / node 侧 24 行；按行集合比对，行序不计）。
+
+**仅 go 侧有 3 行**：`directory_terms|tag|x|x|approved||<ts>|<ts>`、`meta|directory_seeded|1`、`meta|directory_version|1`。
+**仅 node 侧有 0 行**。
+
+**根因**：同 §11.3——Go `store.Open` 在 `migrate` 后调 `seedDirectoryFromExisting`，把存量 `tag/x` 登记为 `approved` 词条并 `bumpDirectoryVersion` 一次、写 `meta.directory_seeded=1`；Node 侧无等价实现。属**开库引导层**（§8「开库引导等价」边界项），**不属批 D 五路由范围**。批 C 实测 4 行对称差（含 node 侧 `directory_version|3`）本批降为 3 行，差异源于两侧种子不同（本批为纯 `tag/x` 单存量词条、无 proposal 路径），非行为变化。
+
+### 12.4 执行期发现（登记）
+
+1. **Node 缺 Go `store.Open` 的目录 seed 引导（残余缺口，沿用 §11.4 发现 1）**：覆盖 §12.3 的 3 行对称差；本批不动 `openStore` / `main.ts` 这条已收口基线共用的路径。
+2. **对端路由的挂载面是 `PeerHandler()` 而非 `Handler()`（非缺口，口径定死）**：Go 5 条对端路由注册在 `(*httpapi.Server).PeerHandler()`（`server.go:93` = 公开路由 ∪ 内部路由），`Handler()` 只含公开路由 ⇒ 取证件必须走 `PeerHandler()` 才能覆盖；Node 侧 `startPeerServer` 用 `wrapAdapter` 把 `requireNodeKey` 套到**该 adapter 上注册的每个 handler**，与 Go 用 `RequireNodeKey` 包整张 `PeerHandler()` mux 等价；`-node-key` 为空时不包装（两侧同）。
+3. **`requireNodeKey` 与 TLS 指纹是两层（非缺口）**：`X-Base-Node-Key` 预共享密钥（契约 6.3）与双向 TLS 指纹固定各自独立；Node 侧新增 `routes/nodekey.test.ts`（命中放行 / 缺头 / 不等长 / 等长不等值 → 401 `node_key_mismatch`）。
+4. **取证件两侧都绕过真实 TLS 握手（口径定死，非缺口）**：Go 侧 `PeerHandler()` 进程内直分发（`httptest.NewRecorder()`），Node 侧真 `127.0.0.1` 回环但不做双向 TLS ⇒ G4 只自证**路由行为**等价，**不覆盖** TLS 握手 / 指纹固定层（该层由 `host/tls.ts` 与 `tlscfg.go` 的对齐单独负责）。
+5. **`packimport` 两处各有其源（非重复实现）**：`store/packimport.ts` ← `internal/store/packimport.go`（229 行，`importPack` 落库唯一实现）；`peersync/packimport.ts` ← `internal/peersync/packimport.go`（359 行，包级复制编排）并**复用**前者的 `PackEntry` / `ImportResult`，不造第二份口径。
+6. **出站/CLI 的有意差异（记录于各文件头，非缺口）**：① `logf` 由 Go `func(string, ...any)` 改为 `(msg: string) => void`（调用方预格式化）；② `context.WithTimeout` / `time.NewTicker` / `time.NewTimer` 改为 `AbortController` + `setTimeout` + 「可被 AbortSignal 打断的 sleep」；③ 首轮 jitter `rand.Int63n(60s)` 改为 `Math.floor(Math.random() * 60_000)`；④ `time.Duration.Round(time.Millisecond).String()` 自实现为 `formatGoDuration`（`5m` → `5m0s`、`24h` → `24h0m0s`）；⑤ `parseGoDuration` 返回**毫秒**（number）而非纳秒 `Duration`（本工程只用于调度间隔）；⑥ CLI 的 `TlsAdapter` 由命令文件内部构造（Go 是包级 `LoadOrCreateTLSCert`）；⑦ `openStore` 用 `openSyncStore` 而非 `store.Open`（Node 侧 host 库与出站端口已拆分）；⑧ `fmt.Printf` → `console.log`、`ctx.Err()` → `ctx.aborted`。
+7. **`config()` 的 `-fetch-max-blobs` 整型解析（本批对齐）**：Node flag 表只给字符串，故在 `config()` 内补 `atoi`，错误文案对齐 Go flag 包 `invalid value "<v>" for flag -fetch-max-blobs: parse error`。边界微差（Go `flag` 的 `strconv.ParseInt(s,0,…)` 接受 `0x`/下划线、`envIntOr` 的 `Atoi` 为十进制 64 位；Node 侧统一按十进制且以 `Number.isSafeInteger` 为界）在调度间隔 / 对端清单的可达域外，**登记不改**。

@@ -1,4 +1,10 @@
-import type { Listener, ServerAdapters, TlsConfig } from "@base/core-ts";
+import type {
+  HttpServerAdapter,
+  Listener,
+  ServerAdapters,
+  ServerHandler,
+  TlsConfig,
+} from "@base/core-ts";
 import { keyPairFromSeed } from "@base/protocol-ts";
 import type { Db } from "./db";
 import { loadStoreKey } from "./host/storekey";
@@ -20,7 +26,8 @@ import {
   identityGetHandler,
   identityRegisterHandler,
 } from "./routes/identity";
-import { optionalAuth, requireAuth, requireAuthLimit } from "./routes/authmw";
+import { optionalAuth, requireAuth, requireAuthLimit, requireNodeKey } from "./routes/authmw";
+import { mountPeerRoutes, type PeerDeps } from "./routes/peer";
 import { meHandler } from "./routes/me";
 import { profilePutHandler } from "./routes/profile";
 import {
@@ -74,6 +81,14 @@ export async function startServer(
   db: Db,
   opts: ServerOptions,
 ): Promise<Listener> {
+  mountPublicRoutes(adapters, db, opts);
+  const listener = await adapters.http.listen(opts);
+  adapters.lifecycle.onShutdown(() => listener.close());
+  return listener;
+}
+
+/** 客户端监听的全部公开路由（对齐 Go `srv.Handler()`）。 */
+export function mountPublicRoutes(adapters: ServerAdapters, db: Db, opts: ServerOptions): void {
   const signKeyHex = opts.signKeyHex ?? "";
   const pubHex = signKeyHex === "" ? "" : keyPairFromSeed(signKeyHex).pubHex;
   const dataDir = opts.dataDir;
@@ -181,8 +196,38 @@ export async function startServer(
   adapters.http.handle("GET /", indexPageHandler(portalDeps));
   adapters.http.handle("GET /a/{item_id...}", articlePageHandler(portalDeps));
   adapters.http.handle("GET /governance", governancePageHandler(portalDeps));
+}
 
-  const listener = await adapters.http.listen(opts);
+/** 薄代理：把注册到该 adapter 的**每个** handler 都过一遍 `wrap`（对齐 Go 包整张 mux）。 */
+function wrapAdapter(
+  adapter: HttpServerAdapter,
+  wrap: (h: ServerHandler) => ServerHandler,
+): HttpServerAdapter {
+  return {
+    handle: (pattern, handler) => adapter.handle(pattern, wrap(handler)),
+    listen: (o) => adapter.listen(o),
+  };
+}
+
+/**
+ * 对端监听（对齐 serve.go:104-131）：公开路由 ∪ 内部路由；nodeKey 非空白时整张 mux 叠加
+ * RequireNodeKey（公开路由也要过 key）。
+ */
+export async function startPeerServer(
+  adapters: ServerAdapters,
+  db: Db,
+  opts: ServerOptions,
+  peerDeps: PeerDeps,
+  nodeKey: string,
+): Promise<Listener> {
+  const wrap =
+    nodeKey.trim() === ""
+      ? (h: ServerHandler): ServerHandler => h
+      : requireNodeKey(adapters.tls, nodeKey);
+  const proxy = wrapAdapter(adapters.http, wrap);
+  mountPublicRoutes({ ...adapters, http: proxy }, db, opts);
+  mountPeerRoutes(proxy, peerDeps);
+  const listener = await proxy.listen(opts);
   adapters.lifecycle.onShutdown(() => listener.close());
   return listener;
 }

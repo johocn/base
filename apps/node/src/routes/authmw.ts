@@ -1,7 +1,7 @@
 // 逐行对齐 internal/httpapi/authmw.go 的认证地基：
 // authErrText 全表（:20-79）/ writeAuthErr（:83-89）/ hasAnyAuthHeader（:131-138）/
 // authenticate 七步（:144-236）/ requireAuth（:97-99）/ requireAuthLimit（:102-112）/ optionalAuth（:116-128）。
-import type { ServerHandler, ServerRequest, ServerResponse } from "@base/core-ts";
+import type { ServerHandler, ServerRequest, ServerResponse, TlsAdapter } from "@base/core-ts";
 import {
   ALG_ED25519,
   isIdentityId,
@@ -280,4 +280,23 @@ export function optionalAuth(deps: AuthDeps, next: AuthedHandler): ServerHandler
     if (!res.ok) return res.resp;
     return next(req, res.id);
   };
+}
+
+/**
+ * requireNodeKey（tlscfg.go:202-212）：校验节点间预共享密钥头（契约 6.3：与 TLS 指纹是两层）。
+ * 返回一个「包装器」：把任意 handler 包成先验 `X-Base-Node-Key` 再放行的 handler。
+ * 长度不等或值不等 → 401 node_key_mismatch。
+ */
+export function requireNodeKey(
+  tls: TlsAdapter,
+  key: string,
+): (next: ServerHandler) => ServerHandler {
+  return (next: ServerHandler): ServerHandler =>
+    async (req: ServerRequest): Promise<ServerResponse> => {
+      const got = req.headers["x-base-node-key"] ?? "";
+      if (!tls.nodeKeyMatches(key, got)) {
+        return writeAuthErr(401, "node_key_mismatch");
+      }
+      return next(req);
+    };
 }
