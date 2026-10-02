@@ -111,7 +111,7 @@
 ## 5. P3 节点职能清单（来自取证）
 
 - **HTTP 接口**：约 40 条（`internal/httpapi/server.go:102-164`），分五组——公开读（`catalog`/`manifest`/`pack`/`blob`/`release`/`directory`/`contributors`/`comment`/`inventory`）、身份与认证写（`identity/*`、`me`、`event`、`profile`、`submit`、`blob`）、治理（`proposal*`）、对端同步（`sync`/`fetch`/`scrub`/`event-sync`）、节点的门户页（`/`、`/a/*`、`/governance`）与运维（`healthz`、`admin/review/*`）。
-- **CLI**：`serve` / `import` / `importvideo` / `export` / `release` / `scrub` / `peersync` / `tlscert` / `storekey` / `pubkey`（`cmd/based/`）。
+- **CLI**：Go 侧 **11 条**——`version` / `import-md` / `import-video` / `export` / `release` / `serve` / `pubkey` / `store-key` / `tls-cert` / `peer-sync` / `scrub`（`cmd/based/main.go:16-42`）。Node 侧截至 P3 首批为 **8 条**，缺 `import-video` / `peer-sync` / `scrub`（属本阶段余下批次）；`usage` 串与无命令 / 未知命令的退出码（`2`）两侧一致，**未知 flag 退出码 Node=1 vs Go=2** 属已知偏差（登记见设计册 #74 附录 A）。
 - **门户**：`web/` 模板（`html/template` + 少量原生 JS，内嵌）。
 
 ## 6. P5 行为等价验收标准（**退役的唯一闸门**）
