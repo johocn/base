@@ -9,6 +9,11 @@ import { manifestHandler } from "./routes/manifest";
 import { packHandler } from "./routes/pack";
 import { blobGetHandler, blobHeadHandler } from "./routes/blob";
 import { releaseHandler } from "./routes/release";
+import { contributorsHandler } from "./routes/contributors";
+import { directoryHandler } from "./routes/directory";
+import { commentHandler } from "./routes/comment";
+import { dmHandler } from "./routes/dm";
+import { GOVERN_BURST_PER_IP, GOVERN_PER_MINUTE_PER_IP, IpLimiter } from "./routes/derived";
 
 /** 节点对外服务选项；后五项均为可选，保持既有 `startServer(adapters, db, {host, port})` 调用兼容。 */
 export interface ServerOptions {
@@ -32,6 +37,8 @@ export async function startServer(
   const dataDir = opts.dataDir;
   // blob 解密所需的 store 密钥：与 apps/node/src/store/store.ts 同源。
   const storeKey = dataDir === undefined || dataDir === "" ? null : loadStoreKey(dataDir, {}).key;
+  // 治理面 IP 令牌桶（对齐 httpapi/govern.go 的 governLimiterByIP 常量）。
+  const governLimiter = new IpLimiter(GOVERN_PER_MINUTE_PER_IP, GOVERN_BURST_PER_IP);
 
   adapters.http.handle("GET /healthz", healthzHandler);
   adapters.http.handle("GET /v1/catalog", catalogHandler(db));
@@ -42,6 +49,11 @@ export async function startServer(
   adapters.http.handle("HEAD /v1/blob/{blob_id}", blobHeadHandler(db, { dataDir }));
   adapters.http.handle("GET /v1/blob/{blob_id}", blobGetHandler({ dataDir, storeKey }));
   adapters.http.handle("GET /v1/release", releaseHandler({ dataDir }));
+  // 治理派生 + 社交公开读面（批 A2）。
+  adapters.http.handle("GET /v1/contributors", contributorsHandler({ db, storeKey }));
+  adapters.http.handle("GET /v1/directory", directoryHandler({ db, storeKey, limiter: governLimiter }));
+  adapters.http.handle("GET /v1/comment", commentHandler(db));
+  adapters.http.handle("GET /v1/dm/{peer_id}", dmHandler(db));
 
   const listener = await adapters.http.listen(opts);
   adapters.lifecycle.onShutdown(() => listener.close());
