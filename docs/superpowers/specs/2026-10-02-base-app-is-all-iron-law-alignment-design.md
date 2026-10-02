@@ -106,7 +106,7 @@ cmd/based                  Node CLI 入口（迁移期与 Go 版并行运行）
 
 | Go 包 / 资产 | 职责 | 分级 | TS 落点 | 现状 |
 |---|---|---|---|---|
-| `internal/protocol` | canonical / sha256 / Merkle / Ed25519 / 签名 / manifest / author / reqsig / release / blobpack | **纯算法** | `packages/protocol-ts` | **已有镜像**（缺 `DerivePackID` 等零散项） |
+| `internal/protocol` | canonical / sha256 / Merkle / Ed25519 / 签名 / manifest / author / reqsig / release / blobpack | **纯算法** | `packages/protocol-ts` | **大部分已有镜像**（含 `derivePackId`，见 `manifest.ts:54`）；**真缺口仅 `blobpack` 帧与 `ValidSlug`** —— 精确清单见 #70 §2 |
 | `internal/markdown` | 解析 → 消毒 → HTML | **纯算法** | `apps/mobile/src/core/markdown.ts` | **已有**（三端同构，共享 `vectors/v1/markdown.json`） |
 | `vectors/v1/*.json` | 14 组黄金向量 | **资产复用** | 同左 | 已符合；**单核后由「双侧消费」变「单侧消费 + Go 退役期继续消费」 |
 | `internal/store` | SQLite 访问层（items / segments / blobs / govern_* / directory_terms / progress …） | **需平台适配** | `core/repo.ts` + `LocalDb` 注入 | 手机端已有同构的 SQL 仓储 |
@@ -172,15 +172,19 @@ cmd/based                  Node CLI 入口（迁移期与 Go 版并行运行）
 
 ## 6. 分阶段路线
 
-| 阶段 | 内容 | 产物 |
+**路线已由计划册 #70 重排，以其为准**（`plans/2026-10-02-base-iron-law-migration-route-plan.md`）。重排要点：
+
+| 阶段 | 内容 | 服务铁律 |
 |---|---|---|
-| P0（本册） | 只改文档：铁律入总纲 §0.13、冲突清单、处置矩阵 | 本册 + 总纲修订 + README 登记 #69 |
-| P1 | 收敛协议核：补齐 `protocol-ts` 相对 `internal/protocol` 的零散缺口 | 单份协议核 + 向量续跑 |
-| P2 | 抽出 `packages/core-ts`：把 `apps/mobile/src/core` 的宿主无关部分上提，手机壳改为消费 | core 包 + 手机壳接线 |
-| P3 | Node 宿主壳：`NodeFs` / `NodeStorage` / `NodeHttp` / Node SQLite + CLI + 门户 | Node 壳可独立启节点 |
-| P4 | 迁移节点侧职能：`packexport` / `importer` / `httpapi` 路由 | Node 节点具备完整节点职能 |
-| P5 | 并行双跑比对 → 等价 → Go 节点只读 → 退役 | 单核单实现 |
-| P6 | 融合治理（铁律二）与内容自治作用域（铁律三） | 另开册子 |
+| P0（本册） | 只改文档：铁律入总纲 §0.13、冲突清单、处置矩阵 | — |
+| P1 核收敛 | 协议核补空 + 把 `apps/mobile/src/core` 中属协议核的模块**上提**（原 P1 / P2 合并） | ① |
+| P2 接口边界 + Node 壳最小可跑 | 锁定 `Adapters` 并**新增服务端侧抽象**；Node 壳能起服务 | ① |
+| P3 节点职能补齐 | 导入 / 导出 / 对端同步 / scrub / CLI / 门户 | ① |
+| P4 融合治理**【设计】** | 铁律②③的数据模型提案（**设计前移**，防 P3 / P5 返工） | ② ③ |
+| P5 并行双跑 → 退役 | 按 #70 §6 的六条判据判定等价，**不过不退役** | ① |
+| P6 融合治理**【实现】** | 铁律②③落地 | ② ③ |
+
+**次序硬约束**：P4 是设计轨（只出文档）、P6 是实现轨；**P5 不得在 P4 定稿前开工**。四处与原口径不同的修正（含一处事实更正：`DerivePackID` 并不缺）见 #70 §0。
 
 ## 7. 风险
 
