@@ -2,7 +2,7 @@
 
 - 日期：2026-10-02
 - 上游：路线计划 `#70`（§1 P3 行、§5 节点职能清单、§6 P5 等价判据）；首批计划 `#73`（§8 不做「P3 余下批次」、§9.2 执行期发现）；接口边界冻结面 `#72`
-- 状态：**批 A 已收口、批 B1–B2 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8；B3–B4 未开工；批 C–E 未开工）
+- 状态：**批 A 已收口、批 B1–B3 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8、B3 实况见 §10.9；B4 未开工；批 C–E 未开工）
 - 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）与**批 B**（§10，切 B1–B4）；批 C–E 只登记边界（§8）
 - 性质：任务级计划。契约一律回册子，本册不承载契约。
 
@@ -24,7 +24,7 @@
 | 批 | 范围 | 对应判据 | 状态 |
 |---|---|---|---|
 | **A** | **纯匿名公开读 JSON 面 12 条 + 门户页 3 个** | **判据 2**（字节级） | **已收口**（§9） |
-| B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **B1–B2 已收口**（§10，实况 §10.7 / §10.8）；B3–B4 未开工 |
+| B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **B1–B3 已收口**（§10，实况 §10.7 / §10.8 / §10.9）；B4 未开工 |
 | C | 治理派生面：`proposal` POST / `proposal/{id}/vote` / `proposal` GET | 判据 5（含 `#65` 小节点豁免） | 未开工 |
 | D | 对端同步·反熵：`inventory` / `sync` / `fetch` / `scrub` / `event-sync` + CLI `peer-sync` / `scrub` | 判据 4（结果集一致 + 只增不减） | 未开工 |
 | E | `importer` 容器 / 题库 / 视频派生 + CLI `import-video` | 判据 6（pack_id 与 merkle_root 同一） | 未开工 |
@@ -138,7 +138,7 @@
 
 ## 8. 后续批次边界（只登记，不展开）
 
-- **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。**已切 4 子批 B1–B4，详列见 §10**（`govern.v1` 分支已定随 event 一起做，不留批 C；B1–B2 已收口）。
+- **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。**已切 4 子批 B1–B4，详列见 §10**（`govern.v1` 分支已定随 event 一起做，不留批 C；B1–B3 已收口）。
 - **批 C**：`govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`；验收 = 判据 5。
 - **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。
 - **批 E**：`internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = 判据 6。
@@ -202,7 +202,7 @@
 
 ## 10. 批 B：认证读写面（判据 3）
 
-**状态：B1–B2 已收口（实况见 §10.7 / §10.8），B3–B4 未开工。**
+**状态：B1–B3 已收口（实况见 §10.7 / §10.8 / §10.9），B4 未开工。**
 
 **开工前决策（2026-10-02，用户拍板）**：
 
@@ -365,3 +365,50 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 4. **删除死代码 `encodeTagLinks`**：`store/governProjection.ts` 曾导出该函数，但 Node 侧尚无治理写面 `POST /v1/proposal`，**无任何调用方**（Go 侧同函数属后续批次）⇒ 本批删除，避免冗余。
 5. **`anyString` 数字分支的不可见发散**（`anyString` 取 `String(Math.trunc(v))`，Go 取 `strconv.FormatInt(int64(t),10)`）：仅在超出 int64 范围时两侧字符串不同，而下游 `parseProposalId` / `jsonInt` **同拒** ⇒ 无可见发散，不处置。
 6. **`decode.ts` 的 `NUM_FULL_RE` 假设已由 G4 证伪风险**：`created_at` 含 `.` / `e` 时 Go `json.Number.Int64()` 与 Node `parseGoInt64` **都先拒**（400 `event_param_invalid`），故该正则只影响**字符串形态** `created_at`；B 组 `created-at-float` / `created-at-string-space` 与 A 组 `created-at-as-string` 三向实测两侧一致，**§10.7 登记的第 5 条待决点至此关闭**（`EqualFold` 匹配仍待 B4 复核）。
+
+### 10.9 执行实况（B3）
+
+**状态：B3 已收口**（B4 未开工）。
+
+**产出（13 文件）**：
+- `routes/submit.ts`（402 行）：`handleSubmitPost` 五形态（`article` / `quiz` / `tag` / `course` / `lesson`）+ **严格判定顺序**（decode → `author_id_forbidden` → 形态分流 → `content_hash` 服务端重算 → `author_sig` 校验）+ 双维度限速按 Go 的 `||` 短路序（`item_rate_limited`）。
+- `routes/blob.ts` 扩 POST（`blob.go:17`）：`MultipartReader` 单块字段 `file`（只认 `file`）、8 MiB 上限；**QP 透明解码**逐行复刻 `mime/quotedprintable/reader.go:73-140`（含行窗 4096 与 4 处 RFC 偏离）；分片头解析复刻 `net/textproto/reader.go:523-608`（`maxHeaders=10000` + 空键名即 `ProtocolError`）。
+- `routes/decode.ts` 扩：`listOf` / `JsonNode` / `parseJSONDocument` / `jsonObjectField`。
+- `store/submission.ts`（262 行）：`UpsertSubmission` / `UpsertTagSubmission` / `UpsertSegmentSubmission` / `PutBlob` / `HasBlob` / `GetItem` 等写层。
+- `store/groupseats.ts`（167 行）：`groupBodyAction`（**键名大小写不敏感**，对齐 `json.Unmarshal` 到 `struct{Action string}`）+ 席位派生。
+- `store/governorset.ts`：`GovernorSet`（`member_ids_json` 逐元素解码，**`null` 元素为 no-op 落零值**，非 string 才整体报错）。
+- `store/events.ts` 扩 `hasCommentEvent`；`store/governProjection.ts` 改导出；`serve.ts` 装配 `POST /v1/blob`（`requireAuthLimit(8 MiB + 4 KiB)`）与 `POST /v1/submit`（`requireAuth` + 双桶限速）。
+- 测试：`submit.test.ts`（**46 用例**）、`blob.test.ts`（**24 用例**）+ 既有对拍用例。
+
+#### 10.9.1 门禁 G1–G6（逐条通过）
+
+| 门 | 结果 | 证据 |
+|---|---|---|
+| G1 | 通过 | `go build ./...` / `go vet ./...` / `go test ./...` 全绿（本批不动 Go，作基线回归） |
+| G2 | 通过 | `apps/node` `npx tsc --noEmit` **0 错误** |
+| G3 | 通过 | `apps/node` `npx vitest run`：**26 文件 / 268 用例全绿**（B2 收口时 25/207 ⇒ B3 净增 **1 文件 / 61 用例**） |
+| G4 | 通过 | **字节级对拍 0 分歧（B3 新增 59 条，见 §10.9.2）**；阶段 4 DB 快照 81 行逐字节相同 |
+| G5 | 通过 | `git diff --stat -- internal/` **无输出**；`packages/protocol-ts/**`、`#72` 冻结的 `Adapters` / `ServerAdapters` 未动 |
+| G6 | 通过 | 只 `add` 本批 11 个代码文件 + 2 个文档文件；`.gitignore` / `internal/httpapi/web.go` / `based-linux-amd64` / `.tmp/`（含 G4 取证件）均未入暂存 |
+
+#### 10.9.2 G4 字节级对拍实况（B3）
+
+**方法**（沿用 §10.8.2）：Node `openDb` + `migrate()` 建全量 schema → 插种子（身份 + 被标条目 + 圈与圈事件 + store 密钥文件）→ **复制两份**（`go/` / `node/`）→ 两侧同一份 `tokens.json` **逐字节回放** → 比对 `status` + 4 对照头（`content-type` / `cache-control` / `x-content-type-options` / `access-control-allow-origin`）+ body 字节（**不比 `Content-Length`**）。取证件在 `e:\code\.tmp\g4\`，**未入提交**。
+
+**结果：B3 新增 59 条，逐条 0 分歧。** 覆盖：
+- A 五形态直角 5 条：`article` / `quiz` / `tag` / `course` / `lesson` 各 1 条（真私钥签 `author_sig`、服务端重算 `content_hash`）。
+- B 拒绝矩阵 34 条：`author_id_forbidden` / 形态 `item_id` 非法 / segments 三区间铁律越界 / `tag_not_governor` / `tag_target_not_found` / `content_hash` 不符重算值 / `author_sig` 错 / 缺键 / 未知键 / 体超 64 KiB 等。
+- C blob multipart 16 条：正常单块 / 缺 `file` 字段 / 多块 / 边界截断 / 超 8 MiB / **QP 透明解码**（`=48=65…` 解码后算 `blob_id`）/ CTE 值大小写 + 软换行 `abc=\r\ndef` → `abcdef` / QP 体非法（单个 `=`）/ 空头键名 / 头数超限 等。**其中 1 条（H109）为任务书预期写反**——Go 依 issue 15486 **接受** EOF 前 `=` 软换行（`abc=` → 200），实测两侧一致 200，非移植差异（见执行期发现 7）。
+- G 限速 4 条：`submit` 同身份连发，**两侧切点一致**（`burst=3`）。
+
+**阶段 4 DB 状态对拍**：固定列序、主键升序、`|` 连接 ⇒ **81 行逐字节相同**（含 `items` / `articles` / `segments` / `quizzes` / `tag_links` / `blobs` / `events` 等；`received_at` / `updated_at` 等墙钟列同口径置 `<ts>`）。
+
+**执行期发现**（登记）：
+1. **审查报告 9 条偏差的裁定**：实际需修 **1 / 2 / 3 / 4 / 7** 五条——① multipart **QP 透明解码缺失**（`multipart.go:148-167`：`NextPart()` 时 CTE 为 `quoted-printable` 则删头并把 `bp.r` 换成 `quotedprintable.NewReader`）；② `groupBodyAction` 取键**大小写敏感**（应为不敏感）；③ `member_ids_json` 含 **`null` 元素整圈丢弃**（应为该元素落零值 `""`）；④ 空分片头键名未报错（`canonicalMIMEHeaderKey("")` 返回 `("", false)` ⇒ ProtocolError）；⑦ `maxHeaders` 未复刻（`multipart.go:355-367` godebug 未设时默认 **10000**）。均已修复并补单测。
+2. **偏差 9 为审查误判**：`packages/protocol-ts/src/ed25519.ts:25-34` 的 `verify` **已内建 `try { … } catch { return false; }`**，与 Go 的 `err != nil || !valid` 等价 ⇒ 无需修改。
+3. **RFC 2231 续参未移植（残余缺口，登记）**：`mime/mediatype.go:142-235` 的 `ParseMediaType` 支持 `foo*` / `foo*0` 续参拼接与百分号解码；Node 侧未实现。真实客户端（浏览器 `FormData` / `curl -F` / `fetch FormData`）不会产出续参形态，且实现需引入 `percentHexUnescape` 与跨段拼接，与「拒绝冗余与过度设计」冲突 ⇒ **登记而非实现**。若后续发现对端可产出续参，须补齐后重跑 C 组。
+4. **`maxMIMEHeaderSize = 10<<20` 分支在本路由不可达**：`multipart.go:348` 的 10 MiB 单头上限，因本路由 body 上限为 `8 MiB + 4 KiB < 10 MB` ⇒ 该分支永不触发，**不移植**；可达的是 `maxHeaders=10000`（已实现）。
+5. **`protocol-ts/src/tag.ts` 用 JS `trim()` 而 Go `strings.TrimSpace` 不去 U+FEFF**：**既有镜像问题，非本批引入**，登记待后续统一（本批 `submit` 的 tag 形态判定未受影响，已由 A 组 `tag` 直角覆盖）。
+6. **IP 维度限速在取证件中同口径退化**（沿用 §10.8 发现 2）：`ServerRequest` 无 `RemoteAddr` ⇒ Node 侧 `clientIP` 恒为单桶键；Go 侧取证件经进程内分发亦无 `RemoteAddr` ⇒ 两侧同退化，IP 桶等价性在**单桶口径**下自证（ID 维度由 G 组覆盖切点）。
+7. **G4 任务书预期写反（H109）**：Go `quotedprintable` 依 issue 15486 **接受** EOF 前 `=` 软换行，故 `abc=` → 200（非任务书文字预期的 400）；实测两侧一致 200，**非移植差异**。单测用**单个 `=`** 仍正确判 400（该分支要求 `cur.length > 0`），并把真正的 `invalid bytes after =` 落点改为 `abc=\r`（两侧同 400）。
+8. **`group.v1` 缺口仍归 B4**（沿用 §10.8 发现 1）：B4 收口前，判据 3 **不得**对 `group.v1` 宣称等价。

@@ -65,13 +65,13 @@ interface Proposal {
   revokedRev: number;
 }
 
-interface TagLink {
+export interface TagLink {
   tagId: string;
   targetId: string;
   kind: string;
 }
 
-interface Segment {
+export interface Segment {
   seq: number;
   kind: string;
   text: string;
@@ -320,7 +320,7 @@ function tagKindRank(kind: string): number {
 }
 
 /** MaterializeTagSegments（tag.go:47-66）：seq 从 1 起，按 (kind 固定序, target_id 升序) 去重。 */
-function materializeTagSegments(links: TagLink[]): Segment[] {
+export function materializeTagSegments(links: TagLink[]): Segment[] {
   const ordered = links.slice();
   ordered.sort((a, b) => {
     const ra = tagKindRank(a.kind);
@@ -339,7 +339,7 @@ function materializeTagSegments(links: TagLink[]): Segment[] {
 }
 
 /** SegmentsContentHash（segments.go:37-48）：按 seq 升序拼 "kind\ttext\n" 再 sha256 hex。 */
-function segmentsContentHash(segs: Segment[]): string {
+export function segmentsContentHash(segs: Segment[]): string {
   const ordered = segs.slice().sort((a, b) => a.seq - b.seq);
   let b = "";
   for (const s of ordered) b += s.kind + "\t" + s.text + "\n";
@@ -367,7 +367,7 @@ function decodeTagLinks(raw: string): TagLink[] | null {
 }
 
 /** replaceTagLinksTx（tag.go:71-92）：删旧 → 写新 tag_links → 重算物化 segments 行 → 条目级 hash。 */
-function replaceTagLinksTx(db: Db, tagId: string, links: TagLink[]): string {
+export function replaceTagLinksTx(db: Db, tagId: string, links: TagLink[]): string {
   db.execute(`DELETE FROM tag_links WHERE tag_id=?`, [tagId]);
   const segs = materializeTagSegments(links);
   for (const s of segs) {

@@ -1,10 +1,11 @@
 import http from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Listener, ServerAdapters } from "@base/core-ts";
+import type { Listener, ServerAdapters, ServerRequest, ServerResponse } from "@base/core-ts";
 import { blobId, seal } from "@base/protocol-ts";
+import { MAX_BLOB_BYTES, blobPostHandler } from "./blob";
 import { openDb, type Db } from "../db";
 import { createHttpServerAdapter } from "../host/http";
 import { createTlsAdapter } from "../host/tls";
@@ -180,5 +181,212 @@ describe("HEAD /v1/blob/{blob_id}", () => {
   it("有登记行但文件不存在 → 404", async () => {
     const res = await request(`${base}/v1/blob/${ROW_ONLY_ID}`, "HEAD");
     expect(res.status).toBe(404);
+  });
+});
+
+// POST /v1/blob 直接调用 handler（serve.ts 的路由装配由上层统一做）。
+// 本层只验 multipart 解析 + store.PutBlob，故不经 HTTP/签名中间件。
+const POST_STORE_KEY = parseStoreKey(KEY_HEX);
+const BAD_MULTIPART = `{"code":"bad_multipart","error":"请求必须是 multipart/form-data，且含字段 file"}\n`;
+
+function postReq(body: Uint8Array, contentType: string | undefined): ServerRequest {
+  const headers: Record<string, string> = {};
+  if (contentType !== undefined) headers["content-type"] = contentType;
+  return { method: "POST", path: "/v1/blob", params: {}, query: {}, headers, body };
+}
+
+function postHandler() {
+  return blobPostHandler({ db, dataDir: dir, storeKey: POST_STORE_KEY });
+}
+
+function multipartBody(
+  boundary: string,
+  parts: { name: string; filename?: string; extra?: string; data: Uint8Array }[],
+): Uint8Array {
+  const chunks: Buffer[] = [];
+  for (const p of parts) {
+    let cd = `form-data; name="${p.name}"`;
+    if (p.filename !== undefined) cd += `; filename="${p.filename}"`;
+    let head = `--${boundary}\r\nContent-Disposition: ${cd}\r\n`;
+    if (p.extra !== undefined) head += `${p.extra}\r\n`;
+    head += "\r\n";
+    chunks.push(Buffer.from(head, "utf8"));
+    chunks.push(Buffer.from(p.data));
+    chunks.push(Buffer.from("\r\n", "latin1"));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`, "latin1"));
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
+function bodyText(res: ServerResponse): string {
+  return Buffer.from(res.body ?? new Uint8Array(0)).toString("utf8");
+}
+
+describe("POST /v1/blob", () => {
+  it("合法单块（含 0x00/0xFF）→ 200，blob_id/size 正确，行存在，密文 = 明文+28", async () => {
+    const data = new Uint8Array([0x00, 0x01, 0xff, 0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x7f]);
+    const boundary = "----baseBoundary01";
+    const body = multipartBody(boundary, [{ name: "file", data }]);
+
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    const id = blobId(data);
+    expect(res.status).toBe(200);
+    expect(bodyText(res)).toBe(`{"blob_id":"${id}","size":${data.byteLength}}\n`);
+
+    const rows = db.select(`SELECT size,item_id,seq FROM blobs WHERE blob_id=?`, [id]);
+    expect(rows.length).toBe(1);
+    expect(Number(rows[0].size)).toBe(data.byteLength);
+    expect(rows[0].item_id).toBe("");
+    expect(Number(rows[0].seq)).toBe(0);
+    // 落盘是密文：nonce(12) + 明文 + tag(16)。
+    expect(statSync(blobPath(dir, id)).size).toBe(data.byteLength + 28);
+  });
+
+  it("同内容重复上传幂等 → 同一 blob_id、同一响应", async () => {
+    const data = new Uint8Array(Buffer.from("idempotent-bytes-1234567890"));
+    const boundary = "----baseBoundary02";
+    const body = multipartBody(boundary, [{ name: "file", data }]);
+    const ct = `multipart/form-data; boundary=${boundary}`;
+
+    const r1 = await postHandler()(postReq(body, ct), "");
+    const r2 = await postHandler()(postReq(body, ct), "");
+    const id = blobId(data);
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect(bodyText(r1)).toBe(`{"blob_id":"${id}","size":${data.byteLength}}\n`);
+    expect(bodyText(r2)).toBe(bodyText(r1));
+    expect(db.select(`SELECT 1 FROM blobs WHERE blob_id=?`, [id]).length).toBe(1);
+  });
+
+  it("字段名不是 file（name=\"other\"）→ 400 bad_multipart", async () => {
+    const boundary = "----baseBoundary03";
+    const body = multipartBody(boundary, [{ name: "other", data: new Uint8Array([1, 2, 3]) }]);
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    expect(res.status).toBe(400);
+    expect(bodyText(res)).toBe(BAD_MULTIPART);
+  });
+
+  it("file 分片为空（0 字节）→ 400 bad_multipart", async () => {
+    const boundary = "----baseBoundary04";
+    const body = multipartBody(boundary, [{ name: "file", data: new Uint8Array(0) }]);
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    expect(res.status).toBe(400);
+    expect(bodyText(res)).toBe(BAD_MULTIPART);
+  });
+
+  it("完全没有 file 分片 → 400 bad_multipart", async () => {
+    const boundary = "----baseBoundary05";
+    const body = multipartBody(boundary, [{ name: "a", data: new Uint8Array([1]) }]);
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    expect(res.status).toBe(400);
+    expect(bodyText(res)).toBe(BAD_MULTIPART);
+  });
+
+  it("完全不是 multipart（application/json）→ 400", async () => {
+    const body = new Uint8Array(Buffer.from(`{"hello":"world"}`, "utf8"));
+    const res = await postHandler()(postReq(body, "application/json"), "");
+    expect(res.status).toBe(400);
+    expect(bodyText(res)).toBe(BAD_MULTIPART);
+  });
+
+  it("缺 Content-Type → 400", async () => {
+    const res = await postHandler()(postReq(new Uint8Array([1, 2, 3]), undefined), "");
+    expect(res.status).toBe(400);
+    expect(bodyText(res)).toBe(BAD_MULTIPART);
+  });
+
+  it("缺 boundary 参数 → 400", async () => {
+    const boundary = "----baseBoundary07";
+    const body = multipartBody(boundary, [{ name: "file", data: new Uint8Array([9]) }]);
+    const res = await postHandler()(postReq(body, "multipart/form-data"), "");
+    expect(res.status).toBe(400);
+    expect(bodyText(res)).toBe(BAD_MULTIPART);
+  });
+
+  it("非 ASCII 文件名不影响结果 → 200", async () => {
+    const data = new Uint8Array([0xde, 0xad, 0xbe, 0xef, 0x00]);
+    const boundary = "----baseBoundary08";
+    const body = multipartBody(boundary, [{ name: "file", filename: "封面 ünïcode.png", data }]);
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    const id = blobId(data);
+    expect(res.status).toBe(200);
+    expect(bodyText(res)).toBe(`{"blob_id":"${id}","size":${data.byteLength}}\n`);
+  });
+
+  it("两个 file 分片只取第一个 → 200 且为第一块", async () => {
+    const first = new Uint8Array([10, 20, 30]);
+    const second = new Uint8Array([40, 50, 60, 70]);
+    const boundary = "----baseBoundary09";
+    const body = multipartBody(boundary, [
+      { name: "file", data: first },
+      { name: "file", data: second },
+    ]);
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    const id = blobId(first);
+    expect(res.status).toBe(200);
+    expect(bodyText(res)).toBe(`{"blob_id":"${id}","size":${first.byteLength}}\n`);
+    expect(statSync(blobPath(dir, id)).size).toBe(first.byteLength + 28);
+  });
+
+  it("超过 8 MiB → 413 blob_too_large", async () => {
+    const big = new Uint8Array(MAX_BLOB_BYTES + 1);
+    const boundary = "----baseBoundary10";
+    const body = multipartBody(boundary, [{ name: "file", data: big }]);
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    expect(res.status).toBe(413);
+    expect(bodyText(res)).toBe(`{"code":"blob_too_large","error":"上传块超过 8 MiB"}\n`);
+  });
+
+  it("CTE=quoted-printable → 分片体透明解码后再算 blob_id", async () => {
+    // `=48=65=6C=6C=6F=20=77=6F=72=6C=64=0A` → "Hello world\n"
+    const enc = new Uint8Array(Buffer.from("=48=65=6C=6C=6F=20=77=6F=72=6C=64=0A", "latin1"));
+    const decoded = new Uint8Array(Buffer.from("Hello world\n", "latin1"));
+    const boundary = "----baseBoundary11";
+    const body = multipartBody(boundary, [
+      { name: "file", extra: "Content-Transfer-Encoding: quoted-printable", data: enc },
+    ]);
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    const id = blobId(decoded);
+    expect(res.status).toBe(200);
+    expect(bodyText(res)).toBe(`{"blob_id":"${id}","size":${decoded.byteLength}}\n`);
+    expect(statSync(blobPath(dir, id)).size).toBe(decoded.byteLength + 28);
+  });
+
+  it("CTE 值大小写不敏感（Quoted-Printable）且软换行拼接", async () => {
+    // `abc=\r\ndef` → "abcdef"（软换行 '=' 后 CRLF 被吞）
+    const enc = new Uint8Array(Buffer.from("abc=\r\ndef", "latin1"));
+    const decoded = new Uint8Array(Buffer.from("abcdef", "latin1"));
+    const boundary = "----baseBoundary12";
+    const body = multipartBody(boundary, [
+      { name: "file", extra: "content-transfer-encoding: Quoted-Printable", data: enc },
+    ]);
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    const id = blobId(decoded);
+    expect(res.status).toBe(200);
+    expect(bodyText(res)).toBe(`{"blob_id":"${id}","size":${decoded.byteLength}}\n`);
+  });
+
+  it("CTE=quoted-printable 但分片体非法（孤立 '=' 结尾）→ 400 bad_multipart", async () => {
+    const boundary = "----baseBoundary13";
+    const body = multipartBody(boundary, [
+      {
+        name: "file",
+        extra: "Content-Transfer-Encoding: quoted-printable",
+        data: new Uint8Array(Buffer.from("=", "latin1")),
+      },
+    ]);
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    expect(res.status).toBe(400);
+    expect(bodyText(res)).toBe(BAD_MULTIPART);
+  });
+
+  it("头行以 ':' 开头（空键名）→ 400 bad_multipart", async () => {
+    const boundary = "----baseBoundary14";
+    const body = multipartBody(boundary, [
+      { name: "file", extra: ": novalue", data: new Uint8Array([1, 2, 3]) },
+    ]);
+    const res = await postHandler()(postReq(body, `multipart/form-data; boundary=${boundary}`), "");
+    expect(res.status).toBe(400);
+    expect(bodyText(res)).toBe(BAD_MULTIPART);
   });
 });

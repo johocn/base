@@ -82,6 +82,15 @@ export function isRevokedEvent(db: Db, eventId: string): boolean {
   return rows.length > 0;
 }
 
+/**
+ * HasCommentEvent（tag.go:186-190）：event_id 是否为本节点已收到的 comment.v1 事件。
+ * 硬过滤 type='comment.v1'：② 类（group.v1 / dm.v1）由此**天然被排除**（册子 §3.7 红线）。
+ */
+export function hasCommentEvent(db: Db, eventId: string): boolean {
+  const rows = db.select(`SELECT 1 FROM events WHERE type='comment.v1' AND event_id=?`, [eventId]);
+  return rows.length > 0;
+}
+
 export interface ProgressProjection {
   id: string;
   itemId: string;

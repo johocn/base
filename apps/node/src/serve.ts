@@ -7,7 +7,7 @@ import { catalogHandler } from "./routes/catalog";
 import { pubkeyHandler } from "./routes/pubkey";
 import { manifestHandler } from "./routes/manifest";
 import { packHandler } from "./routes/pack";
-import { blobGetHandler, blobHeadHandler } from "./routes/blob";
+import { blobGetHandler, blobHeadHandler, blobPostHandler, MAX_BLOB_BYTES } from "./routes/blob";
 import { releaseHandler } from "./routes/release";
 import { contributorsHandler } from "./routes/contributors";
 import { directoryHandler } from "./routes/directory";
@@ -19,9 +19,16 @@ import {
   identityGetHandler,
   identityRegisterHandler,
 } from "./routes/identity";
-import { requireAuth } from "./routes/authmw";
+import { requireAuth, requireAuthLimit } from "./routes/authmw";
 import { meHandler } from "./routes/me";
 import { profilePutHandler } from "./routes/profile";
+import {
+  SUBMIT_BURST_PER_ID,
+  SUBMIT_BURST_PER_IP,
+  SUBMIT_PER_MINUTE_PER_ID,
+  SUBMIT_PER_MINUTE_PER_IP,
+  submitPostHandler,
+} from "./routes/submit";
 import {
   EVENT_BURST_PER_ID,
   EVENT_BURST_PER_IP,
@@ -66,6 +73,9 @@ export async function startServer(
   // 事件写面限速（对齐 httpapi/event.go:59 的双维度判定）：身份维度与 IP 维度各一把**独立**桶。
   const eventLimiterByID = new IpLimiter(EVENT_PER_MINUTE_PER_ID, EVENT_BURST_PER_ID);
   const eventLimiterByIP = new IpLimiter(EVENT_PER_MINUTE_PER_IP, EVENT_BURST_PER_IP);
+  // 投稿写面限速（对齐 httpapi/submit.go:21-24）：同样两把**互相独立**的桶。
+  const submitLimiterByID = new IpLimiter(SUBMIT_PER_MINUTE_PER_ID, SUBMIT_BURST_PER_ID);
+  const submitLimiterByIP = new IpLimiter(SUBMIT_PER_MINUTE_PER_IP, SUBMIT_BURST_PER_IP);
 
   adapters.http.handle("GET /healthz", healthzHandler);
   adapters.http.handle("GET /v1/catalog", catalogHandler(db));
@@ -76,6 +86,24 @@ export async function startServer(
   adapters.http.handle("HEAD /v1/blob/{blob_id}", blobHeadHandler(db, { dataDir }));
   adapters.http.handle("GET /v1/blob/{blob_id}", blobGetHandler({ dataDir, storeKey }));
   adapters.http.handle("GET /v1/release", releaseHandler({ dataDir }));
+  // 块上传（批 B3a）：multipart 单块，体上限 = 8 MiB + 4 KiB（multipart 边界开销）。
+  adapters.http.handle(
+    "POST /v1/blob",
+    requireAuthLimit({ db }, MAX_BLOB_BYTES + (4 << 10), blobPostHandler({ db, dataDir, storeKey })),
+  );
+  // 投稿写面（批 B3b）：article / quiz / tag / course / lesson 五形态，双维度限速。
+  adapters.http.handle(
+    "POST /v1/submit",
+    requireAuth(
+      { db },
+      submitPostHandler({
+        db,
+        storeKey,
+        byID: submitLimiterByID,
+        byIP: submitLimiterByIP,
+      }),
+    ),
+  );
   // 治理派生 + 社交公开读面（批 A2）。
   adapters.http.handle("GET /v1/contributors", contributorsHandler({ db, storeKey }));
   adapters.http.handle("GET /v1/directory", directoryHandler({ db, storeKey, limiter: governLimiter }));

@@ -19,16 +19,38 @@ import { jsonResponse } from "./json";
  * - number：json.Number 字段，返回**原始字面量文本**（裸数字保留字面，字符串须过 JSON 数字文法）；
  * - rawText：json.RawMessage 字段，返回该值在请求体里的**原始字节切片**（不含两侧空白）。
  */
-export type StrictField = "string" | "int64" | "raw" | "number" | "rawText" | StrictSpec;
+export type StrictField = "string" | "int64" | "raw" | "number" | "rawText" | StrictSpec | StrictList;
 
 /** 对象形状：键 → 字段规格；嵌套对象即再给一层 StrictSpec。 */
 export interface StrictSpec {
   [field: string]: StrictField;
 }
 
+/**
+ * 数组字段规格（Go `[]T`）：由 `listOf(spec)` 构造，`spec` 是每个元素的形状。
+ * 用 Symbol 标记（不可枚举、不参与 `Object.keys`），避免与同名业务字段冲突。
+ */
+export interface StrictList {
+  readonly [LIST_SPEC]: StrictSpec;
+}
+
 export type StrictResult =
   | { ok: true; value: Record<string, unknown> }
   | { ok: false; resp: ServerResponse };
+
+/** 数组字段标记（唯一 symbol；不进对象键枚举）。 */
+const LIST_SPEC = Symbol("strict_list_spec");
+
+/** 构造一个「元素按 `spec` 解码」的数组字段规格。 */
+export function listOf(spec: StrictSpec): StrictList {
+  return { [LIST_SPEC]: spec };
+}
+
+/** 判定字段规格是否为 listOf 产出的数组规格。 */
+function isStrictList(spec: StrictField): spec is StrictList {
+  if (typeof spec !== "object" || spec === null) return false;
+  return (spec as unknown as Record<symbol, unknown>)[LIST_SPEC] !== undefined;
+}
 
 // —— 下面是一段极简 JSON 解析器：产出带「原始字面量」的节点树，以判定 int64 是否可解 ——
 // 用 JSON.parse 会把 `1e2` 归一成 100，无法区分，故必须保留数字的原始文本。
@@ -39,13 +61,14 @@ interface Parser {
   n: number;
 }
 
-type JNode =
+/** 解析后的 JSON 结点树；`obj` 的条目带该值在原文里的**原始切片**（供 json.RawMessage 用）。 */
+export type JsonNode =
   | { t: "null" }
   | { t: "bool"; v: boolean }
   | { t: "num"; raw: string }
   | { t: "str"; v: string }
-  | { t: "arr"; v: JNode[] }
-  | { t: "obj"; v: [string, JNode, string][] };
+  | { t: "arr"; v: JsonNode[] }
+  | { t: "obj"; v: [string, JsonNode, string][] };
 
 const ERR = Symbol("decode_err");
 const WS = new Set([" ", "\t", "\n", "\r"]);
@@ -86,7 +109,7 @@ function parseString(p: Parser): string | null {
   return null;
 }
 
-function parseValue(p: Parser): JNode | null {
+function parseValue(p: Parser): JsonNode | null {
   const c = p.s[p.i];
   if (c === undefined) return null;
   if (c === "{") return parseObject(p);
@@ -116,9 +139,9 @@ function parseValue(p: Parser): JNode | null {
   return null;
 }
 
-function parseObject(p: Parser): JNode | null {
+function parseObject(p: Parser): JsonNode | null {
   p.i++; // {
-  const entries: [string, JNode, string][] = [];
+  const entries: [string, JsonNode, string][] = [];
   skipWs(p);
   if (p.s[p.i] === "}") {
     p.i++;
@@ -151,9 +174,9 @@ function parseObject(p: Parser): JNode | null {
   }
 }
 
-function parseArray(p: Parser): JNode | null {
+function parseArray(p: Parser): JsonNode | null {
   p.i++; // [
-  const items: JNode[] = [];
+  const items: JsonNode[] = [];
   skipWs(p);
   if (p.s[p.i] === "]") {
     p.i++;
@@ -198,6 +221,7 @@ function defaultsOf(spec: StrictSpec): Record<string, unknown> {
 }
 
 function defaultOf(spec: StrictField): unknown {
+  if (isStrictList(spec)) return []; // Go slice 的零值（nil）
   if (spec === "string") return "";
   if (spec === "int64") return 0;
   if (spec === "raw") return false; // json.RawMessage 未出现 → 空
@@ -206,8 +230,33 @@ function defaultOf(spec: StrictField): unknown {
   return defaultsOf(spec);
 }
 
+/**
+ * 数组字段解码（Go `[]T`）：
+ * - `null` → `[]`（Go slice 收 null 得 nil）；
+ * - 非数组 → ERR（Go "cannot unmarshal ... into Go value of type []T"）；
+ * - 元素 `null` → 该 spec 的零值（Go「null 对 struct 是 no-op」）；
+ * - 元素非对象或字段类型不符 → ERR。
+ */
+function decodeListField(list: StrictList, node: JsonNode): unknown {
+  if (node.t === "null") return [];
+  if (node.t !== "arr") return ERR;
+  const spec = list[LIST_SPEC];
+  const out: unknown[] = [];
+  for (const el of node.v) {
+    if (el.t === "null") {
+      out.push(defaultsOf(spec));
+      continue;
+    }
+    const d = decodeObject(spec, el);
+    if (d === ERR) return ERR;
+    out.push(d);
+  }
+  return out;
+}
+
 /** 按 spec 解码单个字段：不匹配即 ERR。重复键按源码顺序逐个校验，后者覆盖前者（与 Go 一致）。 */
-function decodeField(spec: StrictField, node: JNode, raw: string): unknown {
+function decodeField(spec: StrictField, node: JsonNode, raw: string): unknown {
+  if (isStrictList(spec)) return decodeListField(spec, node);
   if (spec === "raw") return true; // 出现即非空（含 null）
   if (spec === "rawText") return raw; // json.RawMessage：原样返回值的原始字节切片（含 null 字面量）
   if (node.t === "null") return defaultOf(spec); // null 对其它字段是 no-op
@@ -244,7 +293,7 @@ function matchField(spec: StrictSpec, key: string): string | null {
   return found;
 }
 
-function decodeObject(spec: StrictSpec, node: JNode): Record<string, unknown> | typeof ERR {
+function decodeObject(spec: StrictSpec, node: JsonNode): Record<string, unknown> | typeof ERR {
   if (node.t !== "obj") return ERR;
   const out = defaultsOf(spec);
   for (const [key, val, raw] of node.v) {
@@ -276,4 +325,34 @@ export function decodeStrict(req: ServerRequest, spec: StrictSpec): StrictResult
   const value = decodeObject(spec, node);
   if (value === ERR) return badJSON();
   return { ok: true, value };
+}
+
+/**
+ * Go `json.Unmarshal([]byte(text), &doc)` 的**整段文本**口径：全串必须恰含一个 JSON 值，
+ * 除 JSON 空白外不得有尾随内容（与 `decodeStrict` 的「只解首值、不拒尾随」不同）。
+ * 语法错误或尾随内容 → `null`；顶层 `null` 返回 `{t:"null"}`（零值语义由调用方判）。
+ */
+export function parseJSONDocument(text: string): JsonNode | null {
+  const p: Parser = { s: text, i: 0, n: text.length };
+  skipWs(p);
+  if (p.i >= p.n) return null;
+  const node = parseValue(p);
+  if (node === null) return null;
+  skipWs(p);
+  if (p.i < p.n) return null; // 尾随内容：Go json.Unmarshal 报错
+  return node;
+}
+
+/**
+ * Go 结构体字段取值口径：对顶层对象按**精确优先、其次唯一大小写不敏感**匹配键（同 `matchField`），
+ * 重复键后者覆盖前者；非对象或未命中 → `undefined`（即 Go 的零值）。
+ */
+export function jsonObjectField(node: JsonNode, key: string): JsonNode | undefined {
+  if (node.t !== "obj") return undefined;
+  const spec: StrictSpec = { [key]: "raw" };
+  let found: JsonNode | undefined;
+  for (const [k, v] of node.v) {
+    if (matchField(spec, k) !== null) found = v;
+  }
+  return found;
 }
