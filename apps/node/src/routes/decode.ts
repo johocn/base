@@ -7,6 +7,8 @@
 // - 字段类型严格：string 字段收数字/数组 → bad_json；int64 字段收 `1.5` / `1e2` / 字符串 / 越界 → bad_json；
 //   任意字段收 `null` 是 no-op（取零值）；未知字段忽略（Go 默认行为）。
 // - `json.RawMessage` 字段：只要**出现**（含 `null`，Go 侧 `len(raw)>0`）即判为非空 → 解码为 `true`。
+// - 指针三态（`opt(x)`，Go `*T`）：键**缺失或 `null`** → nil（返回 `null`，Go 零值）；
+//   有值则按 `x` 递归解码（x 为 spec 时非对象、x 为 "string" 时非字符串 → bad_json）。
 import type { ServerRequest, ServerResponse } from "@base/core-ts";
 import { MAX_JSON_BODY } from "./authmw";
 import { jsonResponse } from "./json";
@@ -19,7 +21,15 @@ import { jsonResponse } from "./json";
  * - number：json.Number 字段，返回**原始字面量文本**（裸数字保留字面，字符串须过 JSON 数字文法）；
  * - rawText：json.RawMessage 字段，返回该值在请求体里的**原始字节切片**（不含两侧空白）。
  */
-export type StrictField = "string" | "int64" | "raw" | "number" | "rawText" | StrictSpec | StrictList;
+export type StrictField =
+  | "string"
+  | "int64"
+  | "raw"
+  | "number"
+  | "rawText"
+  | StrictSpec
+  | StrictList
+  | StrictOpt;
 
 /** 对象形状：键 → 字段规格；嵌套对象即再给一层 StrictSpec。 */
 export interface StrictSpec {
@@ -32,6 +42,14 @@ export interface StrictSpec {
  */
 export interface StrictList {
   readonly [LIST_SPEC]: StrictSpec;
+}
+
+/**
+ * 指针字段规格（Go `*T`）：由 `opt(inner)` 构造，复刻「键缺失 / `null` → nil；
+ * 有值则按 `inner` 解码」的三态语义。同样用 Symbol 标记（不可枚举、不参与 `Object.keys`）。
+ */
+export interface StrictOpt {
+  readonly [OPT_SPEC]: StrictField;
 }
 
 export type StrictResult =
@@ -50,6 +68,23 @@ export function listOf(spec: StrictSpec): StrictList {
 function isStrictList(spec: StrictField): spec is StrictList {
   if (typeof spec !== "object" || spec === null) return false;
   return (spec as unknown as Record<symbol, unknown>)[LIST_SPEC] !== undefined;
+}
+
+/** 指针字段标记（唯一 symbol；不进对象键枚举）。 */
+const OPT_SPEC = Symbol("strict_opt_spec");
+
+/**
+ * 构造一个「指针三态」字段规格（Go `*T`）：键缺失或 `null` → nil（`null`）；
+ * 有值则按 `inner` 递归解码。用于 `proposalReq.Edit` / `proposalEditReq.BodyMD` 等。
+ */
+export function opt(inner: StrictField): StrictOpt {
+  return { [OPT_SPEC]: inner };
+}
+
+/** 判定字段规格是否为 opt 产出的指针规格。 */
+function isStrictOpt(spec: StrictField): spec is StrictOpt {
+  if (typeof spec !== "object" || spec === null) return false;
+  return (spec as unknown as Record<symbol, unknown>)[OPT_SPEC] !== undefined;
 }
 
 // —— 下面是一段极简 JSON 解析器：产出带「原始字面量」的节点树，以判定 int64 是否可解 ——
@@ -222,6 +257,7 @@ function defaultsOf(spec: StrictSpec): Record<string, unknown> {
 
 function defaultOf(spec: StrictField): unknown {
   if (isStrictList(spec)) return []; // Go slice 的零值（nil）
+  if (isStrictOpt(spec)) return null; // Go 指针的零值（nil）
   if (spec === "string") return "";
   if (spec === "int64") return 0;
   if (spec === "raw") return false; // json.RawMessage 未出现 → 空
@@ -256,6 +292,8 @@ function decodeListField(list: StrictList, node: JsonNode): unknown {
 
 /** 按 spec 解码单个字段：不匹配即 ERR。重复键按源码顺序逐个校验，后者覆盖前者（与 Go 一致）。 */
 function decodeField(spec: StrictField, node: JsonNode, raw: string): unknown {
+  // 指针三态（Go `*T`）：null → nil；有值则按 inner 递归解码（类型不符仍 ERR）。
+  if (isStrictOpt(spec)) return node.t === "null" ? null : decodeField(spec[OPT_SPEC], node, raw);
   if (isStrictList(spec)) return decodeListField(spec, node);
   if (spec === "raw") return true; // 出现即非空（含 null）
   if (spec === "rawText") return raw; // json.RawMessage：原样返回值的原始字节切片（含 null 字面量）

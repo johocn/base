@@ -42,7 +42,20 @@ import {
   governancePageHandler,
   indexPageHandler,
 } from "./routes/portal";
-import { GOVERN_BURST_PER_IP, GOVERN_PER_MINUTE_PER_IP, IpLimiter } from "./routes/derived";
+import {
+  GOVERN_BURST_PER_IP,
+  GOVERN_PER_MINUTE_PER_IP,
+  IpLimiter,
+  PROPOSAL_BURST_PER_ID,
+  PROPOSAL_PER_MINUTE_PER_ID,
+  VOTE_BURST_PER_ID,
+  VOTE_PER_MINUTE_PER_ID,
+} from "./routes/derived";
+import {
+  proposalListHandler,
+  proposalPostHandler,
+  proposalVoteHandler,
+} from "./routes/proposal";
 
 /** 节点对外服务选项；后五项均为可选，保持既有 `startServer(adapters, db, {host, port})` 调用兼容。 */
 export interface ServerOptions {
@@ -68,6 +81,9 @@ export async function startServer(
   const storeKey = dataDir === undefined || dataDir === "" ? null : loadStoreKey(dataDir, {}).key;
   // 治理面 IP 令牌桶（对齐 httpapi/govern.go 的 governLimiterByIP 常量）。
   const governLimiter = new IpLimiter(GOVERN_PER_MINUTE_PER_IP, GOVERN_BURST_PER_IP);
+  // 治理写面按身份限速（对齐 server.go:59-60 的 proposalLimiterByID / voteLimiterByID）。
+  const proposalLimiterByID = new IpLimiter(PROPOSAL_PER_MINUTE_PER_ID, PROPOSAL_BURST_PER_ID);
+  const voteLimiterByID = new IpLimiter(VOTE_PER_MINUTE_PER_ID, VOTE_BURST_PER_ID);
   // escrow 读取的同 IP 令牌桶：对齐 server.go:54 的 newIPLimiter(10, 10)（**独立实例**，
   // 与治理面的 governLimiter 不是同一个桶）。
   const escrowLimiter = new IpLimiter(10, 10);
@@ -105,6 +121,22 @@ export async function startServer(
       }),
     ),
   );
+  // 审批治理（册子 §3）：提案与投票走签名写路径，列表是匿名公开读（对齐 server.go:124-126）。
+  adapters.http.handle(
+    "POST /v1/proposal",
+    requireAuth(
+      { db },
+      proposalPostHandler({ db, storeKey, byID: proposalLimiterByID, byIP: governLimiter }),
+    ),
+  );
+  adapters.http.handle(
+    "POST /v1/proposal/{proposal_id}/vote",
+    requireAuth(
+      { db },
+      proposalVoteHandler({ db, storeKey, byID: voteLimiterByID, byIP: governLimiter }),
+    ),
+  );
+  adapters.http.handle("GET /v1/proposal", proposalListHandler({ db, storeKey }));
   // 治理派生 + 社交公开读面（批 A2）。
   adapters.http.handle("GET /v1/contributors", contributorsHandler({ db, storeKey }));
   adapters.http.handle("GET /v1/directory", directoryHandler({ db, storeKey, limiter: governLimiter }));

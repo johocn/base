@@ -17,14 +17,11 @@ import {
   TERM_KEY_MAX_RUNES,
   validDirectoryKind,
   validItemTitle,
+  validProposalAction,
   validProposalReason,
 } from "./derived";
 import { type EventDeps, type EventEnvelope, validTargetID, verifyEventSig } from "./event";
 import { jsonResponse } from "./json";
-
-const GOVERN_ACTION_REMOVE = "remove";
-const GOVERN_ACTION_EDIT = "edit";
-const GOVERN_ACTION_REVIVE = "revive";
 
 // 两档严格键集（govern_event.go:18-26）：多一个未知键即拒。
 const GOVERN_PROPOSAL_KEYS: ReadonlySet<string> = new Set([
@@ -43,16 +40,6 @@ const GOVERN_PROPOSAL_KEYS: ReadonlySet<string> = new Set([
   "directory_display_name",
 ]);
 const GOVERN_VOTE_KEYS: ReadonlySet<string> = new Set(["action", "proposal_id", "choice"]);
-
-/** validProposalAction（govern.go:33-39）：remove / edit / revive / directory_add 四值枚举。 */
-function validProposalAction(a: string): boolean {
-  return (
-    a === GOVERN_ACTION_REMOVE ||
-    a === GOVERN_ACTION_EDIT ||
-    a === GOVERN_ACTION_REVIVE ||
-    a === GOVERN_ACTION_DIRECTORY_ADD
-  );
-}
 
 /**
  * anyString（govern_event.go:40-50）：string → 原值；数字 → FormatInt(int64(t))；其余 → 空串。

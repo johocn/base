@@ -108,14 +108,14 @@ function scanProposal(r: Record<string, unknown>): Proposal {
 }
 
 /** GetProposal（govern.go:374-383）：无行返回 null。 */
-function getProposal(db: Db, id: number): Proposal | null {
+export function getProposal(db: Db, id: number): Proposal | null {
   const rows = db.select(`SELECT ${PROPOSAL_COLUMNS} FROM govern_proposals WHERE proposal_id=?`, [id]);
   if (rows.length === 0) return null;
   return scanProposal(rows[0]);
 }
 
 /** proposalVotersExec（govern.go:128-143）：按 voter_id 升序读全部投票人（未过滤名册）。 */
-function proposalVotersExec(db: Db, proposalId: number): string[] {
+export function proposalVotersExec(db: Db, proposalId: number): string[] {
   const rows = db.select(
     `SELECT voter_id FROM govern_votes WHERE proposal_id=? ORDER BY voter_id ASC`,
     [proposalId],
@@ -241,7 +241,7 @@ function governRequiredState(action: string): string {
 }
 
 /** governPreconditionTx（govern.go:543-561）。 */
-function governPreconditionTx(db: Db, p: Proposal): boolean {
+export function governPreconditionTx(db: Db, p: Proposal): boolean {
   // directory_add 的目标不是内容条目，items 表无对应行，直接放行。
   if (p.action === GOVERN_ACTION_DIRECTORY_ADD) return true;
   const rows = db.select(`SELECT state,content_hash FROM items WHERE item_id=?`, [p.itemId]);
@@ -271,7 +271,7 @@ function retireItem(db: Db, itemId: string, revokedRev: number): void {
 }
 
 /** bumpDirectoryVersionExec（directory.go:274-292）。 */
-function bumpDirectoryVersion(db: Db): number {
+export function bumpDirectoryVersion(db: Db): number {
   let cur = 0;
   const rows = db.select(`SELECT value FROM meta WHERE key=?`, [META_DIRECTORY_VERSION]);
   if (rows.length > 0) {
@@ -308,7 +308,13 @@ function upsertDirectoryTerm(
 }
 
 /** approveDirectoryTermExec（directory.go:268-270）。 */
-function approveDirectoryTerm(db: Db, kind: string, termKey: string, display: string, author: string): void {
+export function approveDirectoryTerm(
+  db: Db,
+  kind: string,
+  termKey: string,
+  display: string,
+  author: string,
+): void {
   upsertDirectoryTerm(db, kind, termKey, display, author, DIRECTORY_STATE_APPROVED, nowUTC());
 }
 
@@ -347,7 +353,7 @@ export function segmentsContentHash(segs: Segment[]): string {
 }
 
 /** DecodeTagLinks（govern.go:650-659）：空串按空关联集；不可解析返回 null。 */
-function decodeTagLinks(raw: string): TagLink[] | null {
+export function decodeTagLinks(raw: string): TagLink[] | null {
   if (raw === "") return [];
   let parsed: unknown;
   try {
@@ -441,7 +447,7 @@ function editItemTx(db: Db, storeKey: Uint8Array | null, p: Proposal): string {
 }
 
 /** governApplyTx（govern.go:564-602）：在事务内执行受审动作，返回 executed_result。 */
-function governApplyTx(db: Db, storeKey: Uint8Array | null, p: Proposal): string {
+export function governApplyTx(db: Db, storeKey: Uint8Array | null, p: Proposal): string {
   switch (p.action) {
     case GOVERN_ACTION_REMOVE: {
       const rev = nextContentVersion(db);
@@ -499,7 +505,7 @@ function otherLearnerCount(db: Db, targets: string[], actor: string): number {
 }
 
 /** freeRemoveEligible（free_remove.go:23-57）：判据顺序即短路顺序，异常由调用方 fail-closed。 */
-function freeRemoveEligible(db: Db, itemId: string, actor: string): boolean {
+export function freeRemoveEligible(db: Db, itemId: string, actor: string): boolean {
   if (!isCourseId(itemId) && !isLessonId(itemId)) return false;
   const rows = db.select(`SELECT author_id FROM items WHERE item_id=?`, [itemId]);
   if (rows.length === 0) return false;

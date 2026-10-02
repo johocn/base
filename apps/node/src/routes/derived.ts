@@ -18,10 +18,10 @@ export const GOVERN_STATUS_PENDING = "pending";
 const GOVERN_REMOVE_THRESHOLD = 3;
 const GOVERN_DEFAULT_THRESHOLD = 2;
 const DIRECTORY_ADD_QUORUM = 2;
-const DIRECTORY_SMALL_NODE_ROSTER_MAX = 10;
+export const DIRECTORY_SMALL_NODE_ROSTER_MAX = 10;
 
 // —— 目录（directory.go:24-33） ——
-const DIRECTORY_STATE_APPROVED = "approved";
+export const DIRECTORY_STATE_APPROVED = "approved";
 const META_DIRECTORY_VERSION = "directory_version";
 
 // —— 目录 kind 三值 / 词条键上限（directory.go:17-30） ——
@@ -37,6 +37,12 @@ export const MAX_TITLE_RUNES = 200;
 // —— 治理面 IP 限速常量（httpapi/govern.go:19-26） ——
 export const GOVERN_PER_MINUTE_PER_IP = 60;
 export const GOVERN_BURST_PER_IP = 20;
+
+// —— 治理写面按身份限速常量（httpapi/govern.go:21-24） ——
+export const PROPOSAL_PER_MINUTE_PER_ID = 6;
+export const PROPOSAL_BURST_PER_ID = 3;
+export const VOTE_PER_MINUTE_PER_ID = 20;
+export const VOTE_BURST_PER_ID = 10;
 
 const INT64_MIN = -(1n << 63n);
 const INT64_MAX = (1n << 63n) - 1n;
@@ -346,7 +352,7 @@ export function filterRosterAtWatermarkSet(
 }
 
 // 只选读路径用到的列（对齐 proposalColumns 的取值口径；links_json 等与目录派生无关）。
-const PROPOSAL_COLUMNS = `proposal_id,action,item_id,proposer_id,reason,title,body_md,created_at,executed_at,voided_at,revoked_rev`;
+const PROPOSAL_COLUMNS = `proposal_id,action,item_id,proposer_id,reason,title,body_md,content_version,created_at,executed_at,voided_at,revoked_rev`;
 
 export interface ProposalView {
   proposalId: number;
@@ -360,6 +366,9 @@ export interface ProposalView {
   status: string;
   votes: string[];
   threshold: number;
+  executedAt: number;
+  voidedAt: number;
+  contentVersion: number;
   revokedRev: number;
 }
 
@@ -382,6 +391,7 @@ export function listProposalViews(
     createdAt: Number(r.created_at ?? 0),
     executedAt: Number(r.executed_at ?? 0),
     voidedAt: Number(r.voided_at ?? 0),
+    contentVersion: Number(r.content_version ?? 0),
     revokedRev: Number(r.revoked_rev ?? 0),
   }));
   const out: ProposalView[] = [];
@@ -400,6 +410,9 @@ export function listProposalViews(
       status: proposalStatus(p.executedAt, p.voidedAt),
       votes: filterRosterAtWatermarkSet(voters, roster, restored),
       threshold: governThreshold(p.action),
+      executedAt: p.executedAt,
+      voidedAt: p.voidedAt,
+      contentVersion: p.contentVersion,
       revokedRev: p.revokedRev,
     });
   }
@@ -597,6 +610,16 @@ export function directoryPayloadHash(kind: string, termKey: string): string {
 /** DirectoryProposalItemID（directory.go:138-140）：dir/<kind>/<hash16>。 */
 export function directoryProposalItemId(kind: string, termKey: string): string {
   return "dir/" + kind + "/" + directoryPayloadHash(kind, termKey).slice(0, 16);
+}
+
+/** validProposalAction（govern.go:33-39）：remove / edit / revive / directory_add 四值枚举。 */
+export function validProposalAction(a: string): boolean {
+  return (
+    a === GOVERN_ACTION_REMOVE ||
+    a === "edit" ||
+    a === "revive" ||
+    a === GOVERN_ACTION_DIRECTORY_ADD
+  );
 }
 
 /** validDirectoryKind（govern.go:42-48）：kind ∈ 三值。 */

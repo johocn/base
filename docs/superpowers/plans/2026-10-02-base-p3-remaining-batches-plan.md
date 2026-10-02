@@ -2,8 +2,8 @@
 
 - 日期：2026-10-02
 - 上游：路线计划 `#70`（§1 P3 行、§5 节点职能清单、§6 P5 等价判据）；首批计划 `#73`（§8 不做「P3 余下批次」、§9.2 执行期发现）；接口边界冻结面 `#72`
-- 状态：**批 A 已收口、批 B1–B4 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8、B3 实况见 §10.9、B4 实况见 §10.10；批 C–E 未开工）
-- 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）与**批 B**（§10，切 B1–B4）；批 C–E 只登记边界（§8）
+- 状态：**批 A 已收口、批 B1–B4 已收口、批 C 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8、B3 实况见 §10.9、B4 实况见 §10.10；批 C 全量见 §11；批 D–E 未开工）
+- 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）、**批 B**（§10，切 B1–B4）与**批 C**（§11 收口）；批 D–E 只登记边界（§8）
 - 性质：任务级计划。契约一律回册子，本册不承载契约。
 
 ## 0. 本批为什么这么切
@@ -25,7 +25,7 @@
 |---|---|---|---|
 | **A** | **纯匿名公开读 JSON 面 12 条 + 门户页 3 个** | **判据 2**（字节级） | **已收口**（§9） |
 | B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **B1–B4 已收口**（§10，实况 §10.7 / §10.8 / §10.9 / §10.10） |
-| C | 治理派生面：`proposal` POST / `proposal/{id}/vote` / `proposal` GET | 判据 5（含 `#65` 小节点豁免） | 未开工 |
+| C | 治理派生面：`proposal` POST / `proposal/{id}/vote` / `proposal` GET | 判据 5（含 `#65` 小节点豁免） | **已收口**（§11） |
 | D | 对端同步·反熵：`inventory` / `sync` / `fetch` / `scrub` / `event-sync` + CLI `peer-sync` / `scrub` | 判据 4（结果集一致 + 只增不减） | 未开工 |
 | E | `importer` 容器 / 题库 / 视频派生 + CLI `import-video` | 判据 6（pack_id 与 merkle_root 同一） | 未开工 |
 
@@ -139,7 +139,8 @@
 ## 8. 后续批次边界（只登记，不展开）
 
 - **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。**已切 4 子批 B1–B4，详列见 §10**（`govern.v1` 分支已定随 event 一起做，不留批 C；B1–B4 已收口）。
-- **批 C**：`govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`；验收 = 判据 5。
+- **批 C**：`govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`；验收 = 判据 5。**已收口**（全量见 §11）——侦察后确认 `govern_event.go` 的 `govern.v1` 事件路径**已在 B2 收口**，故批 C 实做为 `govern.go` 的三条**签名**路由（`POST /v1/proposal` / `POST /v1/proposal/{proposal_id}/vote` / `GET /v1/proposal`）及其 store 依赖。**残余缺口**：Node 侧缺 Go `store.Open` 的 `seedDirectoryFromExisting` 开库引导（见 §11.4 发现 1）。
+- **开库引导等价（新增边界，待认领）**：Go `internal/store/store.go:155-168` 的 `Open` = `schemaStatements` → `migrate` → `seedDirectoryFromExisting`（`internal/store/directory.go:294-442`：把存量 `items WHERE item_id LIKE 'tag/%'`、`source='category'`、`segments seq<0` 的 `attr.category` / `attr.instructor` 登记为 `directory_terms` 的 `approved` 词条，仅当确有存量词条时 `bumpDirectoryVersion` 一次并写 `meta.directory_seeded=1`；失败只打 stderr 不阻断 Open）。Node 侧现状：`openStore`（`apps/node/src/store/store.ts:244-267`）只跑 `migrate`、**不含 seed**；`main.ts:48` 的 `serve` 用裸 `openDb`（连 `migrate` 都无）。**验收 = 开库后 DB 快照与 Go 逐字节一致**（即批 C G4 阶段 4 的 4 行对称差归零，见 §11.3）。
 - **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。
 - **批 E**：`internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = 判据 6。
 
@@ -459,3 +460,74 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 6. **envelopes 非规范存量行（残余缺口，登记）**：Go 读面用 `json.RawMessage` 原样嵌入（compact 后保留数字字面量 / 键序 / 转义），Node 用 `canonicalize` 复现（会排序键、拒非整数）。仓里 `key_envelopes` 恒为 `Canonicalize` 产物故两侧字节相同；仅手工改库 / 反熵同步非规范行可达。
 7. **任务书预期校正（非移植差异）**：① 读面「半 auth 头」实测两侧**同为 400 `auth_missing_header`**（非任务书假定的 401）；② `group_id` 口径为 **32 hex**——`isHexN(s,16)` 的 16 指**字节数**（对齐 `group_test.go:17`），非任务书示例的 16 hex。两条均**两侧一致**，非差异。
 8. **§10.7 待决点「`EqualFold` 匹配」关闭（本批复核，非缺口）**：Go 读面解 `struct{Action;Epoch;PayloadCID;ReplyTo}` 与 `struct{Name string}` 用 struct 字段匹配（精确优先、其次**唯一**大小写不敏感，折叠命中多个即歧义不忽略）；Node 侧 `decode.ts:283-294` 的 `matchField` 逐条复刻该规则，`jsonObjectField`（`:350-357`）与 B4 读面 `parseEventBody` / `groupName` 皆经此路径 ⇒ **两侧等价**。写面 `parseGroupBody` 走 `map[string]any` **精确键**查表（键集白名单同时把大小写变体判为未知键 → 400），与 Go 同。故 §10.7 该待决点**关闭**。
+
+## 11. 批 C：治理派生面（判据 5）
+
+**状态：批 C 已收口**（批 D–E 未开工）。
+
+**范围厘清**：§8 登记的批 C = `govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`。开工侦察确认 `govern_event.go` 的 `govern.v1` 事件路径**已在批 B2 收口**（§10.8，`routes/governEvent.ts` + `store/governProjection.ts`）⇒ 本批实做为 `govern.go` 的三条**签名**路由 + 其 store 依赖：
+
+| # | 路由 | Go 落点 | Node 落点 |
+|---|---|---|---|
+| 1 | `POST /v1/proposal` | `govern.go:124-278` | `routes/proposal.ts` `proposalPostHandler` |
+| 2 | `POST /v1/proposal/{proposal_id}/vote` | `govern.go:288-345` | `routes/proposal.ts` `proposalVoteHandler` |
+| 3 | `GET /v1/proposal` | `govern.go:373-405` | `routes/proposal.ts` `proposalListHandler` |
+
+**切法（3 个 Task，逐 Task 两阶段审查）**：C1（`store/govern.ts` 签名写层 + 单测）→ C2（三 handler + `derived.ts` 扩展 + `decode.ts` 指针语义 + `serve.ts` 装配 + 单测）→ C3（G4 扩容 + 门禁 G1–G6 + 回填 + 提交）。
+
+**产出（10 代码文件 / +2235 −29 + 2 文档）**：
+
+- `store/govern.ts`（**新增 469 行**）：逐行对齐 `internal/store/govern.go` 的 `CreateProposal` / `CreateDirectoryProposal` / `AddVote` / `addVoteTx` / `EncodeTagLinks` + `directory.go` 的 `GetDirectoryTerm` / `FindPendingDirectoryProposal` / `DirectoryPendingVotes` + `store.go` 的 `GetItem`；导出 `AlreadyVotedError` / `createProposal` / `createDirectoryProposal` / `addVote` / `getDirectoryTerm` / `findPendingDirectoryProposal` / `directoryPendingVotes` / `encodeTagLinks` / `getItemRow`。
+- `store/govern.test.ts`（**新增 600 行 / 27 用例**）。
+- `routes/proposal.ts`（**新增 388 行**）：三 handler + `proposalReq` / `proposalEditReq` / `proposalDirectoryReq` 解码形状 + `proposalDTO` 声明序。
+- `routes/proposal.test.ts`（**新增 663 行 / 33 用例**）。
+- `routes/decode.ts`（+39 −1）：新增 `opt()`（Symbol 标记 `OPT_SPEC`）实现 Go 指针三态（键缺失 / `null` → `null`；有值递归解码；类型不符 → ERR），additive 不破坏既有 spec。
+- `routes/derived.ts`（+26 −3）：`PROPOSAL_COLUMNS` / `ProposalView` 补 `content_version`；新增 `PROPOSAL_PER_MINUTE_PER_ID` / `PROPOSAL_BURST_PER_ID` / `VOTE_PER_MINUTE_PER_ID` / `VOTE_BURST_PER_ID`；导出 `DIRECTORY_STATE_APPROVED` / `DIRECTORY_SMALL_NODE_ROSTER_MAX` / `validProposalAction`。
+- `routes/governEvent.ts`（+1 −14）：删私有 `validProposalAction` 与独占常量，改由 `derived.ts` 统一（消重，不造第二份口径）。
+- `routes/submit.ts`（+2 −2）：`normalizeSubmitTagLinks` / `SubmitLink` 加 `export`，逻辑未动。
+- `store/governProjection.ts`（+14 −8）：9 个私有函数纯加 `export`（复用事件路径唯一实现，不改 SQL / 语义）。
+- `serve.ts`（+33 −1）：装配三路由——两条 POST 走 `requireAuth` + 双维度限速（proposal / vote 各一把 ID 桶 + 复用治理面 IP 桶），GET 匿名（对齐 `server.go:124-126`）。
+
+### 11.1 门禁 G1–G6（逐条通过）
+
+| 门 | 结果 | 证据 |
+|---|---|---|
+| G1 | 通过 | `go build ./...` / `go vet ./...` / `go test ./...` 全绿（本批不动 Go，作基线回归） |
+| G2 | 通过 | `apps/node` `npx tsc --noEmit` **exit 0** |
+| G3 | 通过 | `apps/node` `npx vitest run`：**30 文件 / 356 用例全绿**（B4 收口时 28/296 ⇒ 批 C 净增 **2 文件 / 60 用例**） |
+| G4 | 通过（HTTP 面） | **字节级对拍 HTTP 逐条 0 分歧**（批 C 新增 J 组 **63 token**，见 §11.2）；阶段 4 DB 快照**对称差 4 行**（根因属开库引导，见 §11.3 / §11.4 发现 1） |
+| G5 | 通过 | `git diff --stat -- internal/` **无输出**（`git status` 对 `internal/httpapi/web.go` 的 ` M` 为陈旧 stat 项，定向 `git diff` 为空）；`packages/protocol-ts/**` 与 `#72` 冻结的 `ServerRequest` / `Adapters` / `ServerAdapters` 未动 |
+| G6 | 通过 | 只 `add` 本批 10 个代码文件 + 2 个文档文件；`.gitignore` / `internal/httpapi/web.go` / `based-linux-amd64` / `.tmp/`（含 G4 取证件）均未入暂存 |
+
+### 11.2 G4 字节级对拍实况（批 C）
+
+**方法**（沿用 §10.10.2）：Node `openDb` + `migrate()` 建全量 schema → 插种子（10 名治理者 G0..G9 + 非治理者 X + 被标条目 + store 密钥文件）→ **复制两份**（`go/` / `node/`）→ Go `store.Open` **先于** Node `openDb` → 两侧同一份 `jtokens.json` 逐字节回放 → 比对 `status` + 4 对照头（`content-type` / `cache-control` / `x-content-type-options` / `access-control-allow-origin`）+ body 字节（**不比 `Content-Length`**）。取证件在 `e:\code\.tmp\g4\`（`jcprobe.probe.ts` / `jgoprobe/main.go` / `jcompare.mjs` / `jtokens.json` / `REPORT.md` / `baseline.txt` / `gates.txt`），**未入提交**。
+
+**工装扩容**：新增 J 组对拍通道（三路由签名令牌，全部 `mode=isolated`——每条全新 server 实例隔离限速桶）；既有 40 token 基线**先复跑自证**（`DIVERGENCES: 0 / 40`）。
+
+**结果：J 组 63 token，HTTP 逐条 0 分歧。** status 序列完全相同、4 对照头全一致；body 仅 `J46/J47/J63`（匿名 `GET /v1/proposal` 列表）需按 `created_at` / `executed_at` / `voided_at`（两侧各为自身墙钟）归一化后相等。覆盖：
+
+- **拒绝矩阵**（J01–J25、J48–J53、J56/J57/J61）：无签名头 400 / 半头 400 / `proposer_id`·`author_id` 出现 400 `author_id_forbidden` / `voter_id` 出现 400 / action 非枚举 400 `proposal_action_unsupported` / reason 非法（`%201` / 控制字符）400 `proposal_reason_invalid` / edit 缺失·`null`·类型错 400 `proposal_edit_invalid` / item 不存在 404 `item_not_found` / 提案对象归提案人自己 403 `item_self_owned` / state 不符 400 `item_state_mismatch` / `body_md` 缺失·`null`·类型错 400 / title 空·含 DEL 400 / 字节和超限 413 `proposal_too_large` / 非治理者提案 403 `proposer_not_governor` / 目录 kind 非法·`term_key` 与归一化不符·带 `edit`·缺 `directory` 400 `proposal_directory_invalid` / tag 形态带 `body_md` 400 / `course` 形态 edit 400 / `proposal_id` 非法（`0` / `abc` / 不存在）404 `proposal_not_found` / 非治理者投票 403 `voter_not_governor` / 投票体 `null`·数组 400 `bad_json` / 重复投票 409 `already_voted`。
+- **正向执行链路**（J26–J45、J54/J55、J58–J60、J62）：remove 提案 201 `pending`（`threshold=3`、`vote_count=1`）→ 第 2/3 票 200（跨门槛 `effective`）→ 同 item 再提案 400 `item_state_mismatch`；revive 反向；edit（`article` / `tag`）各形态；`directory_add` 三支——同键归并 200 `merged:true`、小节点豁免（名册 3 < 10）即时 `effective`、已 approved 短路 200；免票选 remove（`course`，无 `seq>=1` 课时）`threshold=0` 即时 `effective`。
+- **读面**（J46/J47/J63）：匿名 `GET /v1/proposal` 全量 `proposals[]`，**16 键声明序逐字节**（`proposal_id, action, item_id, proposer_id, reason, title, body_md, status, votes, vote_count, threshold, created_at, executed_at, voided_at, content_version, revoked_rev`）。
+
+### 11.3 阶段 4 DB 状态对拍（批 C）
+
+固定列序、主键升序、`|` 连接 ⇒ **集合对称差 4 行**（go 侧 141 行 / node 侧 139 行；按行集合比对，行序不计）。
+
+**仅 go 侧有 3 行**：`directory_terms|tag|x|x|approved||<ts>|<ts>`、`meta|directory_seeded|1`、`meta|directory_version|4`。
+**仅 node 侧有 1 行**：`meta|directory_version|3`。
+
+**根因**：Go `store.Open`（`internal/store/store.go:164-168`）在 `migrate` 后调 `seedDirectoryFromExisting`（`internal/store/directory.go:303`），把存量 `tag/x` 登记为 `approved` 词条并 `bumpDirectoryVersion` 一次、写 `meta.directory_seeded=1`；Node 侧无等价实现 ⇒ 缺 1 行词条、`directory_version` 少 bump 一次、无 `directory_seeded` 键，其余行为这 3 行挤出的**行序整体错位**（内容一致）。属**开库引导层**，不属批 C 三路由范围（§8 已新增「开库引导等价」边界项待认领）。
+
+### 11.4 执行期发现（登记）
+
+1. **Node 缺 Go `store.Open` 的目录 seed 引导（残余缺口，登记；用户 2026-10-02 裁定「登记而非实现」）**：覆盖 §11.3 的 4 行对称差。双层——① 全仓无 `seedDirectoryFromExisting` / `directory_seeded` 等价实现；② `openStore` 不含 seed、`main.ts:48` 的 `serve` 走裸 `openDb`（连 `migrate` 都无）。**处置**：§8 新增边界项「开库引导等价」待后续批次认领，**验收 = 开库后 DB 快照与 Go 逐字节一致**；本批不动 `openStore` / `main.ts` 这条批 A/B 已收口基线共用的路径。
+2. **`govern_event.go` 已在 B2 收口（范围厘清，非缺口）**：§8 原登记含 `govern_event.go`，但该文件的事件路径（`govern.v1` body 校验 + 投影 + settle）**已随批 B2 交付**（§10.8，`routes/governEvent.ts` 235 行 + `store/governProjection.ts`）；批 C 只做签名路径。两路径的差异在本批显式保留：`addVoteTx` 用**实时** `filterRoster` + `GovernThresholdForRoster(action, len(roster), true)`；`SettleGovernProposal` 用**快照水位** + 真实 `rosterReady` 且带 `#65` 小节点豁免 ⇒ **签名路径与事件路径各自的票数 / 门槛语义不可互换**。
+3. **`EncodeTagLinks` 从事件路径复用（消重，非缺口）**：B2 曾删死代码 `encodeTagLinks`（§10.8 发现 4），本批签名路径需要它 ⇒ 经 `store/governProjection.ts` 加 `export` 复用**唯一实现**，不新造第二份口径；其 `goJSONString` 对齐 `json.Marshal`（`encodeTagLinks` 产 struct 序 `TagID,TargetID,Kind`，**非字典序**）。
+4. **`routes/json.ts` 的 `encodeString` 既有偏离（残余缺口，登记；非本批引入）**：`0x08` / `0x0c` 输出 `\u0008` / `\u000c`（Go `json.Marshal` 用 `\b` / `\f`）、`0x7f`(DEL) 被转义为 `\u007f`（Go 不转义）。本批 `proposal` 路径不受影响（`encodeTagLinks` 走独立 `goJSONString`；`writeAuthErr` / `jsonResponse` 的文案键值均不含该码域）⇒ **登记不改**。
+5. **IP 维度限速同口径退化**（沿用 §10.8 发现 2 / §10.9 发现 6）：`ServerRequest` 无 `RemoteAddr` ⇒ Node 侧 `CLIENT_BUCKET_KEY=""` 单桶键（与 `submit.ts:60` 同口径）；Go 取证件经进程内分发亦无 `RemoteAddr` ⇒ 两侧同退化，IP 桶等价性在**单桶口径**下自证（ID 维度仍逐身份独立）。
+6. **`authmw` 读体后还体（非缺口，已核实等价）**：Go `authenticate`（`authmw.go:205-210` 读体、`:233` `r.Body = io.NopCloser(bytes.NewReader(body))`）把体还给 handler，故 vote handler 能再读体；Node 侧 `req.body` 是冻结的 `Uint8Array`、`requireAuth` 不消耗 ⇒ 天然等价，**无需移植还体动作**。
+7. **`opt()` 指针三态为 additive 扩展（非缺口）**：`decode.ts` 原无「键缺失 / `null` / 有值」三态语义 ⇒ 新增 Symbol 标记 `OPT_SPEC` + `opt()`，`defaultOf` 与 `decodeField` 顶部各加一分支；既有 spec 行为不变（G3 356 用例全绿自证）。
+8. **5 条故意差异（复核结论，非缺口）**：C2 报告列出并逐条复核——① `auth_body_read_failed` 分支不可达（Node 体已在内存）；② `EncodeTagLinks` 的 error 分支不可达（无 IO 写）；③ store 包装文案（`store: 读提案 N: no rows` 等）逐字对齐 Go 的错误路径包装；④ IP 桶退化单键（见发现 5）；⑤ `Date.now()` 墙钟（对拍归一化口径处理）。
+9. **`handleVotePost` 体空判走 `trimGoSpace`（口径定死，非缺口）**：Go `strings.TrimSpace` 与 JS `.trim()` 的空白集不同（Go `unicode.IsSpace` 含 U+0085 不含 U+FEFF；JS 反之）⇒ 空体判定必须用 `trimGoSpace`；本批 `proposalVoteHandler` 照此，非空体再走 `parseJSONDocument`（全值语义，拒尾随）判定 `bad_json`。

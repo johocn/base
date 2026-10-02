@@ -90,7 +90,7 @@ const SUBMIT_SPEC: StrictSpec = {
 };
 
 /** submitLink（submit.go:174-177）的解码形态（字段名与请求体一致）。 */
-interface SubmitLink {
+export interface SubmitLink {
   target_id: string;
   kind: string;
 }
@@ -211,7 +211,7 @@ function validQuestionJSON(raw: string): boolean {
  * normalizeSubmitTagLinks（submit.go:356-368）：kind 必须与 target_id 形态自洽，
  * 同一 target_id 不得重复；规范化的 kind 取自 tagKindOfTarget 的返回值。
  */
-function normalizeSubmitTagLinks(inLinks: SubmitLink[]): TagLink[] | null {
+export function normalizeSubmitTagLinks(inLinks: SubmitLink[]): TagLink[] | null {
   const out: TagLink[] = [];
   const seen = new Set<string>();
   for (const l of inLinks) {
