@@ -114,16 +114,19 @@ CREATE TABLE IF NOT EXISTS circle_assignments(
 
 **结论（用户已定）**：把 `course` / `lesson` 纳入 `meetsQualityGate`（`contributor.go:35-47` 现为显式 `return false`）。
 
-| 载体 | 现状 | 提案门槛 | 常量名（提案） | 对齐依据 |
+**取证结论（2026-10-02，推翻初版提案）**：初版拟给 `lesson` 加「正文非空白字符数 ≥ 200（`LessonMinRunes`）」——**该口径在节点侧不可测**。[submit.go:86-90](`internal/httpapi/submit.go`) 定死容器 `segments` 三档语义：`seq<0` 只放属性行（`protocol.IsAttrKind`）、`seq=0` 只放一行 digest、`seq≥1` **只放子项引用**（课时的子项 kind 限 `article/video/audio/quiz`，`text` 存的是**子项 id**、不是正文）。⇒ **课时没有任何自有正文字段**，「课时正文 rune 数」无取数来源。故容器门槛一律改用**达标子项数**，不碰正文。
+
+| 载体 | 现状 | 门槛（定稿） | 常量名 | 对齐依据 |
 |---|---|---|---|---|
 | `article` | ≥ 200 非空白字符 | 不变 | `ArticleMinRunes = 200` | 既有 |
 | `video` | ≥ 60 秒 | 不变 | `VideoMinSeconds = 60` | 既有 |
 | `quiz` | ≥ 3 题 | 不变 | `QuizMinQuestions = 3` | 既有 |
-| `lesson` | **不计** | 正文非空白字符数 ≥ 200 | `LessonMinRunes = 200` | 对齐 `ArticleMinRunes` |
-| `course` | **不计** | 含 ≥ 3 个已发布课时 | `CourseMinLessons = 3` | 对齐 `QuizMinQuestions` |
+| `lesson` | **不计** | 含 **≥ 1 个达标子项**（子项按上三行既有门槛判定） | `LessonMinItems = 1` | 用「子项数」替掉不可测的 rune 口径 |
+| `course` | **不计** | 含 **≥ 3 个达标课时**（课时按上一行判定） | `CourseMinLessons = 3` | 对齐 `QuizMinQuestions` |
 
 - 常量仍是**文档级常量**，校准走「改册子 + 改常量」，照 `contributor.go:9` 体例，**不加配置项**。
-- **防刷提案**：**一门课程及其达标课时按 1 条计**（`lesson` 仅在**无所属课程**时独立计 1），避免「一门课 N 课时 = N 票」刷榜。口径细节列为待评审项（§6-3）。
+- **防刷（已定）**：**一门课程及其达标课时按 1 条计**——课程计 1；其达标课时**不再计**；仅**无所属课程**的课时独立计 1（父课程靠课时 `item_id` 前缀 `course/<cid>/` **零 schema 解析**，见 §6 决策 6）。避免「一门课 N 课时 = N+1 票」刷榜。
+- **判定深度**：至多两层（`course` → 达标课时 → 达标子项），全部落在既有表（`items` / `segments` / `articles` / `quizzes` / `media_meta`），**不新增表、不碰正文以外的字段**。
 
 **影响面（必须登记，P6 前须实测）**：
 
@@ -135,7 +138,7 @@ CREATE TABLE IF NOT EXISTS circle_assignments(
 
 | # | 变更 | 类别 | 进内容包 | 改 `schema_version` | 服务铁律 |
 |---|---|---|---|---|---|
-| 1 | `circle.v1` 事件类型（`assign` / `form`） | 新事件类型 | 否 | 否 | ② |
+| 1 | `circle.v1` 事件类型（**单类型双 `action`**：`assign` / `form`，对齐 `group.v1` / `govern.v1` 体例） | 新事件类型 | 否 | 否 | ② |
 | 2 | `groups.origin` 列（`user` \| `fusion`） | 后加列 | 否 | 否 | ② |
 | 3 | `circle_assignments` 表 | 新表（节点侧） | 否 | 否 | ② |
 | 4 | `meetsQualityGate` 扩 `course` / `lesson` | 派生逻辑 + 2 常量 | 否 | 否 | ③ |
@@ -148,11 +151,12 @@ CREATE TABLE IF NOT EXISTS circle_assignments(
 | # | 风险 | 影响 | 处置 / 回退 |
 |---|---|---|---|
 | 1 | 圈子规则**反噬只增不减**：若让圈子规则决定「能不能融合」 | 铁律二被架空 | 本册 §2.1 写死：圆圈只决定**治理权**，不决定**融合**；融合恒只增不减 |
-| 2 | **单成员圈子 = 作者自审**（轨道 B 初始成员 = {作者}） | 内容自治在该情形下无制衡 | 登记；回退方案 = 新圈子初始成员改为「作者 ∪ 目标节点名册」（`ContributorRoster`）；是否采用列 §6-2 |
+| 2 | **单成员圈子 = 作者自审**（轨道 B 初始成员 = {作者}，**2026-10-02 已定**） | 内容自治在该情形下无制衡 | 已定取舍：`m=1 ⇒ GovernorSeats=1 ⇒ Decidable=true`（恒可判定）、无名册快照、零额外取数；条目治理仍归 `#27`。回退方案 = 初始成员改为「作者 ∪ 目标节点名册」，但 `m=11 ⇒ k=3` 且新圈子零 `msg` 事件 ⇒ `Decidable=false`，**P6 若要改须先解决该不可判定态** |
 | 3 | **票权扩载体 → `#58` 小节点豁免面收窄** | 小节点失去「名册 < 10」豁免 | P6 实现前实测；回退方案 = 两套票池解耦（内容自治用全载体池、目录准入仍用原三载体池）——用户已选「不采解耦」，故回退须重新确认 |
 | 4 | **新旧节点混跑期 `circle.v1` 被拒** | 白名单 fail-closed：旧节点收新类型 → 400 `event_type_unknown`（取证 9） | 新事件**只能在双端升级后启用**；P6 交付物须含「先升节点、后开事件」的发布次序 |
 | 5 | 跨实现席位派生不同解 | 融合后治理视图漂移，破 #70 §6 判据 5 | P6 补 `vectors/v1/seats.json`（§2.3） |
-| 6 | 保底：`course` 质量门槛口径不易定 | 门槛失真致刷榜或误排除 | `CourseMinLessons = 3` 列为待评审项（§6-4） |
+| 6 | 保底：容器质量门槛口径不易定 | 门槛失真致刷榜或误排除 | **已定**（§6 决策 5/6）：容器一律「达标子项数」口径（`LessonMinItems = 1` / `CourseMinLessons = 3`），且课程与其达标课时**合并计 1**。P6 实现后须实测刷榜面与误排除面 |
+| 7 | **容器门槛的取数成本**：需顺 `segments` 反查子项再判达标 | `ContributorRoster` 取数变重（现只查 `items` 三载体，`contributor.go:90-164`） | P6 实现时评估批量查询（照 `ListArticles` / `ListQuizzes` / `ListMediaDurations` 既有批量体例）；本地条目量 1e3 量级，预期可接受 |
 
 ## 5. 追溯
 
@@ -164,9 +168,9 @@ CREATE TABLE IF NOT EXISTS circle_assignments(
 
 **与上游的一致性**：`#69 §2.2` 判定「融合治理零实现」→ 本册给出提案；`#69 §2.3` 判定「票权口径部分冲突」→ 本册 §2.6 扩载体；`#70 §4` 六问 → 本册 §2.1–§2.6 逐条回答。
 
-## 6. 待评审决策点
+## 6. 决策点（**8 项已全部拍板**，2026-10-02）
 
-已定（用户 2026-10-02 拍板）：
+第一轮（范围级）：
 
 | # | 决策 | 取 |
 |---|---|---|
@@ -175,14 +179,16 @@ CREATE TABLE IF NOT EXISTS circle_assignments(
 | 3 | 票权口径 | **扩到全部载体** |
 | 4 | 数据模型档位 | **最小新增** |
 
-仍待定（P6 实现前须定，本册只登记）：
+第二轮（口径级，2026-10-02 二次拍板；**本册 §2.6 / §3 / §4 已按此定稿**）：
 
-| # | 待定项 | 备选 |
-|---|---|---|
-| 1 | `lesson` / `course` 质量门槛常量取值 | 提案 200 / 3；可调 |
-| 2 | 新圈子初始成员是否加目标节点名册 | 仅 {作者} vs {作者} ∪ 名册 |
-| 3 | 课程与课时的贡献是否合并计 1 条 | 合并计 1 vs 各自独立计 |
-| 4 | `circle.v1` 是否拆成 `assign` / `form` 两个类型 | 单类型双 action vs 两类型 |
+| # | 决策 | 取 | 依据 |
+|---|---|---|---|
+| 5 | `lesson` / `course` 质量门槛口径 | **「达标子项数」口径**：`LessonMinItems = 1`（含 ≥1 个达标子项）/ `CourseMinLessons = 3`（含 ≥3 个达标课时）；**废弃** `LessonMinRunes` | 课时 `segments` 只存子项 id、**无自有正文** ⇒ rune 口径不可测（§2.6 取证） |
+| 6 | 新圈子初始成员 | **仅 {作者}** | `m=1 ⇒ k=1 ⇒ Decidable=true`；加到名册则 `m=11 ⇒ k=3` 且零 `msg` ⇒ `Decidable=false`（§4 风险 2） |
+| 7 | 课程与达标课时的贡献计数 | **合并计 1**（课程计 1；其达标课时不再计；仅无所属课程课时独立计 1） | 防「一门课 N 课时 = N+1 票」刷榜；父课程靠 `item_id` 前缀零 schema 解析 |
+| 8 | `circle.v1` 形态 | **单类型双 `action`**（`assign` / `form`） | 对齐 `group.v1`（`msg`/`roster`/`roster_v2`）与 `govern.v1`（`create`/`vote`/`directory_add`）既有体例，白名单只加一条 |
+
+**状态**：本册**待评审**（P4 设计轨）；一经评审通过，P5 方可开工（`#70 §1` 次序硬约束）。P6 实现轨的前置清单 = §3 数据模型变更清单 + 风险 3/7 的实测项 + `vectors/v1/seats.json`。
 
 ## 7. 不做
 
