@@ -1,5 +1,6 @@
 // 节点壳入口：装配真实 ServerAdapters + 注册 CLI 子命令。
 import { pathToFileURL } from "node:url";
+import { dirname } from "node:path";
 import type { CliCommand, ServerAdapters } from "@base/core-ts";
 import { VERSION } from "./version";
 import { openDb } from "./db";
@@ -43,8 +44,14 @@ export async function main(): Promise<void> {
   const serveCmd: CliCommand = {
     name: "serve",
     async run(): Promise<number> {
-      const db = openDb(process.env.BASE_DB ?? "base.db");
-      const listener = await startServer(adapters, db, parseAddr(process.env.BASE_ADDR ?? ":8080"));
+      const dbPath = process.env.BASE_DB ?? "base.db";
+      const db = openDb(dbPath);
+      const listener = await startServer(adapters, db, {
+        ...parseAddr(process.env.BASE_ADDR ?? ":8080"),
+        dataDir: dirname(dbPath),
+        issuer: process.env.BASE_ISSUER || "base-node-1",
+        signKeyHex: process.env.BASE_SIGN_KEY ?? "",
+      });
       process.stdout.write(`listening ${listener.addr()}\n`);
       // 服务由信号驱动关停（lifecycle），此处不返回，保持进程存活。
       await new Promise<void>(() => {});

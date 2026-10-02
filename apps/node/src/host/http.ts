@@ -182,10 +182,25 @@ function toServerRequest(req: http.IncomingMessage, body: Uint8Array): ServerReq
   };
 }
 
+// withCommon 语义（server.go:167-190）：每个响应都带 CORS 与 nosniff 头。
+const COMMON_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, HEAD, POST, PUT, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Authorization, X-Base-Id, X-Base-Alg, X-Base-Ts, X-Base-Nonce, X-Base-Sig",
+  "X-Content-Type-Options": "nosniff",
+};
+
 function writeResponse(res: http.ServerResponse, resp: ServerResponse): void {
   const body = resp.body ?? new Uint8Array(0);
-  const headers: Record<string, string> = { ...(resp.headers ?? {}) };
-  headers["Content-Length"] = String(body.byteLength);
+  const headers: Record<string, string> = { ...COMMON_HEADERS, ...(resp.headers ?? {}) };
+  if (resp.status === 304 || resp.status === 204) {
+    // Go net/http 对 304/204 省略 Content-Length（handler 显式设置的也去掉）。
+    delete headers["Content-Length"];
+  } else if (headers["Content-Length"] === undefined) {
+    // 未显式设置时才按 body 字节数补齐；HEAD /v1/blob 需保留「明文大小」的 Content-Length。
+    headers["Content-Length"] = String(body.byteLength);
+  }
   res.writeHead(resp.status, headers);
   res.end(Buffer.from(body));
 }
@@ -201,6 +216,11 @@ export function createHttpServerAdapter(): HttpServerAdapter {
     async listen(opts): Promise<Listener> {
       const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
         void (async () => {
+          // withCommon 短路：OPTIONS 无论路径是否命中路由都返回 204 无 body。
+          if ((req.method ?? "GET") === "OPTIONS") {
+            writeResponse(res, { status: 204 });
+            return;
+          }
           const body = await readBody(req);
           const request = toServerRequest(req, body);
           const matched = router.match(request.method, request.path);
