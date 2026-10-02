@@ -1,6 +1,7 @@
 // 治理派生与公开读面共用的只读逻辑：逐行对齐 internal/store 的 contributor.go /
 // directory.go / govern.go 的读路径，以及 internal/httpapi/identity.go 的 ipLimiter 令牌桶。
 // 只做 `db.select` 读，不写库、不进事务（对齐 Go 的「派生值不落表」口径）。
+import { sha256Hex, utf8 } from "@base/protocol-ts";
 import type { Db } from "../db";
 import { ENC_PREFIX, decText } from "../host/aesgcm";
 
@@ -22,6 +23,16 @@ const DIRECTORY_SMALL_NODE_ROSTER_MAX = 10;
 // —— 目录（directory.go:24-33） ——
 const DIRECTORY_STATE_APPROVED = "approved";
 const META_DIRECTORY_VERSION = "directory_version";
+
+// —— 目录 kind 三值 / 词条键上限（directory.go:17-30） ——
+export const DIRECTORY_KIND_CATEGORY = "category";
+export const DIRECTORY_KIND_INSTRUCTOR = "instructor";
+export const DIRECTORY_KIND_TAG = "tag";
+export const TERM_KEY_MAX_RUNES = 64;
+
+// —— 校验常量（httpapi/govern.go:28-29、submit.go:36） ——
+const MAX_PROPOSAL_REASON_RUNES = 200;
+export const MAX_TITLE_RUNES = 200;
 
 // —— 治理面 IP 限速常量（httpapi/govern.go:19-26） ——
 export const GOVERN_PER_MINUTE_PER_IP = 60;
@@ -62,6 +73,26 @@ export function isHexN(s: string, n: number): boolean {
 /** 对齐 isHexNonEmptyEven（identity.go:58-64）：非空、偶数长度、全十六进制。 */
 export function isHexNonEmptyEven(s: string): boolean {
   return s.length > 0 && s.length % 2 === 0 && /^[0-9a-fA-F]*$/.test(s);
+}
+
+/** 对齐 onlyKeys（govern_event.go:29-36）：m 的键是否全在允许集内。 */
+export function onlyKeys(m: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  for (const k of Object.keys(m)) {
+    if (!allowed.has(k)) return false;
+  }
+  return true;
+}
+
+/**
+ * 对齐 jsonInt（group.go:304-318）：把 body 里的数字读成 int64。
+ * Go 有 float64 与 json.Number 两分支；Node 的 JSON.parse 只产出 number（float64 等价），
+ * 故只需 number 分支：非整数、或越 int64 范围即 false。
+ */
+export function jsonInt(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isInteger(v)) return null;
+  const b = BigInt(v);
+  if (b < INT64_MIN || b > INT64_MAX) return null;
+  return Number(b);
 }
 
 /** 对齐 unicode.IsSpace 的 White_Space 口径（不是 JS 的 `\s`）。 */
@@ -520,4 +551,94 @@ function stripControlChars(s: string): string {
 /** CleanDisplayName（directory.go:63-65）：stripControl(collapseSpaces(TrimSpace(raw)))，不做全角/大小写折叠。 */
 export function cleanDisplayName(raw: string): string {
   return stripControlChars(collapseGoSpaces(trimGoSpace(raw)));
+}
+
+/** foldFullWidthASCII（directory.go:69-83）：全角可见字符 U+FF01..U+FF5E 折半角，全角空格 U+3000 折半角空格。 */
+function foldFullWidthASCII(s: string): string {
+  let out = "";
+  for (const ch of s) {
+    const r = ch.codePointAt(0) as number;
+    if (r >= 0xff01 && r <= 0xff5e) out += String.fromCodePoint(r - 0xfee0);
+    else if (r === 0x3000) out += " ";
+    else out += ch;
+  }
+  return out;
+}
+
+/** foldASCIILower（directory.go:105-115）：只折 ASCII 大写字母，非 ASCII 不动。 */
+function foldASCIILower(s: string): string {
+  let out = "";
+  for (const ch of s) {
+    const r = ch.codePointAt(0) as number;
+    out += r >= 0x41 && r <= 0x5a ? String.fromCodePoint(r + 0x20) : ch;
+  }
+  return out;
+}
+
+/**
+ * NormalizeTermKey（directory.go:50-60）：TrimSpace → 全角折半角 → 空白折叠 → ASCII 小写 → 剥离控制字符
+ * → rune 长度 1..64。非法返回 null。
+ */
+export function normalizeTermKey(raw: string): string | null {
+  let s = foldFullWidthASCII(trimGoSpace(raw));
+  s = collapseGoSpaces(s);
+  s = foldASCIILower(s);
+  s = stripControlChars(s);
+  const n = [...s].length;
+  if (n < 1 || n > TERM_KEY_MAX_RUNES) return null;
+  return s;
+}
+
+/** DirectoryPayloadHash（directory.go:132-134）：sha256("dir\0"+kind+"\0"+termKey) 的 64 hex。 */
+export function directoryPayloadHash(kind: string, termKey: string): string {
+  return sha256Hex(utf8("dir\x00" + kind + "\x00" + termKey));
+}
+
+/** DirectoryProposalItemID（directory.go:138-140）：dir/<kind>/<hash16>。 */
+export function directoryProposalItemId(kind: string, termKey: string): string {
+  return "dir/" + kind + "/" + directoryPayloadHash(kind, termKey).slice(0, 16);
+}
+
+/** validDirectoryKind（govern.go:42-48）：kind ∈ 三值。 */
+export function validDirectoryKind(k: string): boolean {
+  return (
+    k === DIRECTORY_KIND_CATEGORY || k === DIRECTORY_KIND_INSTRUCTOR || k === DIRECTORY_KIND_TAG
+  );
+}
+
+/** hasControlChars（govern.go:51-58）：含 U+0000–U+001F 或 U+007F。 */
+export function hasControlChars(s: string): boolean {
+  for (const ch of s) {
+    const r = ch.codePointAt(0) as number;
+    if (r <= 0x1f || r === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
+ * validProposalReason（govern.go:62-69）：去首尾空白后 1..200 rune 且不含控制字符。
+ * 返回去空白后的存储值；ok=false 表示「已给定但不合规」。
+ */
+export function validProposalReason(raw: string): { value: string; ok: boolean } {
+  const s = trimGoSpace(raw);
+  const n = [...s].length;
+  if (n < 1 || n > MAX_PROPOSAL_REASON_RUNES) return { value: "", ok: false };
+  return { value: s, ok: !hasControlChars(s) };
+}
+
+/**
+ * validItemTitle（submit.go:126-137）：去首尾空白后 1..200 rune，且**原串**不含控制字符
+ * （控制字符判定走原串，与 reason 的「trim 后」口径不同，逐字照抄）。
+ */
+export function validItemTitle(title: string): boolean {
+  const n = [...trimGoSpace(title)].length;
+  if (n < 1 || n > MAX_TITLE_RUNES) return false;
+  return !hasControlChars(title);
+}
+
+/** parseProposalID（govern.go:72-78）：十进制正整数（ParseInt64 且 >0）。 */
+export function parseProposalId(raw: string): number | null {
+  const n = parseGoInt64(raw);
+  if (n === null || n <= 0) return null;
+  return n;
 }

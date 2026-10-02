@@ -23,6 +23,13 @@ import { requireAuth } from "./routes/authmw";
 import { meHandler } from "./routes/me";
 import { profilePutHandler } from "./routes/profile";
 import {
+  EVENT_BURST_PER_ID,
+  EVENT_BURST_PER_IP,
+  EVENT_PER_MINUTE_PER_ID,
+  EVENT_PER_MINUTE_PER_IP,
+  eventPostHandler,
+} from "./routes/event";
+import {
   articlePageHandler,
   governancePageHandler,
   indexPageHandler,
@@ -56,6 +63,9 @@ export async function startServer(
   // escrow 读取的同 IP 令牌桶：对齐 server.go:54 的 newIPLimiter(10, 10)（**独立实例**，
   // 与治理面的 governLimiter 不是同一个桶）。
   const escrowLimiter = new IpLimiter(10, 10);
+  // 事件写面限速（对齐 httpapi/event.go:59 的双维度判定）：身份维度与 IP 维度各一把**独立**桶。
+  const eventLimiterByID = new IpLimiter(EVENT_PER_MINUTE_PER_ID, EVENT_BURST_PER_ID);
+  const eventLimiterByIP = new IpLimiter(EVENT_PER_MINUTE_PER_IP, EVENT_BURST_PER_IP);
 
   adapters.http.handle("GET /healthz", healthzHandler);
   adapters.http.handle("GET /v1/catalog", catalogHandler(db));
@@ -82,6 +92,20 @@ export async function startServer(
   );
   adapters.http.handle("GET /v1/me", requireAuth({ db }, meHandler({ db })));
   adapters.http.handle("POST /v1/profile", requireAuth({ db }, profilePutHandler({ db })));
+  // 事件写面（批 B2a）：信封解码 + comment.v1 / dm.v1 / progress.v1 分流。
+  adapters.http.handle(
+    "POST /v1/event",
+    requireAuth(
+      { db },
+      eventPostHandler({
+        db,
+        dataDir: dataDir ?? "",
+        storeKey,
+        byID: eventLimiterByID,
+        byIP: eventLimiterByIP,
+      }),
+    ),
+  );
   // 门户 HTML 页面（批 A4）：服务端直读库渲染，与 Go html/template 逐字节一致。
   const portalDeps = {
     db,

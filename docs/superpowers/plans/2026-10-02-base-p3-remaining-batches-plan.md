@@ -2,7 +2,7 @@
 
 - 日期：2026-10-02
 - 上游：路线计划 `#70`（§1 P3 行、§5 节点职能清单、§6 P5 等价判据）；首批计划 `#73`（§8 不做「P3 余下批次」、§9.2 执行期发现）；接口边界冻结面 `#72`
-- 状态：**批 A 已收口、批 B1 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7；B2–B4 未开工；批 C–E 未开工）
+- 状态：**批 A 已收口、批 B1–B2 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8；B3–B4 未开工；批 C–E 未开工）
 - 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）与**批 B**（§10，切 B1–B4）；批 C–E 只登记边界（§8）
 - 性质：任务级计划。契约一律回册子，本册不承载契约。
 
@@ -24,7 +24,7 @@
 | 批 | 范围 | 对应判据 | 状态 |
 |---|---|---|---|
 | **A** | **纯匿名公开读 JSON 面 12 条 + 门户页 3 个** | **判据 2**（字节级） | **已收口**（§9） |
-| B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **B1 已收口**（§10，实况 §10.7）；B2–B4 未开工 |
+| B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **B1–B2 已收口**（§10，实况 §10.7 / §10.8）；B3–B4 未开工 |
 | C | 治理派生面：`proposal` POST / `proposal/{id}/vote` / `proposal` GET | 判据 5（含 `#65` 小节点豁免） | 未开工 |
 | D | 对端同步·反熵：`inventory` / `sync` / `fetch` / `scrub` / `event-sync` + CLI `peer-sync` / `scrub` | 判据 4（结果集一致 + 只增不减） | 未开工 |
 | E | `importer` 容器 / 题库 / 视频派生 + CLI `import-video` | 判据 6（pack_id 与 merkle_root 同一） | 未开工 |
@@ -138,7 +138,7 @@
 
 ## 8. 后续批次边界（只登记，不展开）
 
-- **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。**已切 4 子批 B1–B4，详列见 §10**（`govern.v1` 分支已定随 event 一起做，不留批 C）。
+- **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。**已切 4 子批 B1–B4，详列见 §10**（`govern.v1` 分支已定随 event 一起做，不留批 C；B1–B2 已收口）。
 - **批 C**：`govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`；验收 = 判据 5。
 - **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。
 - **批 E**：`internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = 判据 6。
@@ -202,7 +202,7 @@
 
 ## 10. 批 B：认证读写面（判据 3）
 
-**状态：B1 已收口（实况见 §10.7），B2–B4 未开工。**
+**状态：B1–B2 已收口（实况见 §10.7 / §10.8），B3–B4 未开工。**
 
 **开工前决策（2026-10-02，用户拍板）**：
 
@@ -314,3 +314,54 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 4. **`rawQueryOf` 回构限制**（沿用 §10.0）：本壳 `ServerRequest` 未暴露 `RawQuery` 原文，B1 四条路由均无 query 故恒为 `""`；**B4 带 query 的签名读路由必须复核**。
 
 **待决点（登记）**：`decodeStrict` 未做 Go struct 键名 `EqualFold` 匹配（Go 精确优先、其次大小写不敏感）——B1 各路由结果不受影响，B2/B4 接 event/group body 时需复核。
+
+### 10.8 执行实况（B2）
+
+**状态：B2 已收口**（B3–B4 未开工）。
+
+**内部切法**：B2 再切 B2a（`event` 骨架 + `comment.v1` / `dm.v1` / `progress.v1`）与 B2b（`govern.v1` body 校验 + 投影 + settle），**共用一个提交**（不制造中间破损态）。
+
+**产出（11 文件 / +2784 −13）**：
+- `routes/event.ts`（282 行）：`eventTypeRegistry` 5 条 fail-closed 白名单；骨架按 Go `handleEventPost`（`event.go:44-81`）顺序——decode → registry → `parseGoInt64(created_at)` + `isHexN(event_id,16)` + `createdAt>0` → 限速**双维度按 Go 的 `||` 短路序** → switch；`putBareEvent`（`event.go:84-98`，`len(body)==0 → "{}"`）；`case "comment.v1"` 走 `handleCommentEvent`（parse → `verifyEventSig` → `isRevokedEvent` → `hasBlob`/`putBlob` → canonicalize **减化四键** → `putEvent` → 回读 `received_at`）。
+- `routes/progress.ts`（106 行）：`progressKeys` / `dayRe` / `parseProgressBody` / `handleProgressEvent`（`progress.go:74`）+ `putProgressProjection`（`checkin_days` 先写且恒 insert-or-ignore）。
+- `routes/dm.ts` 扩 dm event（185 行，`dm.go:59`）。
+- `routes/governEvent.ts`（235 行）：`GOVERN_PROPOSAL_KEYS`(13) / `GOVERN_VOTE_KEYS`(3) / `validProposalAction` / `anyString` / `parseGovernBody` / `governEventHandler`（`govern_event.go:158`：parse → verify → 投影（`directory_add` 时 `title=display_name` / `body=term_key`）→ `putEvent` → `governRoster` → `settleGovernProposal` → 回读 → 200 三键，键序照 Go map 字典序）。
+- `store/governProjection.ts`（578 行）：`projectGovernProposal`（BEGIN + 提案人自投第 1 票）/ `projectGovernVote`（**照 Go 不开事务**）/ `governPreconditionTx` / `governApplyTx` / `editItemTx` / `editTagItemTx` / `replaceTagLinksTx` / `materializeTagSegments` / `segmentsContentHash` / `settleGovernProposal` / `freeRemoveEligible`，逐行同构 `store/govern_projection.go` + `store/govern.go`。
+- `store/events.ts`（195 行）：`putEvent`（`ON CONFLICT DO UPDATE` **不含 `received_at`**）/ `getEventByID` / `isRevokedEvent` / `hasCommentEvent` / `putCommentEvent` 等。
+- `routes/derived.ts`（644 行）新增：`normalizeTermKey` / `foldFullWidthASCII` / `cleanDisplayName` / `stripControlChars` / `collapseGoSpaces` / `isGoSpace`（`unicode.IsSpace` 口径）/ `hasControlChars` / `validDirectoryKind` / `directoryPayloadHash` / `directoryProposalItemId` / `directoryKindOfItemId` / `validProposalReason` / `validItemTitle` / `parseProposalId` / `jsonInt` / `onlyKeys` / `isHexN` / `parseGoInt64` / `parseGoInt` / `contributorRoster` 系 / `governRoster`。
+- `routes/decode.ts`（279 行）扩：保留数字**原始字面量**（`json.Number` 口径）+ `NUM_FULL_RE` 放行**字符串形态** `created_at`。
+- `serve.ts`：装配 `POST /v1/event`（`requireAuth` + ID / IP 两把**独立**桶，常量对齐 `event.go`）。
+- 测试：新增 `event.test.ts`（22 用例）/ `governEvent.test.ts`（17 用例，真签真验）。
+
+#### 10.8.1 门禁 G1–G6（逐条通过）
+
+| 门 | 结果 | 证据 |
+|---|---|---|
+| G1 | 通过 | `go build ./...` / `go vet ./...` / `go test ./...` 全绿（本批不动 Go，作基线回归） |
+| G2 | 通过 | `apps/node` `npx tsc --noEmit` **0 错误** |
+| G3 | 通过 | `apps/node` `npx vitest run`：**25 文件 / 207 用例全绿**（B1 收口时 23/168 ⇒ B2 净增 **2 文件 / 39 用例**） |
+| G4 | 通过 | **字节级对拍 0 分歧（61 token，见 §10.8.2）**——除 D 组 `group.v1` 既定缺口 1 条外，60 条 `status` / 4 对照头 / body 字节全等；阶段 4 DB 快照 13 张表逐字节相同 |
+| G5 | 通过 | `git diff --stat -- internal/` **无输出**；`packages/protocol-ts/**`、`#72` 冻结的 `Adapters` / `ServerAdapters` 未动 |
+| G6 | 通过 | 只 `add` 本批 11 个文件；`.gitignore` / `internal/httpapi/web.go` / `based-linux-amd64` / `.tmp/`（含 G4 取证件）均未入暂存 |
+
+#### 10.8.2 G4 字节级对拍实况（B2）
+
+**方法**（沿用 §10.7.2，差异处标注）：Node `openDb` + `migrate()` 建全量 schema → 插种子（`identities` 2 行 + `items`/`articles`（`article/x`，author = 身份 A）+ `course/c1`（author = 身份 A、无 `seq>=1` 课时，供免票选）+ store 密钥文件）→ **复制两份**（`go/` / `node/`）→ 两侧同一份 `tokens.json` **逐字节回放** → 比对 `status` + 4 对照头 + body 字节（**不比 `Content-Length`**）。取证件在 `e:\code\.tmp\g4\`（`tokens.json` / `goprobe/main.go` / `node-probe.test.ts` / `compare.mjs` / `REPORT.md`），**未入提交**。
+
+**两侧隔离**：A / B / D 组**逐条新建服务器实例**（令牌桶重置，以真实覆盖拒绝矩阵）；C 组**同一实例连发 12 条**以触发限速。两侧初始数据逐字节同源。
+
+**结果：61 token，除 D 组既定缺口外 0 分歧。** 归一化 1 类：body 内 `received_at`（两侧各为自身墙钟，24 条经归一化后相等）；DB 快照内 `events.received_at` / `govern_proposals.executed_at,voided_at` / `identities.last_seen_at` / `directory_terms.created_at,updated_at` / `checkin_days.created_at` 同口径置 `<ts>`。覆盖：
+- A 组 14 条：**13 条直角** —— `comment.v1`（含回复 / 重复发送）/ `dm.v1` / `progress.v1` / `govern.v1`（proposal 首投 / 同 `proposal_id` 冲突 `conflict:true` / vote / 重复投票 / `directory_add` / remove 免票选）/ **`created_at` 为字符串形态** / **`event_id` 大写 hex**；**1 条顶层 `null` body**（Go 顶层 `null` 为 no-op ⇒ 两侧同 400 `event_param_invalid`）。
+- B 拒绝矩阵 34 条：未知类型 / `created_at` float·带空格字符串·0·负数 / `event_id` 长度不足 / sig 非 hex / 身份未落库 403 / 签名错 / 各类型未知键·缺键·越界（`comment` target 非 ASCII·空·text 超限 / `dm` to 非法·cipher 空 / `progress` position 负数·float·done 非 bool·day 非法 / `govern` verb 非法·`content_version` 缺失·float·`choice` 17 字节·含非 ASCII / `directory_add` 缺键·带 `title`）/ **信封尾随垃圾**（Go 只解首值 ⇒ 两侧同 200）。
+- C 限速 12 条：身份 B 连发，**两侧切点一致**（前 10 条 200、第 11/12 条 429）。
+- D 已知缺口 1 条：`group.v1`（单列，**不计入分母**，见执行期发现 1）。
+
+**阶段 4 DB 状态对拍**：`identities` / `events` / `blobs` / `items` / `articles` / `segments` / `progress` / `checkin_days` / `govern_proposals` / `govern_votes` / `directory_terms` / `comment_tombstone` / `meta` 共 13 张表，固定列序、主键升序、`|` 连接 ⇒ **剔 D 组缺口 1 行 artifact 后 55 行逐字节相同**（`dbSnapshot diffs=0`）；两侧 blob 文件均存在且非零大小。
+
+**执行期发现**（登记）：
+1. **`group.v1` 临时缺口（B2 唯一未闭合的判据 3 项，归 B4）**：Node `eventTypeRegistry` 已含 `group.v1`，但 `event.ts` 无分支 ⇒ 落 `putBareEvent`：非法 body 时 Go 走 `handleGroupEvent` → **400 `event_param_invalid`**，Node → **200** 且向 `events` 落 1 行（Go 因 400 未写）。**故 B4 收口前，判据 3 不得对 `group.v1` 宣称等价**；B4 须同时补「合法 `group.v1`」的正向对拍。
+2. **IP 维度限速在取证件中同口径退化**：`ServerRequest` 无 `RemoteAddr` ⇒ Node 侧 `clientIP` 恒为单桶键；Go 侧取证件经进程内分发亦无 `RemoteAddr` ⇒ 两侧同退化，故 IP 桶等价性在**单桶口径**下自证（ID 维度仍逐身份独立，由 C 组覆盖切点）。
+3. **`received_at` 回读是写面 body 的必然差异源**：两侧各自墙钟，唯有用「两侧各自回读自己写入的值」比较才等价（A 组 24 条即此口径）。
+4. **删除死代码 `encodeTagLinks`**：`store/governProjection.ts` 曾导出该函数，但 Node 侧尚无治理写面 `POST /v1/proposal`，**无任何调用方**（Go 侧同函数属后续批次）⇒ 本批删除，避免冗余。
+5. **`anyString` 数字分支的不可见发散**（`anyString` 取 `String(Math.trunc(v))`，Go 取 `strconv.FormatInt(int64(t),10)`）：仅在超出 int64 范围时两侧字符串不同，而下游 `parseProposalId` / `jsonInt` **同拒** ⇒ 无可见发散，不处置。
+6. **`decode.ts` 的 `NUM_FULL_RE` 假设已由 G4 证伪风险**：`created_at` 含 `.` / `e` 时 Go `json.Number.Int64()` 与 Node `parseGoInt64` **都先拒**（400 `event_param_invalid`），故该正则只影响**字符串形态** `created_at`；B 组 `created-at-float` / `created-at-string-space` 与 A 组 `created-at-as-string` 三向实测两侧一致，**§10.7 登记的第 5 条待决点至此关闭**（`EqualFold` 匹配仍待 B4 复核）。

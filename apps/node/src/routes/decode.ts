@@ -11,8 +11,15 @@ import type { ServerRequest, ServerResponse } from "@base/core-ts";
 import { MAX_JSON_BODY } from "./authmw";
 import { jsonResponse } from "./json";
 
-/** 叶子字段类型：string / int64（Go 十进制整数字面量）/ raw（json.RawMessage，只判存在性）。 */
-export type StrictField = "string" | "int64" | "raw" | StrictSpec;
+/**
+ * 叶子字段类型：
+ * - string：Go string 字段；
+ * - int64：Go int64 字段（须十进制整数字面量且不越界）；
+ * - raw：json.RawMessage 的「只判存在性」用法，出现即 true（含 null）；
+ * - number：json.Number 字段，返回**原始字面量文本**（裸数字保留字面，字符串须过 JSON 数字文法）；
+ * - rawText：json.RawMessage 字段，返回该值在请求体里的**原始字节切片**（不含两侧空白）。
+ */
+export type StrictField = "string" | "int64" | "raw" | "number" | "rawText" | StrictSpec;
 
 /** 对象形状：键 → 字段规格；嵌套对象即再给一层 StrictSpec。 */
 export interface StrictSpec {
@@ -38,12 +45,14 @@ type JNode =
   | { t: "num"; raw: string }
   | { t: "str"; v: string }
   | { t: "arr"; v: JNode[] }
-  | { t: "obj"; v: [string, JNode][] };
+  | { t: "obj"; v: [string, JNode, string][] };
 
 const ERR = Symbol("decode_err");
 const WS = new Set([" ", "\t", "\n", "\r"]);
 // JSON number 文法：-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?
 const NUM_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/;
+// json.Number 从**字符串**取值时的校验：Go 的 isValidNumber 即完整 JSON 数字文法（非仅字符集）。
+const NUM_FULL_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
 const INT_RE = /^-?(?:0|[1-9][0-9]*)$/;
 const INT64_MIN = -(1n << 63n);
 const INT64_MAX = (1n << 63n) - 1n;
@@ -109,7 +118,7 @@ function parseValue(p: Parser): JNode | null {
 
 function parseObject(p: Parser): JNode | null {
   p.i++; // {
-  const entries: [string, JNode][] = [];
+  const entries: [string, JNode, string][] = [];
   skipWs(p);
   if (p.s[p.i] === "}") {
     p.i++;
@@ -123,9 +132,11 @@ function parseObject(p: Parser): JNode | null {
     if (p.s[p.i] !== ":") return null;
     p.i++;
     skipWs(p);
+    const start = p.i; // 值首字符（skipWs 之后）；供 RawMessage 的原始切片用
     const val = parseValue(p);
     if (val === null) return null;
-    entries.push([key, val]);
+    const raw = p.s.slice(start, p.i); // 不含两侧空白，保留内部空白与原始转义
+    entries.push([key, val, raw]);
     skipWs(p);
     const c = p.s[p.i];
     if (c === ",") {
@@ -190,12 +201,15 @@ function defaultOf(spec: StrictField): unknown {
   if (spec === "string") return "";
   if (spec === "int64") return 0;
   if (spec === "raw") return false; // json.RawMessage 未出现 → 空
+  if (spec === "number") return ""; // json.Number 零值即空串
+  if (spec === "rawText") return ""; // json.RawMessage 未出现 → 空切片
   return defaultsOf(spec);
 }
 
 /** 按 spec 解码单个字段：不匹配即 ERR。重复键按源码顺序逐个校验，后者覆盖前者（与 Go 一致）。 */
-function decodeField(spec: StrictField, node: JNode): unknown {
+function decodeField(spec: StrictField, node: JNode, raw: string): unknown {
   if (spec === "raw") return true; // 出现即非空（含 null）
+  if (spec === "rawText") return raw; // json.RawMessage：原样返回值的原始字节切片（含 null 字面量）
   if (node.t === "null") return defaultOf(spec); // null 对其它字段是 no-op
   if (spec === "string") return node.t === "str" ? node.v : ERR;
   if (spec === "int64") {
@@ -203,18 +217,42 @@ function decodeField(spec: StrictField, node: JNode): unknown {
     const n = goInt64(node.raw);
     return n === null ? ERR : n;
   }
+  if (spec === "number") {
+    // json.Number：裸数字保留字面；字符串须过 JSON 数字文法（否则 bad_json）。
+    if (node.t === "num") return node.raw;
+    if (node.t === "str") return NUM_FULL_RE.test(node.v) ? node.v : ERR;
+    return ERR;
+  }
   if (node.t !== "obj") return ERR;
   return decodeObject(spec, node);
+}
+
+/**
+ * 键名匹配：精确优先，其次大小写不敏感（Go struct 字段匹配用 EqualFold）。
+ * 同名折叠命中多个字段即视为歧义、不匹配（Go 亦然）；未命中即忽略（未知字段）。
+ */
+function matchField(spec: StrictSpec, key: string): string | null {
+  if (Object.prototype.hasOwnProperty.call(spec, key)) return key;
+  const lower = key.toLowerCase();
+  let found: string | null = null;
+  for (const k of Object.keys(spec)) {
+    if (k.toLowerCase() === lower) {
+      if (found !== null) return null;
+      found = k;
+    }
+  }
+  return found;
 }
 
 function decodeObject(spec: StrictSpec, node: JNode): Record<string, unknown> | typeof ERR {
   if (node.t !== "obj") return ERR;
   const out = defaultsOf(spec);
-  for (const [key, val] of node.v) {
-    if (!Object.prototype.hasOwnProperty.call(spec, key)) continue; // 未知字段忽略
-    const d = decodeField(spec[key], val);
+  for (const [key, val, raw] of node.v) {
+    const field = matchField(spec, key);
+    if (field === null) continue; // 未知字段忽略
+    const d = decodeField(spec[field], val, raw);
     if (d === ERR) return ERR;
-    out[key] = d;
+    out[field] = d;
   }
   return out;
 }
