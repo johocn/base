@@ -2,7 +2,7 @@
 
 - 日期：2026-10-03
 - 上游：总纲 `#69`（§0.13 迁移节奏 = 并行双跑 → 行为等价后 Go 节点退役）；路线计划 `#70`（§1 P5 行、§6 六条等价判据、§8 风险）；P4 设计册 `#74`（**2026-10-03 已定稿，P5 开工闸门已解除**）；P3 各批 = 计划 `#75`（批 A–G 已全收口，判据 2–7 均已各自对拍过）
-- 状态：**待执行**
+- 状态：**执行中**（P5-1 / P5-2 已收口；P5-3 起待执行）
 - 性质：任务级计划，**不承载契约**。契约一律回册子。
 
 ## 0. 一句话
@@ -129,4 +129,48 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 
 ## 8. 执行实况
 
-（待执行；执行后回填各 Task 落地情况、G1–G8 原始结论、§7 追溯表逐条「过/不过」与执行期发现。）
+### Task P5-1　Node 可运行化 —— **已收口**
+
+- `apps/node/package.json` 增 `build` / `start` 两个 script；`esbuild@0.20.2` 提升为显式 `devDependencies`
+  （同步 `package-lock.json` 的 `apps/node` 条目）；产物 `apps/node/dist/based-node.mjs`
+  （`--bundle --platform=node --format=esm --target=node20`，`node:*` 与 `node-sqlite3-wasm` 列 external）。
+- `dist/` 已被根 `.gitignore:3` 覆盖（逐字核过，产物不入提交）。
+- **探针结论（硬门过）**：
+  - `node apps/node/dist/based-node.mjs version` 与 `go run ./cmd/based version` **stdout 逐字一致**；
+  - `serve` 能起：`/healthz` → 200、`/v1/catalog` → 200；`node-sqlite3-wasm` 在 bundle 后定位正常（风险 1 未触发）。
+- 提交：`138e9b8`（已 push）。
+
+### Task P5-2　本机全量对拍回归 —— **已收口（G4 过）**
+
+- **单次全量报告**：`.tmp/g4/P5REPORT.md`（不入版本控制）；原始输出 `.tmp/g4/p5p2-rerun.txt`
+  （批 B/C/D/G/E + 新增边界批 EB 的同一次顺序重跑）；边界批明细 `.tmp/g4/EBREPORT.md`。
+- **批 C / 批 D 旧 DB 差异归零复核（本 Task 指定必做项）**：**两笔均已归零**
+  （批 C 141 行 0 对称差、批 D 27 行 0 对称差）。
+  - 旧记录：`gates.txt:54-57`（批 C 对称差 4 行，`goLines=141 nodeLines=139`）、
+    `prunlog.txt:108-112`（批 D 对称差 3 行：`directory_terms|tag|x`、`meta|directory_seeded`、`meta|directory_version`）。
+  - **根因 = 工装不对称，非 Node 实现缺口**：Go 侧探针走 `store.Open`（`internal/store/store.go:123`，引导段含
+    `schema → migrate → seedDirectoryFromExisting`，`store.go:165` / `directory.go:304`），而 P3 各批 Node 侧探针
+    原用裸 `openHostDb`/`openDb`，跳过了引导段。Node 侧**本就有**生产等价实现
+    （`apps/node/src/store/store.ts:472` `bootstrapStoreDb` / `:488` `openBootstrapDb`，生产 `main.ts:92` 在用）。
+  - **矫正**：4 个 Node 探针改为生产同口径（`jcprobe`/`rg-node`/`nodeprobe` → `openBootstrapDb`；
+    `pnode` → `openHostDb` + `bootstrapStoreDb`）。**未改任何 `apps/node/src/**` 或 `internal/**` 生产代码**。
+- **补未覆盖边界（判据 2）**：新增边界批 **EB**（39 令牌，0 分歧，DB 快照 13 行 0 对称差）：
+  - `GET|HEAD /v1/blob/{blob_id}`：`ETag` / `Cache-Control: public, max-age=31536000, immutable` /
+    `Content-Type: application/octet-stream` / `If-None-Match` 命中 → **304 空体**（不命中、不带引号、列表形态 → 200）/
+    `HasBlob` 双重判定（只有库行无文件 → 404）/ 非法 id → 400 / 不存在 → 404；
+  - `GET /v1/catalog`：`limit` = `1|1000|1001|0|-1|abc|+5|' 5'`；
+    `since` = `version`（短路空）| `version+1` | `version-1` | `abc` | `-1` | `+version` | 空串；`cursor` 到末条；
+  - 匿名读抽样：`/healthz`、`/v1/pubkey`、`/v1/directory`（默认 / version 命中短路 / version 落后 / version 非法）、
+    `/v1/manifest/{pack_id}`（200/404/400）、`/v1/identity/{id}`（200/404）。
+- **工装修正 2 处（均工具不对称，非行为差异）**：
+  1. `ebgoprobe` 补 `Options.Version = "0.1.0"`（生产 `cmd/based/main.go:8` 同值），否则 `/healthz` 版本号 `0.1.0` vs `""`；
+  2. `HEAD` 令牌 body 标 `n/a(HEAD)`：真 server 两侧都丢弃 HEAD 响应体（Go `net/http`、Node `_http_server`），
+     但沙箱里 Go 侧走 `httptest.NewRecorder`，Recorder 不模拟该剥离（与各批不比对 `Content-Length` 同类的工具限制）。
+- **G4 判定：过** —— HTTP 分歧 **0 / 210 令牌**（B 40 + C 63 + D 43 + G 25 + EB 39）；
+  DB 快照集合对称差 **0 行**（C 141 / D 27 / G 3×3 / EB 13 逐批 0）。
+- **批 A 说明**：批 A 的临时取证件已按 P3 计划 `#75 §9.1 G6` 计划内清理删除，其公开读面（24 + 12）结论沿用
+  `#75 §9.2`；本次 EB 批已补上 `#75` 未覆盖的判据 2 边界项并抽样重跑了匿名读 JSON 面（未含门户 HTML 页）。
+
+### Task P5-3 ~ P5-6
+
+（待执行。）
