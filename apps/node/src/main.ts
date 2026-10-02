@@ -11,6 +11,9 @@ import { createLifecycleAdapter } from "./host/lifecycle";
 import { createTlsCertCommand } from "./cli/tls-cert";
 import { createExportCommand } from "./cli/export";
 import { createImportMdCommand } from "./cli/import-md";
+import { createReleaseCommand } from "./cli/release";
+import { createPubkeyCommand } from "./cli/pubkey";
+import { createStoreKeyCommand } from "./cli/store-key";
 import { startServer } from "./serve";
 
 function parseAddr(addr: string): { host: string; port: number } {
@@ -54,6 +57,9 @@ export async function main(): Promise<void> {
   adapters.cli.register(createTlsCertCommand(adapters.tls));
   adapters.cli.register(createImportMdCommand());
   adapters.cli.register(createExportCommand());
+  adapters.cli.register(createReleaseCommand());
+  adapters.cli.register(createPubkeyCommand());
+  adapters.cli.register(createStoreKeyCommand());
 
   const code = await adapters.cli.run(process.argv.slice(2));
   adapters.lifecycle.exit(code);

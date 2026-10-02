@@ -1,7 +1,8 @@
 // CliAdapter：镜像 cmd/based/main.go 的分发（无命令/未知命令 → usage + exit 2）。
 import type { CliCommand, CliHost } from "@base/core-ts";
 
-const USAGE = "usage: based <version|...> [flags]";
+const USAGE =
+  "usage: based <version|import-md|import-video|export|release|serve|pubkey|store-key|tls-cert|peer-sync|scrub> [flags]";
 
 export function createCliHost(): CliHost {
   const commands = new Map<string, CliCommand>();
