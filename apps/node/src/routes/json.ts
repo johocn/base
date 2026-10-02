@@ -7,6 +7,20 @@ const encoder = new TextEncoder();
 const HEX = "0123456789abcdef";
 
 /**
+ * 原样嵌入的 JSON 片段：对齐 Go `json.RawMessage`。
+ * 编码时**不重新序列化**，直接写入承载的原始文本——用于 escrow 的 `kdf`
+ * （DB 存的 KDF JSON 必须逐字节原样返回，换实现时键序可能不同）。
+ */
+export class RawJSON {
+  constructor(readonly raw: string) {}
+}
+
+/** 包装一段已是合法 JSON 的文本，交给 `encodeJSON` 原样嵌入（见 `RawJSON`）。 */
+export function rawJSON(raw: string): RawJSON {
+  return new RawJSON(raw);
+}
+
+/**
  * 镜像 Go `enc.SetEscapeHTML(false)` 的字符串转义：
  * - `"` 与 `\` 正常转义；`\n`/`\r`/`\t` 用短转义，其余控制字符（含 DEL）转 `\u00xx`；
  * - `<`、`>`、`&` **不转义**；
@@ -40,6 +54,7 @@ function encodeString(s: string): string {
 
 function encodeValue(v: unknown): string {
   if (v === null) return "null";
+  if (v instanceof RawJSON) return v.raw;
   const t = typeof v;
   if (t === "string") return encodeString(v as string);
   if (t === "number") {

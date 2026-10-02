@@ -13,6 +13,7 @@ import { contributorsHandler } from "./routes/contributors";
 import { directoryHandler } from "./routes/directory";
 import { commentHandler } from "./routes/comment";
 import { dmHandler } from "./routes/dm";
+import { escrowGetHandler, identityGetHandler } from "./routes/identity";
 import { GOVERN_BURST_PER_IP, GOVERN_PER_MINUTE_PER_IP, IpLimiter } from "./routes/derived";
 
 /** 节点对外服务选项；后五项均为可选，保持既有 `startServer(adapters, db, {host, port})` 调用兼容。 */
@@ -39,6 +40,9 @@ export async function startServer(
   const storeKey = dataDir === undefined || dataDir === "" ? null : loadStoreKey(dataDir, {}).key;
   // 治理面 IP 令牌桶（对齐 httpapi/govern.go 的 governLimiterByIP 常量）。
   const governLimiter = new IpLimiter(GOVERN_PER_MINUTE_PER_IP, GOVERN_BURST_PER_IP);
+  // escrow 读取的同 IP 令牌桶：对齐 server.go:54 的 newIPLimiter(10, 10)（**独立实例**，
+  // 与治理面的 governLimiter 不是同一个桶）。
+  const escrowLimiter = new IpLimiter(10, 10);
 
   adapters.http.handle("GET /healthz", healthzHandler);
   adapters.http.handle("GET /v1/catalog", catalogHandler(db));
@@ -54,6 +58,9 @@ export async function startServer(
   adapters.http.handle("GET /v1/directory", directoryHandler({ db, storeKey, limiter: governLimiter }));
   adapters.http.handle("GET /v1/comment", commentHandler(db));
   adapters.http.handle("GET /v1/dm/{peer_id}", dmHandler(db));
+  // 身份公开只读面（契约 5.2/5.4，批 A3）：公钥查询与 escrow 读取均匿名。
+  adapters.http.handle("GET /v1/identity/{id}", identityGetHandler({ db }));
+  adapters.http.handle("GET /v1/identity/escrow/{username}", escrowGetHandler({ db, limiter: escrowLimiter }));
 
   const listener = await adapters.http.listen(opts);
   adapters.lifecycle.onShutdown(() => listener.close());
