@@ -1,6 +1,8 @@
 // 服务端侧适配层：与客户端 Adapters 独立的一组能力接口（监听/路由、TLS、定时、CLI、进程信号）。
 // 纯类型声明，零 `node:` 依赖；实现归各节点壳（P2 = apps/node）。
-// 接口于 P2 一次冻结（依据路线计划 #70 §3.2 / 任务级计划 #72 §2.2）；P3 起不得再改这组边界。
+// 接口于 P2 一次冻结（依据路线计划 #70 §3.2 / 任务级计划 #72 §2.2）；
+// P3 首批（计划 #73 §3.1）只做一处复议：TlsConfig 补上对端指纹白名单与「信任由指纹承担」，
+// 以承载 Go `ServerTLSConfig` / `ClientTLSConfig` 的两项策略。此后这组边界为终态。
 
 export interface ServerRequest {
   method: string;
@@ -30,10 +32,21 @@ export interface TlsMaterial {
   keyFile: string;
 }
 
+/**
+ * TLS 配置描述符：Go `*tls.Config` 的可断言形状（P3 二次冻结，之后不得再改）。
+ * - `peerFingerprints` 非空 ⇒ 要求对端提供证书，且其 DER 的 sha256 命中白名单
+ *   （服务端 = RequireAnyClientCert + 指纹固定；出站 = 单元素白名单）
+ * - `trustPeerByFingerprint` ⇒ 对端证书**不**由系统 CA 校验，信任完全由 `peerFingerprints` 承担
+ */
+export interface TlsConfig extends TlsMaterial {
+  peerFingerprints: string[];
+  trustPeerByFingerprint: boolean;
+}
+
 export interface ListenOptions {
   host: string;
   port: number;
-  tls?: TlsMaterial;
+  tls?: TlsConfig;
 }
 
 export interface HttpServerAdapter {
@@ -50,8 +63,10 @@ export interface TlsInfo extends TlsMaterial {
 
 export interface TlsAdapter {
   loadOrCreate(info: TlsMaterial): Promise<TlsInfo>;
-  serverConfig(info: TlsInfo, peerFingerprints: string[]): TlsMaterial;
-  clientConfig(own: TlsInfo, peerFingerprintHex: string): TlsMaterial;
+  /** 非空白名单 ⇒ 双向 TLS（要求对端证书并固定指纹） */
+  serverConfig(info: TlsInfo, peerFingerprints: string[]): TlsConfig;
+  /** 出站：信任由对端指纹固定承担，不受系统 CA 约束 */
+  clientConfig(own: TlsInfo, peerFingerprintHex: string): TlsConfig;
   /** 空名单 = 拒绝一切（fail-closed） */
   verifyPeer(rawCertsDer: Uint8Array[], allowed: string[]): void;
   /** 常量时间比较 */

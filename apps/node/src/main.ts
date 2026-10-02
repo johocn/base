@@ -8,6 +8,7 @@ import { createTlsAdapter } from "./host/tls";
 import { createSchedulerAdapter } from "./host/scheduler";
 import { createCliHost } from "./host/cli";
 import { createLifecycleAdapter } from "./host/lifecycle";
+import { createTlsCertCommand } from "./cli/tls-cert";
 import { startServer } from "./serve";
 
 function parseAddr(addr: string): { host: string; port: number } {
@@ -48,6 +49,7 @@ export async function main(): Promise<void> {
 
   adapters.cli.register(versionCmd);
   adapters.cli.register(serveCmd);
+  adapters.cli.register(createTlsCertCommand(adapters.tls));
 
   const code = await adapters.cli.run(process.argv.slice(2));
   adapters.lifecycle.exit(code);

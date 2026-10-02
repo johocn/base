@@ -1,4 +1,4 @@
-import type { Listener, ServerAdapters, TlsMaterial } from "@base/core-ts";
+import type { Listener, ServerAdapters, TlsConfig } from "@base/core-ts";
 import type { Db } from "./db";
 import { healthzHandler } from "./routes/healthz";
 import { catalogHandler } from "./routes/catalog";
@@ -6,7 +6,7 @@ import { catalogHandler } from "./routes/catalog";
 export async function startServer(
   adapters: ServerAdapters,
   db: Db,
-  opts: { host: string; port: number; tls?: TlsMaterial },
+  opts: { host: string; port: number; tls?: TlsConfig },
 ): Promise<Listener> {
   adapters.http.handle("GET /healthz", healthzHandler);
   adapters.http.handle("GET /v1/catalog", catalogHandler(db));
