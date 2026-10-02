@@ -2,7 +2,7 @@
 
 - 日期：2026-10-03
 - 上游：总纲 `#69`（§0.13 迁移节奏 = 并行双跑 → 行为等价后 Go 节点退役）；路线计划 `#70`（§1 P5 行、§6 六条等价判据、§8 风险）；P4 设计册 `#74`（**2026-10-03 已定稿，P5 开工闸门已解除**）；P3 各批 = 计划 `#75`（批 A–G 已全收口，判据 2–7 均已各自对拍过）
-- 状态：**执行中**（P5-1 / P5-2 已收口；P5-3 起待执行）
+- 状态：**执行中**（P5-1 / P5-2 / P5-3 已收口；P5-4 起待执行）
 - 性质：任务级计划，**不承载契约**。契约一律回册子。
 
 ## 0. 一句话
@@ -171,6 +171,43 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 - **批 A 说明**：批 A 的临时取证件已按 P3 计划 `#75 §9.1 G6` 计划内清理删除，其公开读面（24 + 12）结论沿用
   `#75 §9.2`；本次 EB 批已补上 `#75` 未覆盖的判据 2 边界项并抽样重跑了匿名读 JSON 面（未含门户 HTML 页）。
 
-### Task P5-3 ~ P5-6
+### Task P5-3　真实流量影子重放 —— **已收口（G5 过）**
 
-（待执行。）
+- **报告**：`.tmp/g4/LCREPORT.md`（不入版本控制）；基线 `lclive.json`、回放 `lcgo-results.json` / `lcnode-results.json`。
+- **线上节点**：`http://118.190.217.242`（明文 HTTP，nginx/1.24.0 反代，**只读分发节点**）。
+- **G5 判定：过 —— 真实流量样本 47 条，0 分歧**：
+
+  | 组 | 含义 | 条数 | 分歧 | 比较口径 |
+  |---|---|---|---|---|
+  | D | 数据无关（健康检查/CORS/未知路由/鉴权拒绝/格式门禁） | 25 | 0 | 三方逐字节（status + 5 应用头 + body） |
+  | V | 线上逐字件（`release.json` / `manifest.json` 原文） | 2 | 0 | 同上 |
+  | C | 线上读面数据行（catalog / directory / contributors） | 12 | 0 | 同上 |
+  | S | 节点身份 / 真实时间戳相关（门户页 + 评论面 + 身份 GET） | 6 | 0 | status + content-type + 归一化 body |
+  | G | 会落 `auth_nonces` 行 → **不在生产执行** | 2 | 0 | 仅本地 go↔node |
+
+- **判据 3 的真实面（错误码层）已取到 5 类**（用线上真实身份 `5c7ca272008f23910fc92d2db8d1a949` 构造签名头）：
+  - `auth_missing_header`(400)（D12–D18）、`identity_alg_unsupported` / `identity_id_invalid` / `auth_ts_invalid` /
+    `auth_nonce_invalid` / `auth_sig_invalid`(400)（D19–D23）、`identity_unregistered`(403，查库只读)（D24）、
+    `auth_ts_out_of_window`(401)（D25）、`auth_nonce_replay`(401，仅本机)（G02）。
+  - **未取得**「合法签名的真实写请求」（线上无可用身份私钥）→ 判据 3 仍以 P5-2 批 B 静态对拍为主，本项只作**弱证据**。
+- **零生产写的取证**：线上只发 GET / HEAD；3 条 POST / PUT（D13–D18 缺头、D19–D23 格式非法、D24 未登记、D25 过期）
+  全部在 [authmw.go](file:///e:/code/base/internal/httpapi/authmw.go#L144-L235) 的**第 1..4 步**被拒，
+  早于第 5 步 `UseNonce` 落库 ⇒ 未进任何 handler、未写任何表。会走到第 5/6 步的令牌划入 G 组**只在本机跑**。
+- **影子数据集重建**（`lcbuild.probe.ts`）：按线上真实输出重建而非降级为结构锚点 ——
+  `release.json` / `manifest.json` 取线上原文落盘（verbatim 文件路由），items 9 行 / articles 行取自线上
+  `/v1/catalog` 与公开包 `/v1/pack/{pack_id}` 的 `pack.sqlite`，directory 词条 1 行 + `meta.directory_seeded=1`
+  短路 `seedDirectoryFromExisting`，identities 取线上真实 actor（pubkey 用占位，两侧均不验签通过）。
+- **证据强度三级（报告 §5 已明标）**：
+  - **强**：D / V / C 三组与线上**逐字节**一致；
+  - **中**：S01 `/` 与 S03 `/a/{item_id}` 在**置空节点身份行**（配对码/指纹行 + issuer 页脚行）后逐字节一致
+    （线上/影子节点私有身份本就不可能相同）；
+  - **弱**：S04 / S05 `/v1/comment`、S06 `/v1/identity/{actor}` 只比 status + content-type + JSON 顶层键集合；
+    S02 `/governance` 只比**页面壳**（其看板正文来自线上治理状态，非匿名读面，影子不重建）。
+- **组内一致性（不受数据边界影响）**：**本地 Go ↔ 本地 Node 在全部 47 条上逐字节一致**（含 S 组 HTML 全文，未做任何归一化）。
+- **工装**（`lccollect.mjs` 采集 / `lcbuild.probe.ts` 建影子集 / `lcgoprobe` + `lcnode.probe.ts` 回放 / `lccompare.mjs` 比对）；
+  沙箱内 Go 侧走 `httptest.NewRecorder` 进程内分发，Node 侧起真 `http` server，`HEAD` 只比 status + 5 头。
+- **边界**：全程未触碰 `base.service` / `base-cache.service`；不把生产节点当压测目标（限速 160ms/次）；
+  线上 `/v1/pubkey` 返回 404（只读分发节点无签名密钥），本地两侧已按同口径对齐。
+- **注**：线上无 SSH 部署信息（仓库 `scripts/install.sh` 仅客户端脚本），P5-4 的服务器访问可用性待确认。
+
+### Task P5-4 ~ P5-6
