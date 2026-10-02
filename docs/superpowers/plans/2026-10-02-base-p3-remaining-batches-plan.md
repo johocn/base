@@ -2,8 +2,8 @@
 
 - 日期：2026-10-02
 - 上游：路线计划 `#70`（§1 P3 行、§5 节点职能清单、§6 P5 等价判据）；首批计划 `#73`（§8 不做「P3 余下批次」、§9.2 执行期发现）；接口边界冻结面 `#72`
-- 状态：**批 A 已收口**（Task A1–A5 全部落地，见 §9「执行实况」；批 B–E 未开工）
-- 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**，批 B–E 只登记边界（§8）
+- 状态：**批 A 已收口、批 B 已切子批开工**（批 A 全量见 §9；批 B 切 B1–B4 见 §10；批 C–E 未开工）
+- 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）与**批 B**（§10，切 B1–B4）；批 C–E 只登记边界（§8）
 - 性质：任务级计划。契约一律回册子，本册不承载契约。
 
 ## 0. 本批为什么这么切
@@ -24,7 +24,7 @@
 | 批 | 范围 | 对应判据 | 状态 |
 |---|---|---|---|
 | **A** | **纯匿名公开读 JSON 面 12 条 + 门户页 3 个** | **判据 2**（字节级） | **已收口**（§9） |
-| B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | 未开工 |
+| B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **已切 B1–B4**（§10）开工中 |
 | C | 治理派生面：`proposal` POST / `proposal/{id}/vote` / `proposal` GET | 判据 5（含 `#65` 小节点豁免） | 未开工 |
 | D | 对端同步·反熵：`inventory` / `sync` / `fetch` / `scrub` / `event-sync` + CLI `peer-sync` / `scrub` | 判据 4（结果集一致 + 只增不减） | 未开工 |
 | E | `importer` 容器 / 题库 / 视频派生 + CLI `import-video` | 判据 6（pack_id 与 merkle_root 同一） | 未开工 |
@@ -138,7 +138,7 @@
 
 ## 8. 后续批次边界（只登记，不展开）
 
-- **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。
+- **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。**已切 4 子批 B1–B4，详列见 §10**（`govern.v1` 分支已定随 event 一起做，不留批 C）。
 - **批 C**：`govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`；验收 = 判据 5。
 - **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。
 - **批 E**：`internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = 判据 6。
@@ -199,3 +199,74 @@
 1. **`httptest.ResponseRecorder` 不平滑真 server 语义**：HEAD 的响应体在连接层被丢弃（`net/http/server.go:381`「Eat writes」），且真 server 会自动补 `Content-Length`（`:1382`，条件 `!isHEAD || len(p) > 0`）。故 G4 对照口径定死两条：① Go 取证件对 HEAD **手工丢弃记录体**；② **不比对 `Content-Length`**（自动 `Content-Length` 与分块判定 recorder 不复刻）。首轮 `/v1/blob/{未知} HEAD` 的「分流」即此**假阳性**，非批 A 缺陷——真 server 下两侧同为「404 + `Content-Length: 25` + 空体」。
 2. **取数顺序是硬约束**：Go 侧 `store.Open` 会动库文件，**必须先于** Node 侧 `openDb`（WASM 连接）打开；反序会让 `node-sqlite3-wasm` 落在失效句柄上，全库读路由齐报 `unable to open database file`。批 B–E 的对拍脚本按此定序。
 3. **目录 pending 派生的 `item_id` 形态**：为 `dir/<kind>/<hash16>`（三段，`DirectoryKindOfItemID`），非 `term:<kind>:<key>`——后者只用于**治理页**的提案展示。后续造数不得混用。
+
+## 10. 批 B：认证读写面（判据 3）
+
+**状态：已切子批，B1 开工中。**
+
+**开工前决策（2026-10-02，用户拍板）**：
+
+| 决策 | 取 |
+|---|---|
+| 批 B 切法 | **再切 4 子批 B1–B4**，逐子批独立跑门禁、独立提交、独立验收（体量约为批 A 数倍，一次做完无法二分定位） |
+| `event` 的 `govern.v1` 归属 | **随 event 一起做**（不留批 C）。理由：`eventTypeRegistry` 是全量白名单（5 条），缺一类则 `POST /v1/event` 的 fail-closed 判定与错误码无法等价，判据 3 不自证 |
+
+### 10.0 地基与硬约束（四子批共用）
+
+| 项 | 现状 / 约束 |
+|---|---|
+| 请求签名 | `protocol-ts` 已具 `requestSignBytes` / `verify` / `sha256Hex` / `canonicalize`（**本批不改 protocol-ts**） |
+| 冻结面 | `core-ts` 的 `ServerRequest` / `ServerHandler`（`#72` 终态）**不得改**；identity 以**业务函数形参**下传，不塞进 `ServerRequest` |
+| 取数顺序 | Go `store.Open` 必须先于 Node `openDb`（§9.3 发现 2），对拍脚本照此定序 |
+| 体上限 | `requireAuth` / `optionalAuth` = `maxJSONBody` 64 KiB；`POST /v1/blob` = `maxBlobBytes`(8 MiB) + 4 KiB（`requireAuthLimit`） |
+| IP 限速 | `clientIP` 退化为**单桶键**（批 A 既定，`ServerRequest` 无 RemoteAddr）；令牌桶算法复用 `derived.ts` 的 `IpLimiter` |
+| 错误体 | `writeAuthErr` → `{"code":..., "error":...}`（Go map 键字典序，**code 在前**），区别于既有 `writeError` 的 `{"error":...}` |
+| schema | **不动**：`auth_nonces` / `identities` / `escrow` / `events` / `profiles` / `progress` / `checkin_days` / `tag_links` / `groups` 等已全量（`store/schema.ts`） |
+
+### 10.1 子批 B1：认证地基 + 身份写面
+
+- 范围：`authmw`（236 行）+ `POST /v1/identity/register`（`identity.go:91`）+ `PUT /v1/identity/escrow/{username}`（`:161`）+ `GET /v1/me`（`:243`）+ `POST /v1/profile`（`contributor.go:70`）。
+- 交付：
+  - `routes/authmw.ts`：`authErrText` **全表** + `writeAuthErr` + `authenticate`（契约 3.2 七步：五头齐全 → alg/格式 → 取公钥 → 时间窗 ±300s → nonce 去重 10min → 体哈希+待签字节 → 验签）+ `requireAuth` / `requireAuthLimit` / `optionalAuth` / `hasAnyAuthHeader`。
+  - store 写层：`LookupIdentity`(单条含 `created_at`) / `RegisterIdentity` / `PutEscrow` / `UseNonce` / `PruneNonces` / `TouchIdentity` / `ListProgressByID` / `CheckinDaysOf`。
+  - `routes/identity.ts` 扩 register + escrow PUT（identity 形参）；`routes/me.ts`；`routes/profile.ts`。
+  - `serve.ts` 装配（含 `escrowLimiter` 复用）。
+- 验收：`authmw` 单测逐条覆盖五头缺失 / 半带头 / alg 不支持 / id 非法 / ts 非十进制 / nonce 非 16 字节 hex / sig 非 hex / 身份未登记 / 时间窗越界 / nonce 重放 / 签名错 / 体超限 的**status + code**；四条路由对拍。
+- 注意：`optionalAuth` 语义 = 五头**全缺**按匿名放行，缺一半仍 `auth_missing_header` 拒。
+
+### 10.2 子批 B2：event 面（骨架 + 4 类型分流）
+
+- 范围：`POST /v1/event`（`event.go:44`）+ `eventTypeRegistry` fail-closed（`event.go:25`，5 条白名单）+ `putBareEvent` + `comment.v1`（`event.go:108`）+ `dm.v1`（`dm.go:59`）+ `progress.v1`（`progress.go:74`）+ `govern.v1`（`govern_event.go:158`）。
+- 交付：`routes/event.ts`（路由 + 骨架 + comment + `verifyEventSig` + `parseCommentBody`）、`routes/progress.ts`、`routes/governEvent.ts`；`routes/dm.ts` 扩 dm event；store：`PutEvent` / `GetEventByID` / `IsRevokedEvent` / `HasCommentEvent` / `PutProgressProjection` / govern 投影所需方法。
+- 硬约束：内容签名 `canonical({event_id,type,created_at,body})` 逐字节等价；`body` **保留客户端原始键集**（多一未知键即拒，不补空串）；`created_at` 用 `json.Number` 字面形态重建；**落块必须在验签之后**；`received_at` 回读为权威值；限速双维度（ID + IP）。
+- 验收：5 类型 × {直角 / 缺键 / 未知键 / 签名错 / 墓碑 / 超限 / 未知类型} 的 status + code 对拍。
+
+### 10.3 子批 B3：submit + blob POST
+
+- 范围：`POST /v1/submit`（`submit.go` 393 行，`article`/`quiz`/`tag`/`course`/`lesson` 五形态）+ `POST /v1/blob`（`blob.go:17`，multipart 单块 8 MiB）。
+- 交付：`routes/submit.ts`、`routes/blob.ts` 扩 POST；store：`UpsertSubmission` / `UpsertTagSubmission` / `UpsertSegmentSubmission` / `PutBlob` / `HasBlob` / `GetItem` / `GovernorSet`；multipart 解析（只认字段 `file`）。
+- 验收：`author_id_forbidden` / 五形态 item_id 校验 / segments 三区间铁律 / tag 资格（`tag_not_governor`）与目标存在性（`tag_target_not_found`）/ 写限速 429（`item_rate_limited`）/ `content_hash` 服务端重算 / `author_sig` 校验 的逐条对拍。
+- 风险：multipart 字节级边界；`SegmentsContentHash` 与 `MaterializeTagSegments` 逐字节。
+
+### 10.4 子批 B4：group（`group.v1` event + 读权 `optionalAuth`）
+
+- 范围：`GET /v1/group/{group_id}`（`group.go:681`，`optionalAuth`）+ `group.v1` event（`group.go:322`）+ group 派生（roster / epoch / message）。
+- **编排说明**：`group.v1` event 归本子批而非 B2——它与 group 读权共享同一批 group 派生逻辑，拆开会产生跨子批的重复依赖。
+- 交付：`routes/group.ts`；store：group 相关读写方法。
+- 验收：开放圈匿名可读 / 封闭圈**非成员一律 404（不泄露存在性）** / 成员签名读权 / 五头缺失时 `optionalAuth` 按匿名分支 的对拍。
+
+### 10.5 门禁（沿用 §4 G1–G6，每子批独立跑）
+
+G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Node 真适配器 + 真路由 + 真库；HEAD 手工丢弃记录体、**不比对 `Content-Length`**（§9.3 发现 1）。
+
+### 10.6 风险
+
+| # | 风险 | 处置 |
+|---|---|---|
+| 1 | 验签字节级（canonical / 体哈希 / query 原文） | 复用 `protocol-ts`，不重写；对拍用真签名请求（真私钥签、真公钥验） |
+| 2 | identity 下传 vs `#72` 冻结面 | 业务函数带 `identityId` 形参，**不改** `ServerRequest` |
+| 3 | nonce 表语义（键含 id，防抢注） | 逐字复刻 `UseNonce(id, nonce, now)` 与 `PruneNonces`；对拍重放 |
+| 4 | multipart 解析（B3） | 只支持单块字段 `file`、8 MiB 上限；边界对齐 Go `MultipartReader` |
+| 5 | `POST /v1/event` body 键集保真（B2） | 保留客户端原始键集，不补键不删键 |
+| 6 | `group.go` 800 行体量（B4） | 单独成批、内聚 group 派生，不拆到 B2 |
+| 7 | 工作区既有改动被误提交 | 严格 G6；`.gitignore` / `internal/httpapi/web.go` 绝不 `add` |
