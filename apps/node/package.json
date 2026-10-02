@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@base/core-ts": "*",
+    "@base/protocol-ts": "*",
     "node-sqlite3-wasm": "^0.8.60"
   },
   "devDependencies": {
