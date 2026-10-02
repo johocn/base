@@ -14,6 +14,7 @@ import { createImportMdCommand } from "./import-md";
 const BASED_EXE = fileURLToPath(new URL("../../../../based.exe", import.meta.url));
 const P3_PROBE = fileURLToPath(new URL("../../../../.tmp/p3probe", import.meta.url));
 const SEED = fileURLToPath(new URL("../../../../seed", import.meta.url));
+const E3SEED = fileURLToPath(new URL("./__fixtures__/e3seed/", import.meta.url));
 const KEY = "1".repeat(64);
 const ISSUED_AT = "2026-01-01T00:00:00Z";
 
@@ -156,6 +157,42 @@ describe.skipIf(!existsSync(BASED_EXE))("G4 逐字节：Go export vs Node export
     expect(node.packId).toBe(go.packId);
     expect(node.contentVersion).toBe(go.contentVersion);
     expect(node.entries).toBe(go.entries);
+    expect(nodeDisk.pack).toBe(goDisk.pack);
+    expect(nodeDisk.manifest).toBe(goDisk.manifest);
+  }, 120000);
+
+  it("方向 3：容器/分类/题库 seed → Go 与 Node 各自 import-md 建库 → 各自 export 全等", async () => {
+    const root = tmpRoot();
+    const goDir = join(root, "go");
+    const nodeDir = join(root, "node");
+
+    // 各自 import-md 建库（Go 版、Node 版，目录互不共享）。
+    const goImp = spawnSync(BASED_EXE, ["import-md", "-dir", E3SEED, "-data", goDir], {
+      encoding: "utf8",
+    });
+    expect(goImp.status).toBe(0);
+    expect(goImp.stdout).toBe("import-md: 导入 7 篇，失败 0 篇\n");
+    const nodeImpCode = await createImportMdCommand().run(["-dir", E3SEED, "-data", nodeDir]);
+    expect(nodeImpCode).toBe(0);
+
+    // 各自 export（独立 data 目录：export 在 Version=0 会自增 content_version）。
+    const go = runGoExport(goDir);
+    const node = await runNodeExport(nodeDir);
+
+    const goDisk = diskHashes(goDir, go.packId);
+    const nodeDisk = diskHashes(nodeDir, node.packId);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[G4-3] go   pack_id=${go.packId} cv=${go.contentVersion} entries=${go.entries} merkle=${go.merkleRoot}\n` +
+        `[G4-3] node pack_id=${node.packId} cv=${node.contentVersion} entries=${node.entries} merkle=${node.merkleRoot}\n` +
+        `[G4-3] pack.sqlite  go=${goDisk.pack}\n[G4-3] pack.sqlite  node=${nodeDisk.pack}\n` +
+        `[G4-3] manifest.json go=${goDisk.manifest}\n[G4-3] manifest.json node=${nodeDisk.manifest}`,
+    );
+
+    expect(node.packId).toBe(go.packId);
+    expect(node.contentVersion).toBe(go.contentVersion);
+    expect(node.entries).toBe(go.entries);
+    expect(node.merkleRoot).toBe(go.merkleRoot);
     expect(nodeDisk.pack).toBe(goDisk.pack);
     expect(nodeDisk.manifest).toBe(goDisk.manifest);
   }, 120000);

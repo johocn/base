@@ -2,8 +2,8 @@
 
 - 日期：2026-10-02
 - 上游：路线计划 `#70`（§1 P3 行、§5 节点职能清单、§6 P5 等价判据）；首批计划 `#73`（§8 不做「P3 余下批次」、§9.2 执行期发现）；接口边界冻结面 `#72`
-- 状态：**批 A 已收口、批 B1–B4 已收口、批 C 已收口、批 D 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8、B3 实况见 §10.9、B4 实况见 §10.10；批 C 全量见 §11；批 D 全量见 §12；批 E 未开工）
-- 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）、**批 B**（§10，切 B1–B4）、**批 C**（§11 收口）与**批 D**（§12 收口）；批 E 只登记边界（§8）
+- 状态：**批 A 已收口、批 B1–B4 已收口、批 C 已收口、批 D 已收口、批 E 已收口**（P3 余下批次全部收口；批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7、B2 实况见 §10.8、B3 实况见 §10.9、B4 实况见 §10.10；批 C 全量见 §11；批 D 全量见 §12；批 E 全量见 §13）
+- 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）、**批 B**（§10，切 B1–B4）、**批 C**（§11 收口）、**批 D**（§12 收口）与**批 E**（§13 收口）
 - 性质：任务级计划。契约一律回册子，本册不承载契约。
 
 ## 0. 本批为什么这么切
@@ -27,7 +27,7 @@
 | B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **B1–B4 已收口**（§10，实况 §10.7 / §10.8 / §10.9 / §10.10） |
 | C | 治理派生面：`proposal` POST / `proposal/{id}/vote` / `proposal` GET | 判据 5（含 `#65` 小节点豁免） | **已收口**（§11） |
 | D | 对端同步·反熵：`inventory` / `sync` / `fetch` / `scrub` / `event-sync` + CLI `peer-sync` / `scrub` | 判据 4（结果集一致 + 只增不减） | **已收口**（§12） |
-| E | `importer` 容器 / 题库 / 视频派生 + CLI `import-video` | 判据 6（pack_id 与 merkle_root 同一） | 未开工 |
+| E | `importer` 容器 / 题库 / 视频派生 + CLI `import-video` | 判据 6（pack_id 与 merkle_root 同一） | **已收口**（§13） |
 
 判据 1（黄金向量）已由 P1 / `#73` 覆盖，无需再切批。
 
@@ -142,7 +142,7 @@
 - **批 C**：`govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`；验收 = 判据 5。**已收口**（全量见 §11）——侦察后确认 `govern_event.go` 的 `govern.v1` 事件路径**已在 B2 收口**，故批 C 实做为 `govern.go` 的三条**签名**路由（`POST /v1/proposal` / `POST /v1/proposal/{proposal_id}/vote` / `GET /v1/proposal`）及其 store 依赖。**残余缺口**：Node 侧缺 Go `store.Open` 的 `seedDirectoryFromExisting` 开库引导（见 §11.4 发现 1）。
 - **开库引导等价（新增边界，待认领）**：Go `internal/store/store.go:155-168` 的 `Open` = `schemaStatements` → `migrate` → `seedDirectoryFromExisting`（`internal/store/directory.go:294-442`：把存量 `items WHERE item_id LIKE 'tag/%'`、`source='category'`、`segments seq<0` 的 `attr.category` / `attr.instructor` 登记为 `directory_terms` 的 `approved` 词条，仅当确有存量词条时 `bumpDirectoryVersion` 一次并写 `meta.directory_seeded=1`；失败只打 stderr 不阻断 Open）。Node 侧现状：`openStore`（`apps/node/src/store/store.ts:244-267`）只跑 `migrate`、**不含 seed**；`main.ts:48` 的 `serve` 用裸 `openDb`（连 `migrate` 都无）。**验收 = 开库后 DB 快照与 Go 逐字节一致**（即批 C G4 阶段 4 的 4 行对称差归零，见 §11.3）。
 - **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。**已收口**（全量见 §12）——5 条对端路由全部落在 `routes/peer.ts`；出站侧拆为 `store/syncstore.ts`（`SyncStore` 端口）+ `store/packimport.ts` + `peersync/*`；对端监听由 `serve.ts` 的 `startPeerServer` 承载（公开路由 ∪ 内部路由，对齐 Go `PeerHandler()`）。**残余缺口**：Node 缺 Go `store.Open` 的 `seedDirectoryFromExisting` 开库引导（§12.3 的 3 行对称差，同下条边界项）。
-- **批 E**：`internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = 判据 6。
+- **批 E**：`internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = 判据 6。**已收口**（全量见 §13）——Node 落点：core-ts 纯派生 `importer/{gojson,quiz,container,video}.ts` + 宿主编排 `apps/node/src/importer/{container,run}.ts` + CLI `import-video`。**判据 6 的非平凡证据由 G4-4（真实视频块）提供**（见 §13.2）。
 
 ## 9. 执行实况
 
@@ -616,3 +616,97 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 5. **`packimport` 两处各有其源（非重复实现）**：`store/packimport.ts` ← `internal/store/packimport.go`（229 行，`importPack` 落库唯一实现）；`peersync/packimport.ts` ← `internal/peersync/packimport.go`（359 行，包级复制编排）并**复用**前者的 `PackEntry` / `ImportResult`，不造第二份口径。
 6. **出站/CLI 的有意差异（记录于各文件头，非缺口）**：① `logf` 由 Go `func(string, ...any)` 改为 `(msg: string) => void`（调用方预格式化）；② `context.WithTimeout` / `time.NewTicker` / `time.NewTimer` 改为 `AbortController` + `setTimeout` + 「可被 AbortSignal 打断的 sleep」；③ 首轮 jitter `rand.Int63n(60s)` 改为 `Math.floor(Math.random() * 60_000)`；④ `time.Duration.Round(time.Millisecond).String()` 自实现为 `formatGoDuration`（`5m` → `5m0s`、`24h` → `24h0m0s`）；⑤ `parseGoDuration` 返回**毫秒**（number）而非纳秒 `Duration`（本工程只用于调度间隔）；⑥ CLI 的 `TlsAdapter` 由命令文件内部构造（Go 是包级 `LoadOrCreateTLSCert`）；⑦ `openStore` 用 `openSyncStore` 而非 `store.Open`（Node 侧 host 库与出站端口已拆分）；⑧ `fmt.Printf` → `console.log`、`ctx.Err()` → `ctx.aborted`。
 7. **`config()` 的 `-fetch-max-blobs` 整型解析（本批对齐）**：Node flag 表只给字符串，故在 `config()` 内补 `atoi`，错误文案对齐 Go flag 包 `invalid value "<v>" for flag -fetch-max-blobs: parse error`。边界微差（Go `flag` 的 `strconv.ParseInt(s,0,…)` 接受 `0x`/下划线、`envIntOr` 的 `Atoi` 为十进制 64 位；Node 侧统一按十进制且以 `Number.isSafeInteger` 为界）在调度间隔 / 对端清单的可达域外，**登记不改**。
+
+## 13. 批 E：importer 容器 / 题库 / 视频派生（判据 6）
+
+**状态：批 E 已收口**——P3 余下批次（A + B1–B4 + C + D + E）**全部收口**。
+
+**范围**：§8 登记的批 E = `internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = **判据 6**（同一数据集下两侧 `pack_id` 与 `merkle_root` 同一）。开工侦察确认 `internal/importer` 四文件分工：`md.go`（411 行：`Import` 全程编排 = 阶段 1 扫描 / 1.5 校验 / 2 条目 / 3 容器重建 / 3.5 分类 / 4 收尾）+ `course.go`（284 行：容器清单合并 / 排序 / 子项归属）+ `quiz.go`（119 行：题库解析）+ `video.go`（132 行：定长分块 / `content_hash` / MIME / 标题）。
+
+**切法（5 Task，逐 Task 两阶段审查）**：
+
+| Task | 内容 | 落点 |
+|---|---|---|
+| E1 | store 写面补齐 | core-ts `store/{queries,types}.ts` + apps/node `store/store.ts` |
+| E2 | core-ts importer 纯派生 | `importer/{gojson,quiz,container,video}.ts` |
+| E3 | import-md 全程编排接线 | apps/node `importer/{container,run}.ts` + CLI `import-md` 改薄壳 |
+| E4 | import-video CLI + 注册 | `cli/import-video.ts` + `main.ts` |
+| E5 | 门禁 + 回填 + 提交 | 本节 |
+
+**产出（新增 14 代码/测试文件 + 7 夹具 + 改 6 处）**：
+
+core-ts（纯派生，无宿主 IO）：
+
+- `store/queries.ts`（**+73**）：11 个 SQL 常量（`UPSERT_SEGMENT_ITEM_SQL` / `DELETE_SEGMENTS_SQL` / `INSERT_SEGMENT_SQL` / `UPSERT_QUIZ_ITEM_SQL` / `UPSERT_QUIZ_SQL` / `UPSERT_MEDIA_ITEM_SQL` / `UPSERT_MEDIA_META_SQL` / `GET_ITEM_SQL` / `RETIRE_TOMBSTONE_SQL` / `RETIRE_STATE_SQL` / `NEXT_CONTENT_VERSION_SQL`）+ 纯函数 `segmentsContentHash`。**SQL 文本会进 `sqlite_master`，字面差异直接改包字节** ⇒ 子代理用临时脚本正则抽取 Go 原始串逐字节比对，**11/11 MATCH**。
+- `store/types.ts`（**+33**）：`SegmentItemInput` / `QuizInput` / `MediaItemInput`。
+- `importer/gojson.ts`（**新增 134 行**）：`marshalGoJSON` / `writeGoJSON` / `writeGoString`——Go `json.Marshal`（`SetEscapeHTML(true)`）等价序列化器：对象键按插入序、`<>&`→`\u003c/\u003e/\u0026`、U+2028/2029 转义、`/` 不转义。
+- `importer/quiz.ts`（**新增 137 行**）：`parseQuiz` / `parseQuestions` / `quizRowFromQuiz`（错误文案逐字对齐 `quiz.go`）。
+- `importer/container.ts`（**新增 91 行**）：`mergeChildren` / `sortDeclared` / `childIdsOf` / `digestTextOf` / `attrSegsOf` / `kindOf` + **`compareGoString`**（见发现 2）。
+- `importer/video.ts`（**新增 61 行**）：`VIDEO_CHUNK_SIZE` / `guessVideoMime` / `videoItemId` / `videoContentHash` / `chunkSizes` / `videoTitleFromPath`。
+- `importer/md.ts`（**+4 −1**）：`articleRowFromDoc` 的 `tags_json` 由 `JSON.stringify(doc.tags)` 改 `marshalGoJSON(doc.tags)`（**修正既有真实字节偏差**，见发现 3）。
+- `index.ts`（**+4**）：补导出 importer 四模块。
+
+apps/node（宿主 IO）：
+
+- `store/store.ts`（**+190**）：`Store` 新增 8 方法——`getItem` / `nextContentVersion` / `retireItem` / `upsertSegmentItem`（事务内 upsert items → DELETE segments → 按 seq 升序 INSERT）/ `upsertQuiz` / `upsertMediaItem` / `putBlob` / `hasBlob`（后两者复用 `store/events.ts` 实现经 `hostDbAsDb` 适配）。
+- `importer/container.ts`（**新增 257 行**）：`SubmittedContainerError` / `isSubmittedContainer` / `rebuildContainer` / `rebuildContainers` / `rebuildCategories`（**分类清单是本 Run 快照，不 `mergeChildren`**）/ `ensureLessonChild` / `ParsedMD`。
+- `importer/run.ts`（**新增 175 行**）：`runImport`，逐字移植 `md.go:154-279` 的阶段 1 / 1.5 / 2 / 3 / 3.5 / 4。
+- `cli/import-video.ts`（**新增 212 行**）：`importVideo` / `parseDurationFlag` / `createImportVideoCommand`；分块用 `openSync` + `readSync` + 复用 1 MiB `Buffer` 镜像 `io.ReadFull`。
+- `cli/import-md.ts`（**改薄壳，+9 −112**）：`-retire-legacy` 真正生效，stdout 逐字 `import-md: 导入 %d 篇，失败 %d 篇` + `  ! %s`；warnings 不打印。
+- `main.ts`（**+2**）：注册 `import-video`。
+
+测试与夹具：core-ts 新增 4 测试文件（`gojson` / `quiz` / `container` / `video`，共 346 行）；apps/node 新增 `store/store.test.ts`（+266）/ `importer/container.test.ts`（202 行）/ `importer/run.test.ts`（500 行）/ `cli/import-video.test.ts`（325 行），改 `cli/import-md.test.ts`（+14）/ `cli/export.test.ts`（+37）；夹具 `apps/node/src/cli/__fixtures__/e3seed/*.md`（**7 篇**：`01-solo` / `10-a` / `20-b` / `30-c` / `40-d` / `50-quiz` / `60-e`）。
+
+### 13.1 门禁 G1–G6（逐条通过）
+
+| 门 | 结果 | 证据 |
+|---|---|---|
+| G1 | 通过 | `go build ./...` / `go vet ./...` / `go test ./...` 全绿（本批不动 Go，作基线回归） |
+| G2 | 通过 | `apps/node` `npx tsc --noEmit` **exit 0** |
+| G3 | 通过 | `apps/node` `npx vitest run`：**47 文件 / 534 用例全绿**（批 D 收口时 44/492 ⇒ 批 E 净增 **3 文件 / 42 用例**）；`packages/core-ts` `npx vitest run`：**39 文件 / 404 用例全绿** |
+| G4 | 通过 | **判据 6：同数据集两侧 `pack_id` 与 `merkle_root` 同一**——4 组证据（方向 1/2/3 + G4-4），`pack.sqlite` / `manifest.json` 均两侧 sha256 全等，见 §13.2 |
+| G5 | 通过 | `git diff --stat -- internal/` **无输出**（`git status` 对 `internal/httpapi/web.go` 的 ` M` 为陈旧 stat 项，定向 `git diff` 为空）；`packages/protocol-ts/**` / `web/**` / `#72` 冻结的 `ServerRequest` / `ServerAdapters` 未动 |
+| G6 | 通过 | 只 `add` 本批 14 个新代码/测试文件 + 7 夹具 + 6 处改 + 2 个文档；`.gitignore` / `internal/httpapi/web.go` / `based-linux-amd64` / `.tmp/` 均未入暂存 |
+
+### 13.2 G4 字节级对拍实况（判据 6）
+
+**方法**：沿用 `apps/node/src/cli/export.test.ts`（**提交进仓库的 vitest 取证**，依赖仓库根 `based.exe`，`describe.skipIf(!existsSync(BASED_EXE))`；`diskHashes` **直读盘**算 sha256，不用 stdout 自报值）。批 E 新增**方向 3**（容器/分类/题库 seed，两侧**各自** `import-md` 建库 → 各自 export）与 **G4-4**（真实 >2 MiB 视频 → 两侧**各自** `import-video` → 各自 export），既有方向 1/2 复跑自证。
+
+| 证据 | 数据集 | `pack_id` | `merkle_root` | `pack.sqlite` sha | `manifest.json` sha |
+|---|---|---|---|---|---|
+| 方向 1 | `.tmp/p3probe`（Go 建库，3 条目） | `91bf490a…` 两侧同 | `b5b867a8…`（**空集常量**） | `932244ea…` 两侧同 | `799f3eff…` 两侧同 |
+| 方向 2 | `seed/`（Node 建库，3 条目） | `395f63a2…` 两侧同 | `b5b867a8…`（**空集常量**） | `fda7fc06…` 两侧同 | `7b517e1d…` 两侧同 |
+| 方向 3 | `e3seed`（两侧各自 `import-md`，14 条目） | `395f63a2…` 两侧同 | `b5b867a8…`（**空集常量**） | `405debfc…` 两侧同 | `20c2f361…` 两侧同 |
+| **G4-4** | 真实 2.5 MiB 视频（两侧各自 `import-video`，2 条目） | `13b32f91…` 两侧同 | **`9851a776…`（非平凡）** | `95f0d8e0…` 两侧同 | `712a2f16…` 两侧同 |
+
+**判据 6 的实质（关键事实）**：`merkle_root = protocol.MerkleRoot(blobIDs)`，而 `blobIDs` **只来自 `media_meta` 的 `DeclaredChunks`**（`internal/packexport/export.go:136-152`）⇒ **无视频块时 merkle 是空集常量** `b5b867a806ecbe6e33384b30f7dd30e00811421f4936f0eb3eccd9fb7e86ff2a`。故方向 1/2/3 的 merkle 证据**平凡**（只能证 import-md 路径的包字节等价）；判据 6 的**非平凡证据由 G4-4 提供**。
+
+**G4-4 关键日志（自跑复核）**：
+
+```
+[G4-4] import-video stdout go  ="import-video: course/cs101/lesson/l1/video/v1 块数=3 总字节=2621440 本次写盘=3 content_hash=9adb96476f3942f63489ab72d21d2041fb510062ab9a8fa402cc6725f52a0288\n"
+[G4-4] import-video stdout node="（同上一字相同）"
+[G4-4] go   pack_id=13b32f919bbe3cdb4b8e5b0f16b4e2fe cv=1 entries=2 merkle_root=9851a7765991c8e19219bd1fa65cb84ade0391a1af7fa05ef83c040149d7bf78
+[G4-4] node pack_id=13b32f919bbe3cdb4b8e5b0f16b4e2fe cv=1 entries=2 merkle_root=9851a7765991c8e19219bd1fa65cb84ade0391a1af7fa05ef83c040149d7bf78
+[G4-4] pack.sqlite   go=95f0d8e032ffaeb2803e2ffdeabdeac3e57230f5fb26a452f1bbf0a537219ab0
+[G4-4] pack.sqlite   node=95f0d8e032ffaeb2803e2ffdeabdeac3e57230f5fb26a452f1bbf0a537219ab0
+[G4-4] manifest.json  go=712a2f161320653ad3851e459632ff18efaf5a0a2186a969675f6190d27251d4
+[G4-4] manifest.json  node=712a2f161320653ad3851e459632ff18efaf5a0a2186a969675f6190d27251d4
+[G4-4] merkle_root=9851a7765991c8e19219bd1fa65cb84ade0391a1af7fa05ef83c040149d7bf78 空集常量=b5b867a806ecbe6e33384b30f7dd30e00811421f4936f0eb3eccd9fb7e86ff2a 非平凡=true
+```
+
+### 13.3 内容包无跨批缺口
+
+内容包 `pack.sqlite` 只有 5 张表（`meta` / `articles` / `segments` / `quizzes` / `media_meta`，`packexport.go:22-55`）+ 固定 4 条 `meta`（`schema_version` / `pack_id` / `content_version` / `merkle_root`），**不含 `items` / `directory_terms`** ⇒ §8「开库引导等价」边界项（Node 缺 Go `store.Open` 的 `seedDirectoryFromExisting`）**不进内容包**，判据 6 不受其影响。
+
+### 13.4 执行期发现（登记）
+
+1. **判据 6 的 `merkle_root` 是 over blob ids，无视频块时为空集常量**（关键事实，见 §13.2）：`pack_id = DerivePackID(issuer, content_version, merkle)` ⇒ 无视频块时 `pack_id` 只由 issuer + `content_version` 决定。故「判据 6 已验」必须以**含视频块**的数据集（G4-4）为准，方向 1/2/3 只证 `import-md` 路径的包字节等价。
+2. **`sortDeclared` 的字符串比较必须按 UTF-8 字节序（E3 修正，改包字节）**：JS `<` 是 UTF-16 码元序，非 BMP 字符（如 emoji）与 Go 字节序分歧 ⇒ E3 新增 `compareGoString`（核包内不得用 `Buffer`，用 `utf8()` 逐字节比较），`sortDeclared` 的 order / filename 均改由它比较。
+3. **`tags_json` 的既有真实字节偏差（E2 修正）**：`articleRowFromDoc` 原用 `JSON.stringify(doc.tags)`，不做 HTML 转义；Go `json.Marshal` 默认 `SetEscapeHTML(true)`（`<>&` → `\u003c/\u003e/\u0026`）⇒ 含这些字符的 tag 会改包字节。E2 改走 `marshalGoJSON` 并补对拍用例（`TAGS_HTML` 夹具 sha `90e7fbe9…`）。
+4. **`nextContentVersion` 整型判定比 Go 宽松（登记不改）**：用 `Number()` / `Number.isInteger`，对 `""` / `0x10` / `1e3` 等边界串比 Go `strconv.ParseInt` 宽松（与既有 `bumpContentVersion` 同约定）。
+5. **`stemOf` 对以点开头的文件名与 Go 有别（登记不改）**：`.mp4` 之类（`dot > 0` 判定）与 Go `filepath.Ext` + `TrimSuffix` 边界不同。
+6. **`-duration` 解析用十进制（登记不改）**：Go `flag.Int64`（`strconv.ParseInt(s,0,64)`）认 `0x` / `0o` / `0b` 前缀，Node 侧按十进制。
+7. **`Run` 阶段 4 失败的返回口径（登记不改）**：Go 返回 `(部分 res, err)`，Node 抛错；`read dir` 失败文案随 Node fs 措辞。
+8. **未知 flag 退出码 Node=1 vs Go=2**（既有登记，设计册 `#74` 附录 A）。
+9. **已知跨批缺口「开库引导等价」不在本批修**：已确认不进内容包（§13.3）。

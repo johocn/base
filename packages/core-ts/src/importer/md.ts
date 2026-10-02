@@ -6,6 +6,7 @@
 import { isValidSlug, sha256Hex, utf8 } from "@base/protocol-ts";
 
 import { firstLine, splitFrontMatter, stemOf } from "./frontmatter";
+import { marshalGoJSON } from "./gojson";
 
 /** 一篇待导入文章（对齐 Go `Doc`）。 */
 export interface MdDoc {
@@ -167,7 +168,8 @@ export interface ArticleRow {
 
 /** 由解析结果派生文章行：content_hash = hex(sha256(body))，source_rev = hash 前 16 字符。 */
 export function articleRowFromDoc(itemId: string, doc: MdDoc): ArticleRow {
-  const tagsJson = JSON.stringify(doc.tags);
+  // tags_json 直接进导出包：用 Go-json 等价序列化器（JSON.stringify 不做 `\u003c` 等 HTML 转义）。
+  const tagsJson = marshalGoJSON(doc.tags);
   const hash = sha256Hex(utf8(doc.body));
   return {
     itemId,

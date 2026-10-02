@@ -15,9 +15,12 @@ import {
   articleFromRow,
   quizFromRow,
   segmentFromRow,
+  segmentsContentHash,
   type StoreArticle,
   type StoreItem,
+  type StoreSegment,
 } from "@base/core-ts";
+import { sha256Hex, utf8 } from "@base/protocol-ts";
 import { normalizeJournalMode, openHostDb } from "../host/sqlite";
 import { openStore, storeKeyStatus } from "./store";
 
@@ -287,5 +290,268 @@ describe("normalizeJournalMode：WAL → rollback 头归一化", () => {
   it("库文件不存在 ⇒ 直接返回（交给驱动创建）", () => {
     const dir = tmpDir();
     expect(() => normalizeJournalMode(join(dir, "base.db"))).not.toThrow();
+  });
+});
+
+/** 构造一行 segments（contentHash 由写入侧算，这里只提供 kind/text/seq）。 */
+function seg(seq: number, kind: string, text: string): StoreSegment {
+  return { itemId: "", seq, kind, text, contentHash: "" };
+}
+
+describe("store 写面（批 E Task E1）", () => {
+  it("upsertSegmentItem：items + segments 两表，content_hash 与 seq 升序；二次 upsert 覆盖", () => {
+    const store = openStore(tmpDir());
+    try {
+      const segs = [seg(1, "link", "lesson/a"), seg(0, "digest", "简介"), seg(2, "link", "lesson/b")];
+      store.upsertSegmentItem({
+        itemId: "course/c1",
+        source: "course",
+        type: "course",
+        title: "C1",
+        segments: segs,
+      });
+
+      const expected = segmentsContentHash([...segs].sort((a, b) => a.seq - b.seq));
+      const it = store.getItem("course/c1");
+      expect(it).not.toBeNull();
+      expect(it?.contentHash).toBe(expected);
+      expect(it?.sourceRev).toBe(expected.slice(0, 16));
+      expect(it?.source).toBe("course");
+      expect(it?.type).toBe("course");
+      expect(it?.sqliteTable).toBe("segments");
+      expect(it?.distClass).toBe("public");
+      expect(it?.state).toBe("active");
+      expect(it?.updatedAt).not.toBe("");
+
+      const rows = store.listSegments("course/c1");
+      expect(rows.map((r) => r.seq)).toEqual([0, 1, 2]);
+      expect(rows.map((r) => r.kind)).toEqual(["digest", "link", "link"]);
+      expect(rows[0].text).toBe("简介");
+      expect(rows[0].contentHash).toBe(sha256Hex(utf8("简介")));
+      expect(rows[2].text).toBe("lesson/b");
+
+      // 二次 upsert 覆盖：旧 segments 行全删、按新内容重写，items 行被覆盖。
+      store.upsertSegmentItem({
+        itemId: "course/c1",
+        source: "course",
+        type: "course",
+        title: "C1v2",
+        segments: [seg(0, "digest", "新简介")],
+      });
+      const rows2 = store.listSegments("course/c1");
+      expect(rows2.length).toBe(1);
+      expect(rows2[0].text).toBe("新简介");
+      expect(store.getItem("course/c1")?.title).toBe("C1v2");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("upsertSegmentItem：item_id 空白抛错", () => {
+    const store = openStore(tmpDir());
+    try {
+      expect(() =>
+        store.upsertSegmentItem({
+          itemId: "  ",
+          source: "course",
+          type: "course",
+          title: "",
+          segments: [],
+        }),
+      ).toThrowError(/store: segment item_id 不能为空/);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("upsertQuiz：items + quizzes 两表，口径为 lesson/quiz", () => {
+    const store = openStore(tmpDir());
+    try {
+      store.upsertQuiz({
+        itemId: "lesson/q1",
+        title: "题组",
+        questionJson: '{"q":1}',
+        contentHash: "h1",
+        sourceRev: "r1",
+      });
+      expect(store.listQuizzes(["lesson/q1"])["lesson/q1"]).toEqual({
+        itemId: "lesson/q1",
+        questionJson: '{"q":1}',
+        contentHash: "h1",
+      });
+      const it = store.getItem("lesson/q1");
+      expect(it?.source).toBe("lesson");
+      expect(it?.type).toBe("quiz");
+      expect(it?.sqliteTable).toBe("quizzes");
+      expect(it?.sourceRev).toBe("r1");
+      expect(it?.contentHash).toBe("h1");
+      expect(it?.distClass).toBe("public");
+      expect(it?.state).toBe("active");
+
+      store.upsertQuiz({
+        itemId: "lesson/q1",
+        title: "题组2",
+        questionJson: '{"q":2}',
+        contentHash: "h2",
+        sourceRev: "r2",
+      });
+      expect(store.listQuizzes(["lesson/q1"])["lesson/q1"].questionJson).toBe('{"q":2}');
+      expect(store.getItem("lesson/q1")?.contentHash).toBe("h2");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("upsertMediaItem：items + media_meta 与 chunk_hashes_json 逐字", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    store.upsertMediaItem({
+      itemId: "media/v1",
+      source: "video",
+      type: "video",
+      title: "V",
+      sourceRev: "rv",
+      contentHash: "mh",
+      mime: "video/mp4",
+      size: 1500,
+      duration: 5,
+      chunkSize: 1024,
+      chunkHashes: ["aa", "bb"],
+    });
+    expect(store.getMediaMeta("media/v1")).toEqual({
+      mime: "video/mp4",
+      size: 1500,
+      duration: 5,
+      chunkSize: 1024,
+      chunkHashes: ["aa", "bb"],
+    });
+    const it = store.getItem("media/v1");
+    expect(it?.source).toBe("video");
+    expect(it?.type).toBe("video");
+    expect(it?.sqliteTable).toBe("media_meta");
+    expect(it?.sourceRev).toBe("rv");
+    expect(it?.contentHash).toBe("mh");
+
+    store.upsertMediaItem({
+      itemId: "media/v2",
+      source: "video",
+      type: "cover",
+      title: "C",
+      sourceRev: "",
+      contentHash: "mh2",
+      mime: "image/png",
+      size: 10,
+      duration: 0,
+      chunkSize: 0,
+      chunkHashes: [],
+    });
+    store.close();
+
+    const raw = openHostDb(join(dir, "base.db"), { readOnly: true });
+    try {
+      expect(
+        String(
+          raw.get("SELECT chunk_hashes_json FROM media_meta WHERE item_id=?", ["media/v1"])
+            ?.chunk_hashes_json,
+        ),
+      ).toBe('["aa","bb"]');
+      expect(
+        String(
+          raw.get("SELECT chunk_hashes_json FROM media_meta WHERE item_id=?", ["media/v2"])
+            ?.chunk_hashes_json,
+        ),
+      ).toBe("[]");
+    } finally {
+      raw.close();
+    }
+  });
+
+  it("nextContentVersion：缺行→1、正常+1（只读不递增）、坏值抛错", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    expect(store.nextContentVersion()).toBe(1); // 缺行
+    expect(store.bumpContentVersion()).toBe(1);
+    expect(store.nextContentVersion()).toBe(2);
+    expect(store.nextContentVersion()).toBe(2); // 只读，不递增
+    store.close();
+
+    const raw = openHostDb(join(dir, "base.db"));
+    raw.run(
+      "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      ["content_version", "abc"],
+    );
+    raw.close();
+
+    const store2 = openStore(dir);
+    try {
+      expect(() => store2.nextContentVersion()).toThrowError(/store: bad content_version "abc"/);
+    } finally {
+      store2.close();
+    }
+  });
+
+  it("retireItem：墓碑 MAX 语义 + state 置 removed", () => {
+    const store = openStore(tmpDir());
+    try {
+      store.upsertQuiz({
+        itemId: "lesson/r1",
+        title: "T",
+        questionJson: "{}",
+        contentHash: "x",
+        sourceRev: "",
+      });
+      store.retireItem("lesson/r1", 5);
+      expect(store.listTombstones()).toEqual([{ item_id: "lesson/r1", revoked_rev: 5 }]);
+      expect(store.getItem("lesson/r1")?.state).toBe("removed");
+
+      store.retireItem("lesson/r1", 3); // 更小值：MAX 保留 5
+      expect(store.listTombstones()[0].revoked_rev).toBe(5);
+      store.retireItem("lesson/r1", 9); // 更大值：覆盖为 9
+      expect(store.listTombstones()[0].revoked_rev).toBe(9);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("getItem：有行返回、无行返回 null", () => {
+    const store = openStore(tmpDir());
+    try {
+      store.upsertArticle({
+        itemId: "article/g1",
+        title: "T",
+        digest: "",
+        publishedAt: "",
+        tagsJson: "[]",
+        bodyMd: "b",
+        contentHash: "ch",
+        sourceRev: "sr",
+        updatedAt: "",
+      });
+      const it = store.getItem("article/g1");
+      expect(it?.itemId).toBe("article/g1");
+      expect(it?.source).toBe("article");
+      expect(it?.contentHash).toBe("ch");
+      expect(it?.authorId).toBe("");
+      expect(it?.authorSig).toBe("");
+      expect(store.getItem("article/nope")).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("putBlob + hasBlob 往返（明文 size、删文件即消失）", () => {
+    const dir = tmpDir();
+    const store = openStore(dir);
+    try {
+      const data = utf8("hello blob");
+      const id = sha256Hex(data).slice(0, 32);
+      expect(store.hasBlob(id)).toEqual({ exists: false, size: 0 });
+      store.putBlob(id, data, "media/v1", 0);
+      expect(store.hasBlob(id)).toEqual({ exists: true, size: data.byteLength });
+      rmSync(join(dir, "blobs", id.slice(0, 2), id.slice(2, 4), id));
+      expect(store.hasBlob(id)).toEqual({ exists: false, size: 0 });
+    } finally {
+      store.close();
+    }
   });
 });

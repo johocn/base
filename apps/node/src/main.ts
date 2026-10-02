@@ -15,6 +15,7 @@ import { openSyncStore } from "./store/syncstore";
 import { createTlsCertCommand } from "./cli/tls-cert";
 import { createExportCommand } from "./cli/export";
 import { createImportMdCommand } from "./cli/import-md";
+import { createImportVideoCommand } from "./cli/import-video";
 import { createReleaseCommand } from "./cli/release";
 import { createPubkeyCommand } from "./cli/pubkey";
 import { createStoreKeyCommand } from "./cli/store-key";
@@ -159,6 +160,7 @@ export async function main(): Promise<void> {
   adapters.cli.register(serveCmd);
   adapters.cli.register(createTlsCertCommand(adapters.tls));
   adapters.cli.register(createImportMdCommand());
+  adapters.cli.register(createImportVideoCommand());
   adapters.cli.register(createExportCommand());
   adapters.cli.register(createReleaseCommand());
   adapters.cli.register(createPubkeyCommand());

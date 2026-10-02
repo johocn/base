@@ -10,6 +10,7 @@ import { createImportMdCommand } from "./import-md";
 
 const BASED_EXE = fileURLToPath(new URL("../../../../based.exe", import.meta.url));
 const SEED = fileURLToPath(new URL("../../../../seed", import.meta.url));
+const E3SEED = fileURLToPath(new URL("./__fixtures__/e3seed/", import.meta.url));
 
 const dirs: string[] = [];
 function tmpRoot(): string {
@@ -54,5 +55,18 @@ describe.skipIf(!existsSync(BASED_EXE))("跨实现：Go import-md vs Node import
 
     expect(go.stdout).toBe("import-md: 导入 3 篇，失败 0 篇\n");
     expect(node.stdout).toBe(go.stdout);
+  });
+
+  it("e3seed（容器/分类/题库）：stdout 逐行相同、退出码相同", async () => {
+    const root = tmpRoot();
+    const go = spawnSync(BASED_EXE, ["import-md", "-dir", E3SEED, "-data", join(root, "go")], {
+      encoding: "utf8",
+    });
+    const node = await runNode(["-dir", E3SEED, "-data", join(root, "node")]);
+
+    expect(go.status).toBe(0);
+    expect(node.code).toBe(go.status);
+    expect(node.stdout).toBe(go.stdout);
+    expect(go.stdout).toBe("import-md: 导入 7 篇，失败 0 篇\n");
   });
 });

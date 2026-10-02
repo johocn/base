@@ -58,6 +58,39 @@ export interface MediaMeta {
   chunkHashes: string[];
 }
 
+/** `UpsertSegmentItem` 的输入（Go `SegmentItem`，`segments.go:26-33`）。 */
+export interface SegmentItemInput {
+  itemId: string;
+  source: string;
+  type: string;
+  title: string;
+  segments: StoreSegment[];
+}
+
+/** `UpsertQuiz` 的输入（Go `Quiz`，`store.go:76-83`）。 */
+export interface QuizInput {
+  itemId: string;
+  title: string;
+  questionJson: string;
+  contentHash: string;
+  sourceRev: string;
+}
+
+/** `UpsertMediaItem` 的输入（Go `MediaItem`，`store.go:86-100`）。 */
+export interface MediaItemInput {
+  itemId: string;
+  source: string;
+  type: string;
+  title: string;
+  sourceRev: string;
+  contentHash: string;
+  mime: string;
+  size: number;
+  duration: number;
+  chunkSize: number;
+  chunkHashes: string[];
+}
+
 /** 块引用（契约第 10 条）。 */
 export interface BlobRef {
   blobId: string;
