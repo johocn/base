@@ -141,6 +141,15 @@ export function normalizeTermKey(raw: string): string | null {
 }
 
 /**
+ * 展示名清洗（对齐 Go `store.CleanDisplayName`，`directory.go:64-66`）：
+ * `stripControl(collapseSpaces(TrimSpace(raw)))`。**故意不做全角折叠与大小写折叠**——
+ * 展示名保留原文（含全角、大小写），便于阅读。
+ */
+export function cleanDisplayName(raw: string): string {
+  return stripControl(collapseGoSpaces(trimGoSpace(raw)));
+}
+
+/**
  * 拉取目录并落缓存（册子 §4.2）。
  * - 版本未变（`unchanged:true`）时**绝不写缓存**，避免用等价数据覆盖本地。
  * - 形状非法时抛错，不用坏响应覆盖已有缓存。

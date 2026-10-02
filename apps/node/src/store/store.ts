@@ -58,6 +58,8 @@ import {
   type StoreKeyOptions,
   type StoreKeyStatusResult,
 } from "../host/storekey";
+import type { Db } from "../db";
+import { seedDirectoryFromExisting } from "./directory";
 import { hasBlob as hasBlobOf, hostDbAsDb, putBlob as putBlobOf } from "./peersync";
 import { migrate, schemaStatements } from "./schema";
 
@@ -453,13 +455,49 @@ export function openStore(dataDir: string, opts: OpenStoreOptions = {}): Store {
   db.exec("PRAGMA journal_mode=DELETE");
   db.exec("PRAGMA foreign_keys=1");
   try {
-    for (const stmt of schemaStatements) db.exec(stmt);
-    migrate(db);
+    bootstrapStoreDb(db);
   } catch (err) {
     db.close();
     throw err;
   }
   return new StoreImpl(db, dataDir, key, path);
+}
+
+/**
+ * Go `store.Open` 的引导段（`store.go:155-168`）：`schemaStatements` → `migrate` →
+ * `seedDirectoryFromExisting`。**读写库用**，只读打开不调。
+ *
+ * 目录 seed 失败只记 stderr、不阻断（册子 #58 §9 风险 1）；schema / migrate 失败照旧上抛。
+ */
+export function bootstrapStoreDb(db: HostDb): void {
+  for (const stmt of schemaStatements) db.exec(stmt);
+  migrate(db);
+  try {
+    seedDirectoryFromExisting(db);
+  } catch (err) {
+    process.stderr.write(
+      `store: 目录 seed 迁移失败（目录端点开放前必须修好，#58 §9 风险 1）: ${String(err)}\n`,
+    );
+  }
+}
+
+/**
+ * 打开 `base.db` 并跑引导段，返回路由层用的裸 `Db`（对齐 Go `store.Open` → `httpapi.Server`）。
+ * 供 `main.ts` 的 `serve` 引导使用；journal / pragma 与 `openStore` 同口径。
+ */
+export function openBootstrapDb(dbPath: string): Db {
+  normalizeJournalMode(dbPath);
+  const host = openHostDb(dbPath);
+  host.exec("PRAGMA busy_timeout=5000");
+  host.exec("PRAGMA journal_mode=DELETE");
+  host.exec("PRAGMA foreign_keys=1");
+  try {
+    bootstrapStoreDb(host);
+  } catch (err) {
+    host.close();
+    throw err;
+  }
+  return hostDbAsDb(host);
 }
 
 /** 报告当前配置下的密钥状态，**不创建任何文件**（对齐 Go `StoreKeyStatus`）。 */

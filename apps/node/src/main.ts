@@ -3,7 +3,6 @@ import { pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import type { CliCommand, ServerAdapters, TlsMaterial } from "@base/core-ts";
 import { VERSION } from "./version";
-import { openDb } from "./db";
 import { createHttpServerAdapter } from "./host/http";
 import { createTlsAdapter } from "./host/tls";
 import { createSchedulerAdapter } from "./host/scheduler";
@@ -12,6 +11,7 @@ import { createLifecycleAdapter } from "./host/lifecycle";
 import { openHostDb } from "./host/sqlite";
 import { loadStoreKey } from "./host/storekey";
 import { openSyncStore } from "./store/syncstore";
+import { openBootstrapDb } from "./store/store";
 import { createTlsCertCommand } from "./cli/tls-cert";
 import { createExportCommand } from "./cli/export";
 import { createImportMdCommand } from "./cli/import-md";
@@ -87,7 +87,7 @@ export async function main(): Promise<void> {
         signKeyHex: process.env.BASE_SIGN_KEY ?? "",
       };
 
-      const db = openDb(dbPath);
+      const db = openBootstrapDb(dbPath);
       const listener = await startServer(adapters, db, opts);
       process.stdout.write(`listening ${listener.addr()}\n`);
 

@@ -139,9 +139,9 @@
 ## 8. 后续批次边界（只登记，不展开）
 
 - **批 B**：`identity/register`（`identity.go:91`）、`identity/escrow` PUT（`:161`）、`me`、`event`（`event.go`，含 `eventTypeRegistry` fail-closed 白名单）、`profile`、`submit`（`submit.go` 393 行）、`blob` POST（`blob.go:17`）、`group` 读权（`group.go:681`）+ `authmw.go`（236 行，`X-Base-*` 五头）。验收 = 判据 3。**已切 4 子批 B1–B4，详列见 §10**（`govern.v1` 分支已定随 event 一起做，不留批 C；B1–B4 已收口）。
-- **批 C**：`govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`；验收 = 判据 5。**已收口**（全量见 §11）——侦察后确认 `govern_event.go` 的 `govern.v1` 事件路径**已在 B2 收口**，故批 C 实做为 `govern.go` 的三条**签名**路由（`POST /v1/proposal` / `POST /v1/proposal/{proposal_id}/vote` / `GET /v1/proposal`）及其 store 依赖。**残余缺口**：Node 侧缺 Go `store.Open` 的 `seedDirectoryFromExisting` 开库引导（见 §11.4 发现 1）。
-- **开库引导等价（新增边界，待认领）**：Go `internal/store/store.go:155-168` 的 `Open` = `schemaStatements` → `migrate` → `seedDirectoryFromExisting`（`internal/store/directory.go:294-442`：把存量 `items WHERE item_id LIKE 'tag/%'`、`source='category'`、`segments seq<0` 的 `attr.category` / `attr.instructor` 登记为 `directory_terms` 的 `approved` 词条，仅当确有存量词条时 `bumpDirectoryVersion` 一次并写 `meta.directory_seeded=1`；失败只打 stderr 不阻断 Open）。Node 侧现状：`openStore`（`apps/node/src/store/store.ts:244-267`）只跑 `migrate`、**不含 seed**；`main.ts:48` 的 `serve` 用裸 `openDb`（连 `migrate` 都无）。**验收 = 开库后 DB 快照与 Go 逐字节一致**（即批 C G4 阶段 4 的 4 行对称差归零，见 §11.3）。
-- **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。**已收口**（全量见 §12）——5 条对端路由全部落在 `routes/peer.ts`；出站侧拆为 `store/syncstore.ts`（`SyncStore` 端口）+ `store/packimport.ts` + `peersync/*`；对端监听由 `serve.ts` 的 `startPeerServer` 承载（公开路由 ∪ 内部路由，对齐 Go `PeerHandler()`）。**残余缺口**：Node 缺 Go `store.Open` 的 `seedDirectoryFromExisting` 开库引导（§12.3 的 3 行对称差，同下条边界项）。
+- **批 C**：`govern.go`（405 行）+ `govern_event.go`（222 行）+ `directory_proposal`；验收 = 判据 5。**已收口**（全量见 §11）——侦察后确认 `govern_event.go` 的 `govern.v1` 事件路径**已在 B2 收口**，故批 C 实做为 `govern.go` 的三条**签名**路由（`POST /v1/proposal` / `POST /v1/proposal/{proposal_id}/vote` / `GET /v1/proposal`）及其 store 依赖。**残余缺口**：Node 侧缺 Go `store.Open` 的 `seedDirectoryFromExisting` 开库引导（见 §11.4 发现 1；**已由批 F 收口**，见 §14）。
+- **批 F：开库引导等价（判据 7）**：**已收口**（全量见 §14；批 C §11.3 的 4 行 / 批 D §12.3 的 3 行 DB 快照对称差**归零**）。Go `internal/store/store.go:155-168` 的 `Open` = `schemaStatements` → `migrate` → `seedDirectoryFromExisting`（`internal/store/directory.go:294-442`：把存量 `items WHERE item_id LIKE 'tag/%'`、`source='category'`、`segments seq<0` 的 `attr.category` / `attr.instructor` 登记为 `directory_terms` 的 `approved` 词条，仅当确有存量词条时 `bumpDirectoryVersion` 一次并写 `meta.directory_seeded=1`；失败只打 stderr 不阻断 Open）。Node 侧现状：`openStore`（`apps/node/src/store/store.ts:244-267`）只跑 `migrate`、**不含 seed**；`main.ts:48` 的 `serve` 用裸 `openDb`（连 `migrate` 都无）。**验收 = 开库后 DB 快照与 Go 逐字节一致**（即批 C G4 阶段 4 的 4 行对称差归零，见 §11.3）。
+- **批 D**：`peer.go`（334 行）+ `internal/peersync`（2,784 行）+ CLI `peer-sync` / `scrub`；验收 = 判据 4（**只增不减**须保持）。**已收口**（全量见 §12）——5 条对端路由全部落在 `routes/peer.ts`；出站侧拆为 `store/syncstore.ts`（`SyncStore` 端口）+ `store/packimport.ts` + `peersync/*`；对端监听由 `serve.ts` 的 `startPeerServer` 承载（公开路由 ∪ 内部路由，对齐 Go `PeerHandler()`）。**残余缺口**：Node 缺 Go `store.Open` 的 `seedDirectoryFromExisting` 开库引导（§12.3 的 3 行对称差，同下条边界项；**已由批 F 收口**，见 §14）。
 - **批 E**：`internal/importer`（1,819 行）容器 / 题库 / 视频派生 + CLI `import-video`；验收 = 判据 6。**已收口**（全量见 §13）——Node 落点：core-ts 纯派生 `importer/{gojson,quiz,container,video}.ts` + 宿主编排 `apps/node/src/importer/{container,run}.ts` + CLI `import-video`。**判据 6 的非平凡证据由 G4-4（真实视频块）提供**（见 §13.2）。
 
 ## 9. 执行实况
@@ -518,11 +518,11 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 **仅 go 侧有 3 行**：`directory_terms|tag|x|x|approved||<ts>|<ts>`、`meta|directory_seeded|1`、`meta|directory_version|4`。
 **仅 node 侧有 1 行**：`meta|directory_version|3`。
 
-**根因**：Go `store.Open`（`internal/store/store.go:164-168`）在 `migrate` 后调 `seedDirectoryFromExisting`（`internal/store/directory.go:303`），把存量 `tag/x` 登记为 `approved` 词条并 `bumpDirectoryVersion` 一次、写 `meta.directory_seeded=1`；Node 侧无等价实现 ⇒ 缺 1 行词条、`directory_version` 少 bump 一次、无 `directory_seeded` 键，其余行为这 3 行挤出的**行序整体错位**（内容一致）。属**开库引导层**，不属批 C 三路由范围（§8 已新增「开库引导等价」边界项待认领）。
+**根因**：Go `store.Open`（`internal/store/store.go:164-168`）在 `migrate` 后调 `seedDirectoryFromExisting`（`internal/store/directory.go:303`），把存量 `tag/x` 登记为 `approved` 词条并 `bumpDirectoryVersion` 一次、写 `meta.directory_seeded=1`；Node 侧无等价实现 ⇒ 缺 1 行词条、`directory_version` 少 bump 一次、无 `directory_seeded` 键，其余行为这 3 行挤出的**行序整体错位**（内容一致）。属**开库引导层**，不属批 C 三路由范围（§8 已新增「开库引导等价」边界项待认领；**已由批 F 收口**，见 §14：此 4 行对称差归零）。
 
 ### 11.4 执行期发现（登记）
 
-1. **Node 缺 Go `store.Open` 的目录 seed 引导（残余缺口，登记；用户 2026-10-02 裁定「登记而非实现」）**：覆盖 §11.3 的 4 行对称差。双层——① 全仓无 `seedDirectoryFromExisting` / `directory_seeded` 等价实现；② `openStore` 不含 seed、`main.ts:48` 的 `serve` 走裸 `openDb`（连 `migrate` 都无）。**处置**：§8 新增边界项「开库引导等价」待后续批次认领，**验收 = 开库后 DB 快照与 Go 逐字节一致**；本批不动 `openStore` / `main.ts` 这条批 A/B 已收口基线共用的路径。
+1. **Node 缺 Go `store.Open` 的目录 seed 引导（残余缺口，登记；用户 2026-10-02 裁定「登记而非实现」）**：覆盖 §11.3 的 4 行对称差。双层——① 全仓无 `seedDirectoryFromExisting` / `directory_seeded` 等价实现；② `openStore` 不含 seed、`main.ts:48` 的 `serve` 走裸 `openDb`（连 `migrate` 都无）。**处置**：§8 新增边界项「开库引导等价」待后续批次认领，**验收 = 开库后 DB 快照与 Go 逐字节一致**；本批不动 `openStore` / `main.ts` 这条批 A/B 已收口基线共用的路径。**批 F 已收口**（Node `seedDirectoryFromExisting` + `openBootstrapDb` 落地，见 §14）。
 2. **`govern_event.go` 已在 B2 收口（范围厘清，非缺口）**：§8 原登记含 `govern_event.go`，但该文件的事件路径（`govern.v1` body 校验 + 投影 + settle）**已随批 B2 交付**（§10.8，`routes/governEvent.ts` 235 行 + `store/governProjection.ts`）；批 C 只做签名路径。两路径的差异在本批显式保留：`addVoteTx` 用**实时** `filterRoster` + `GovernThresholdForRoster(action, len(roster), true)`；`SettleGovernProposal` 用**快照水位** + 真实 `rosterReady` 且带 `#65` 小节点豁免 ⇒ **签名路径与事件路径各自的票数 / 门槛语义不可互换**。
 3. **`EncodeTagLinks` 从事件路径复用（消重，非缺口）**：B2 曾删死代码 `encodeTagLinks`（§10.8 发现 4），本批签名路径需要它 ⇒ 经 `store/governProjection.ts` 加 `export` 复用**唯一实现**，不新造第二份口径；其 `goJSONString` 对齐 `json.Marshal`（`encodeTagLinks` 产 struct 序 `TagID,TargetID,Kind`，**非字典序**）。
 4. **`routes/json.ts` 的 `encodeString` 既有偏离（残余缺口，登记；非本批引入）**：`0x08` / `0x0c` 输出 `\u0008` / `\u000c`（Go `json.Marshal` 用 `\b` / `\f`）、`0x7f`(DEL) 被转义为 `\u007f`（Go 不转义）。本批 `proposal` 路径不受影响（`encodeTagLinks` 走独立 `goJSONString`；`writeAuthErr` / `jsonResponse` 的文案键值均不含该码域）⇒ **登记不改**。
@@ -605,11 +605,11 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 **仅 go 侧有 3 行**：`directory_terms|tag|x|x|approved||<ts>|<ts>`、`meta|directory_seeded|1`、`meta|directory_version|1`。
 **仅 node 侧有 0 行**。
 
-**根因**：同 §11.3——Go `store.Open` 在 `migrate` 后调 `seedDirectoryFromExisting`，把存量 `tag/x` 登记为 `approved` 词条并 `bumpDirectoryVersion` 一次、写 `meta.directory_seeded=1`；Node 侧无等价实现。属**开库引导层**（§8「开库引导等价」边界项），**不属批 D 五路由范围**。批 C 实测 4 行对称差（含 node 侧 `directory_version|3`）本批降为 3 行，差异源于两侧种子不同（本批为纯 `tag/x` 单存量词条、无 proposal 路径），非行为变化。
+**根因**：同 §11.3——Go `store.Open` 在 `migrate` 后调 `seedDirectoryFromExisting`，把存量 `tag/x` 登记为 `approved` 词条并 `bumpDirectoryVersion` 一次、写 `meta.directory_seeded=1`；Node 侧无等价实现。属**开库引导层**（§8「开库引导等价」边界项），**不属批 D 五路由范围**。批 C 实测 4 行对称差（含 node 侧 `directory_version|3`）本批降为 3 行，差异源于两侧种子不同（本批为纯 `tag/x` 单存量词条、无 proposal 路径），非行为变化。**批 F 已将此 3 行对称差归零**（见 §14.2）。
 
 ### 12.4 执行期发现（登记）
 
-1. **Node 缺 Go `store.Open` 的目录 seed 引导（残余缺口，沿用 §11.4 发现 1）**：覆盖 §12.3 的 3 行对称差；本批不动 `openStore` / `main.ts` 这条已收口基线共用的路径。
+1. **Node 缺 Go `store.Open` 的目录 seed 引导（残余缺口，沿用 §11.4 发现 1）**：覆盖 §12.3 的 3 行对称差；本批不动 `openStore` / `main.ts` 这条已收口基线共用的路径（**批 F 已收口**，见 §14）。
 2. **对端路由的挂载面是 `PeerHandler()` 而非 `Handler()`（非缺口，口径定死）**：Go 5 条对端路由注册在 `(*httpapi.Server).PeerHandler()`（`server.go:93` = 公开路由 ∪ 内部路由），`Handler()` 只含公开路由 ⇒ 取证件必须走 `PeerHandler()` 才能覆盖；Node 侧 `startPeerServer` 用 `wrapAdapter` 把 `requireNodeKey` 套到**该 adapter 上注册的每个 handler**，与 Go 用 `RequireNodeKey` 包整张 `PeerHandler()` mux 等价；`-node-key` 为空时不包装（两侧同）。
 3. **`requireNodeKey` 与 TLS 指纹是两层（非缺口）**：`X-Base-Node-Key` 预共享密钥（契约 6.3）与双向 TLS 指纹固定各自独立；Node 侧新增 `routes/nodekey.test.ts`（命中放行 / 缺头 / 不等长 / 等长不等值 → 401 `node_key_mismatch`）。
 4. **取证件两侧都绕过真实 TLS 握手（口径定死，非缺口）**：Go 侧 `PeerHandler()` 进程内直分发（`httptest.NewRecorder()`），Node 侧真 `127.0.0.1` 回环但不做双向 TLS ⇒ G4 只自证**路由行为**等价，**不覆盖** TLS 握手 / 指纹固定层（该层由 `host/tls.ts` 与 `tlscfg.go` 的对齐单独负责）。
@@ -710,3 +710,73 @@ apps/node（宿主 IO）：
 7. **`Run` 阶段 4 失败的返回口径（登记不改）**：Go 返回 `(部分 res, err)`，Node 抛错；`read dir` 失败文案随 Node fs 措辞。
 8. **未知 flag 退出码 Node=1 vs Go=2**（既有登记，设计册 `#74` 附录 A）。
 9. **已知跨批缺口「开库引导等价」不在本批修**：已确认不进内容包（§13.3）。
+
+## 14. 批 F：开库引导等价（判据 7）
+
+**状态：已收口**（§8「开库引导等价」边界项由本批认领并关闭）。
+
+**范围**：把 Go `store.Open` 的第三段——`seedDirectoryFromExisting`（`internal/store/directory.go:294-446`）——移植到 Node 侧，并接进 `openStore` 与 `main.ts` 的 `serve` 引导；**验收 = 开库后 DB 快照与 Go 逐字节一致**（批 C §11.3 的 4 行对称差、批 D §12.3 的 3 行对称差归零）。
+
+**分层（沿用 #73 §1）**：纯派生（词条抽取 / 归一化 / 去重 / 排序 / SQL 常量）→ `packages/core-ts/src/store/directory.ts`；SQLite 驱动与事务 → `apps/node/src/store/directory.ts`。
+
+**Task 拆解与产出**：
+
+| Task | 产出 | 提交 |
+|---|---|---|
+| F1 | core-ts 纯层（新 `packages/core-ts/src/store/directory.ts`）：`DirectorySeedKind` / `META_DIRECTORY_SEEDED` / `META_DIRECTORY_VERSION` / seed 四条 SQL 常量（attrs / category / tag / upsert）/ `deriveDirectorySeedTerms`（三源归并、`(kind,term_key)` 去重先到先得、非法归一化丢弃、`compareGoString` 升序）；`src/directory.ts` 增 `cleanDisplayName`（= `stripControl(collapseGoSpaces(trimGoSpace(raw)))`，**故意不折全角与大小写**）；`src/index.ts` 增转出；`store/directory.test.ts` **8 用例** | 见本次提交 |
+| F2 | apps/node 宿主层（新 `apps/node/src/store/directory.ts`）：`seedDirectoryFromExisting(db)`（`meta.directory_seeded` 非空短路 / 单事务 / 空集 `ROLLBACK` 且不落键 / 失败 `ROLLBACK` 后上抛）+ 私有 `nowUTC` / `nextDirectoryVersion`；`store/store.ts` 抽出 `bootstrapStoreDb`（schema → migrate → seed，seed 失败只打 stderr 不阻断）与 `openBootstrapDb`，`openStore` 写路径改走 `bootstrapStoreDb`；`main.ts` 的 `serve` 引导由裸 `openDb` 改 `openBootstrapDb`；`store/directory.test.ts` **5 用例** | 见本次提交 |
+| F3 | 门禁 G1–G6；G4 阶段 4 DB 快照对称差归零取证（工装 `.tmp/g4/`，**未入提交**）；批 C / 批 D 对拍回归 | 见本次提交 |
+| F4 | 回填本 §14 + `docs/README.md` 登记 + 只 add 本批文件 → `commit` → `push` | 见本次提交 |
+
+### 14.1 门禁 G1–G6
+
+| 门 | 结果 | 证据 |
+|---|---|---|
+| G1 | 通过 | `go build ./...` / `go vet ./...` / `go test ./...` 全绿（本批不动 Go，作基线回归） |
+| G2 | 通过 | `apps/node` `npx tsc --noEmit` **无输出** |
+| G3 | 通过 | `apps/node` `npx vitest run`：**48 文件 / 539 用例全绿**（批 E 收口时 47/534 ⇒ 批 F 净增 **1 文件 / 5 用例**）；`packages/core-ts` `npx vitest run`：**40 文件 / 412 用例全绿**（批 E 收口时 39/404 ⇒ 净增 **1 文件 / 8 用例**） |
+| G4 | 通过 | **判据 7：阶段 4 DB 快照对称差归零**——`tokens=179 divergences=0`、`dbSnapshot diffs=0 (lines=114)`；批 C 的 4 行 / 批 D 的 3 行对称差（§11.3 / §12.3）均归零，见 §14.2 |
+| G5 | 通过 | `git diff --stat -- internal/` **无输出**（`git status` 对 `internal/httpapi/web.go` 的 ` M` 为陈旧 stat 项，定向 `git diff` 为空）；`packages/protocol-ts/**` / `web/**` / `#72` 冻结的 `ServerRequest` / `Adapters` / `ServerAdapters` 未动 |
+| G6 | 通过 | 只 `add` 本批 **10 个文件**（8 代码 / 测试 + 2 文档）；`.gitignore` / `internal/httpapi/web.go` / `based-linux-amd64` / `.tmp/`（含 G4 取证件）均未入暂存 |
+
+### 14.2 G4 阶段 4 DB 快照对称差归零（判据 7）
+
+**方法**（沿用 §11.2 / §12.2 的进程内取证件，`.tmp/g4/`：`node-probe.test.ts` / `goprobe/main.go` / `compare.mjs`，**未入提交**）：Node `openDb` + `migrate()` 建全量 schema → 插种子（`article/x` / `course/c1` / `article/gone` + **`tag/x` 存量标签条目** + store 密钥）→ **复制两份**（`go/` / `node/`）→ `go/` 由 `goprobe` 走 `store.Open`（schema → migrate → 目录 seed）→ **阶段 1.5**：对 `node/base.db` 调 `bootstrapStoreDb`（对齐 Go 的 `store.Open`）→ 两侧同一份 **179 token** 逐字节回放 → 阶段 4 导出两侧 DB 快照。
+
+**结果：`tokens=179 divergences=0`、`dbSnapshot diffs=0 (lines=114)`**（批 E 版为 111 行 ⇒ 净增 3 行正是 seed 的三行）。两侧相同且**逐字节相等**的关键行：
+
+```
+directory_terms|category|cats|Cats|approved|730a5edc28c2f8daf2d9dce3a01d5f20|<ts>|<ts>
+directory_terms|tag|x|x|approved||<ts>|<ts>
+meta|directory_seeded|1
+meta|directory_version|2
+```
+
+- `tag/x` 行由**开库引导段**产生（三源之一：`items WHERE item_id LIKE 'tag/%'` 的第 1 段）；`category/cats` 行由本数据集 A10 `govern.v1` 的 `directory_add` 提案产生（两侧同）。
+- `directory_version=2` = 引导段 bump 一次（`0→1`）+ A10 提案 bump 一次（`1→2`）；`directory_seeded=1` 为引导段落的幂等键。
+- 批 C 的 **4 行**对称差与批 D 的 **3 行**对称差（§11.3 / §12.3）**归零**。
+
+### 14.3 负控（缺口确由引导段产生）
+
+`seedcheck.mjs`（临时负控，未入提交）直连两侧库副本比对——`seed/` = bootstrap **前**的种子副本，`node/` = bootstrap **后**：
+
+```
+--- seed ---（bootstrap 前）
+meta directory%   []
+directory_terms   []
+--- node ---（bootstrap 后）
+meta directory%   [{"key":"directory_version","value":"2"},{"key":"directory_seeded","value":"1"}]
+directory_terms   [{"kind":"category","term_key":"cats","display_name":"Cats","state":"approved","first_author_id":"730a5edc…"},{"kind":"tag","term_key":"x","display_name":"x","state":"approved","first_author_id":""}]
+```
+
+⇒ 差额确由**引导段**（`bootstrapStoreDb` 里的 `seedDirectoryFromExisting`）产生，非别处。
+
+### 14.4 执行期发现（登记）
+
+1. **既有对拍工装曾丧失判别力（本批修复）**：批 E 版 `node-probe.test.ts` 的种子无 `tag/%`、无 `source='category'`、无 `attr.*` 段 ⇒ Go 侧 seed 为空集，两侧快照**天然相同**（旧 111 行 REPORT 报「逐字节相同」），对「开库引导等价」不具判别力。本批在种子中加入 `tag/x` 条目方恢复判别力 ⇒ 缺口暴露为 3 行对称差，修复后归零。**教训：跨批复用的对拍工装必须在每批复核判别力。**
+2. **`nextDirectoryVersion` 整型判定沿用既有宽松口径（登记不改）**：用 `Number()` / `Number.isInteger`，对 `""` / `0x10` / `1e3` 等边界串比 Go `strconv.ParseInt` 宽松（与既有 `nextContentVersion` 同约定）。
+3. **seed 幂等判据取「非空」而非「= `1`」（口径定死，非缺口）**：Go 读 `meta` 行判 `value != ""`；Node 侧同等（`String(seeded.value) !== ""`）。
+4. **seed 失败不阻断 Open（口径定死，非缺口）**：Go 只打 stderr 不返回错误 ⇒ Node `bootstrapStoreDb` 同样只 `process.stderr.write`，`openStore` / `serve` 引导不因此失败（`#58 §9 风险 1` 文案保留）。
+5. **`serve` 引导口径本批统一（新增覆盖面）**：`main.ts` 的 `serve` 原走裸 `openDb`（连 `migrate` 都无），本批改走 `openBootstrapDb`（schema → migrate → seed + 同口径 pragma / journal），使**两条引导路径**口径一致；`openStore` 仍保留其原有 journal / 连接设置不动。
+
+**不做**：不改 `schema_version` / 内容包规范 v1；不新增适配器接口；不动 `internal/**`；不重建仓根陈旧 `based.exe`。
