@@ -1,0 +1,132 @@
+# P5 并行双跑 → Go 节点退役（任务级计划 #76）
+
+- 日期：2026-10-03
+- 上游：总纲 `#69`（§0.13 迁移节奏 = 并行双跑 → 行为等价后 Go 节点退役）；路线计划 `#70`（§1 P5 行、§6 六条等价判据、§8 风险）；P4 设计册 `#74`（**2026-10-03 已定稿，P5 开工闸门已解除**）；P3 各批 = 计划 `#75`（批 A–G 已全收口，判据 2–7 均已各自对拍过）
+- 状态：**待执行**
+- 性质：任务级计划，**不承载契约**。契约一律回册子。
+
+## 0. 一句话
+
+P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11 条齐、包导出两侧同一）；P5 不是再写功能，而是**把「Node 能真跑」和「等价有据」这两件事做实**，然后在判据全过后把线上节点从 Go 切到 Node。
+
+## 1. 范围与四条定案（用户 2026-10-03 拍板）
+
+| # | 决策项 | 定案 |
+|---|---|---|
+| 1 | 双跑拓扑 | **本机全量对拍 → 服务器短时并存**（两段推进；任一段不过即阻塞，不许跳段） |
+| 2 | 写入归属 | **Go 权威写 + Node 只读影子**（双跑期 Node 不接生产写；写面等价由 P3 各批 G4 静态对拍承担，不重复引入写风险） |
+| 3 | 判据验收方式 | **全量回归（复用 P3 工装）+ 真实流量影子重放**（静态证明「已知面等价」，影子证明「真实面等价」） |
+| 4 | 退役处置 | **保留代码、停止部署**（Go 代码与二进制都不删；systemd `ExecStart` 切到 Node，打 tag 标记最后可运行 Go 节点） |
+
+**边界**：本阶段**不改任何 Go 文件**、**不删 Go 实现**、**不切客户端**（APK / 落地页 / `/v1/release` 指向全不动 —— Node 节点对客户端应当完全等价、客户端无感知）。
+
+## 2. 开工前硬阻塞：Node 节点当前**跑不起来**
+
+这是 P5 的第一个必解项，不解决则「并行双跑」无从谈起。
+
+**证据**：
+
+1. [package.json](file:///e:/code/base/apps/node/package.json#L8-L11) 的 `scripts` 只有 `test` / `typecheck`，**没有 `build` / `start`**；`main` 指向 `./src/main.ts`。
+2. [main.ts](file:///e:/code/base/apps/node/src/main.ts) 是 TS 源码；Node 20 无 TS 运行时，仓库未装 `tsx` / `ts-node`（`#72 §8.5` 已登记「`main.ts` CLI 入口无端到端运行验证」）。
+3. **更隐蔽的一层**：`@base/core-ts` / `@base/protocol-ts` 的 `exports` 把子路径映射到 `./src/*.ts`。即使 `tsc` 编出 JS，产物的 `import '@base/core-ts/xxx'` 仍会解析到 `.ts` ⇒ **单纯编译救不了**，必须**打包**（把 workspace 内的 `.ts` 内联进单文件产物）。
+
+**可用的现成手段**：`esbuild` **已作为传递依赖存在于 `node_modules/esbuild`**（vitest 链路带入），无需新增下载；打包目标 = `apps/node/dist/based-node.mjs`，而根 [.gitignore](file:///e:/code/base/.gitignore#L3) 第 3 行 **`dist/`** 已覆盖该输出目录（逐字核过 ⇒ 产物不会误入提交）。
+
+**不做的事**：不改 workspace 的 `exports` 形状（那会牵动 mobile 的 34 个转发 shim）；不引 `tsx` 之类运行时加载器（部署机上多一层依赖）。
+
+## 3. Task 列表
+
+### Task P5-1　Node 可运行化（**硬门，先做**）
+
+- 用 `esbuild` 把 `apps/node/src/main.ts` 打为**单文件 ESM 产物** `apps/node/dist/based-node.mjs`（`--bundle --platform=node --format=esm --target=node20`）；`node:*` 与 `node-sqlite3-wasm` 列为 **external**（wasm 文件靠 node_modules 解析，不进 bundle）。
+- `apps/node/package.json` 增 `build` / `start` 两个 script，并把 `esbuild` **提升为显式 `devDependencies`**（不再依赖传递关系）。
+- **首步为探针**：先只打 `version` 一条路径，实跑 `node dist/based-node.mjs version`，确认 ① 打包成功 ② `node-sqlite3-wasm` 能加载 ③ stdout 与 Go `based version` **逐字一致**；探针不过则停下改方案，不许带病推进。
+- 验收：`version` 逐字一致；`serve` 能起且 `/healthz` → 200。
+
+### Task P5-2　本机全量对拍回归（静态面）
+
+把 P3 各批的对拍工装**按统一入口重跑一遍**，产出一份**单次全量**报告，而不是各批各自的结论拼贴。
+
+- 汇总范围：批 A（JSON 24 token + 门户页 12 token）、批 B（认证写面）、批 C（`j*` 工装，tokens=63）、批 D（`p*` 工装，tokens=43）、批 E（包与 `merkle_root`）、批 F（开库引导 + **DB 快照**）、批 G（`rg*` 工装，tokens=25）。
+- **必须重跑确认的一件事**：批 C 的 DB 快照对称差 4 行、批 D 的 3 行，是批 F 落地**之前**的记录（见 `.tmp/g4/gates.txt:54-62` 与 `prunlog.txt:106-107`）。批 F 已补开库引导等价，**这两笔是否已随批 F 归零，必须在本 Task 用一次全量回归重新取证**，不得直接沿用旧结论。
+- 补未覆盖边界：判据 2 的四个门禁头（`Content-Type` / `ETag` / `Cache-Control` / `If-None-Match` 304）、`limit` 边界（1 / 1000 / 1001）、`since` 边界（`since >= version` 短路）。
+- 产物：报告留在 `.tmp/`（**不入版本控制**），只把结论回填本册 §8。
+
+### Task P5-3　真实流量影子重放
+
+- 从线上 Go 节点采集**真实请求样本**（方法 + 路径 + 头 + 体 + 响应基线），脱敏后落 `.tmp/`；两侧（Go 与 Node）重放，逐条比 `status` + 头 + body 字节。
+- 采集口径按路由分组处理：
+  - **匿名读面**（公开读 + 门户页）可直接对线上节点采集响应基线，**限速、只读、样本量小**（不把生产节点当压测目标）。
+  - **认证写面**（`requireAuth` / `optionalAuth`）**不在生产节点执行写操作**；判据 3 的真实面只取到「签名域与错误码」这一层（合法签名 / 缺头 / 错签名 / 过期 四类响应），写副作用面的等价仍以 P3 批 B 的静态对拍为准。
+- 边界：**全程零生产写操作**；采集期间不动 `base.service` / `base-cache.service`。
+
+### Task P5-4　服务器短时并存（第二段）
+
+在线上服务器起 Node 实例与 Go 生产实例**并存一小段**，一次性、结束即清理。
+
+- 拓扑：**独立端口**（严格避开 443 / 8081 / 8082 / 8083）+ **独立 data 目录** + 该目录内容 = **Go data 目录的只读快照副本**（定案 2：Go 权威写、Node 只读影子）。
+- 副本制作方式：用 `VACUUM INTO` 产快照（P3 已实测可用）——Node 侧驱动打不开 WAL，直接拷目录会读到不一致状态。
+- 单元文件沿用 [install.sh](file:///e:/code/base/scripts/install.sh#L129-L132) 的 `EnvironmentFile` + `ExecStart` 体例；**绝不复用 `base.service` / `base-cache.service` 的单元名与端口**。
+- 观测项：Node `/healthz`、公开读面与线上 Go 逐条字节比对、`journalctl` 有无错误、常驻内存（wasm 驱动的内存占用要实测）。
+- 结束动作：停并删除临时单元、清理独立 data 目录；**线上 Go 生产实例全程不受影响**（这是本 Task 的门禁条件）。
+
+### Task P5-5　判据定案 + 退役
+
+- 把 §6 六条判据 + 批 F 判据 7 的定案证据**逐条**列出（判据 → 由哪个 Task 的哪份证据、过/不过）；**任一不过即阻塞**，不得「先退役再补」。
+- 全过后执行定案 4：systemd `ExecStart` 从 `based` 切到 `node dist/based-node.mjs`；打 **git tag 标记最后可运行 Go 节点**；`internal/` / `cmd/` / `web/` 与 `based-linux-amd64` **一律不删**。
+- 客户端侧**零改动**：APK、落地页、`/v1/release` 指向全部不动；切换后线上探活（`/v1/catalog` / `/` / `/v1/manifest/{pack_id}`）逐条复核。
+- **回退路径**：`ExecStart` 切回 `based` 即可，回退成本 = 一次 restart（这正是定案 4 选「保留代码」的理由）。
+
+### Task P5-6　门禁 + 回填 + 提交
+
+跑 §4 门禁 G1–G8，回填本册 §8 执行实况 + §7 判据追溯表，并同步 `docs/README.md`（`#70` 行状态 + `#76` 行登记），只 add 本册相关文件后提交。
+
+## 4. 门禁 G1–G8
+
+| # | 门禁 | 口径 |
+|---|---|---|
+| G1 | Go 侧全绿 | `go build ./... && go vet ./... && go test ./...` |
+| G2 | TS 类型 | `npx tsc --noEmit` 全 0 错误 |
+| G3 | 单测守恒 | `apps/node` 与 `packages/core-ts` vitest 全绿；mobile 用例数**不减少** |
+| G4 | **全量对拍 0 分歧** | P5-2 的单次全量报告：HTTP 分歧 0 条 **且** DB 快照集合对称差 0 行（含批 C/批 D 旧差异的归零复核） |
+| G5 | **影子重放 0 分歧** | P5-3：真实流量样本逐条 status + 头 + body 字节一致 |
+| G6 | 并存无回归 | P5-4：Node 实例正常、且**线上 Go 生产实例零影响**（探活无回归、日志无异常） |
+| G7 | **判据全过** | §7 追溯表逐条「过」；任一「不过」即阻塞退役 |
+| G8 | 仓库纪律 | `git diff --stat -- internal/` 为空；只 add 本册相关文件（**绝不** add `.tmp/`、`based-linux-amd64`、`.gitignore`、`internal/httpapi/web.go`） |
+
+## 5. 判据追溯表（§6 六条 + 批 F 判据 7 → 由谁定案）
+
+| # | 判据（`#70 §6` 原文口径） | 定案 Task | 证据形态 |
+|---|---|---|---|
+| 1 | `vectors/v1/` **全部**向量在核包内通过 | P5-2 | vitest 向量全绿（P1 起即为 13/13，本阶段是回归确认） |
+| 2 | 公开读接口响应体**字节级**一致（含 4 个门禁头与 304 语义） | P5-2 + P5-3 | 静态对拍 + 线上真实样本重放 |
+| 3 | 认证写接口签名域与错误码语义一致（`X-Base-*` 五头） | P5-2（+ P5-3 弱证据） | 静态对拍为主；真实面只到错误码层 |
+| 4 | `sync` / `fetch` / `event-sync` 结果集一致且**只增不减** | P5-2 | 批 D 工装重跑（tokens=43 那组） |
+| 5 | `proposal` 列表 / 票数 / 门槛（含小节点豁免）逐条一致 | P5-2 | 批 C 工装重跑（tokens=63 那组） |
+| 6 | 同一数据集导出包 **`pack_id` 与 `merkle_root` 同一** | P5-2 | 批 E 证据（含真实视频块的非平凡 merkle） |
+| 7 | 开库引导等价（批 F 追加，`#75 §8` 边界项） | P5-2 | 开库后 **DB 快照对称差归零** |
+
+## 6. 风险与回退
+
+| # | 风险 | 处置 |
+|---|---|---|
+| 1 | 打包后 `node-sqlite3-wasm` 的 wasm 定位失败（bundle 改变 `__dirname` 语义） | 列 external、留 node_modules 解析；**P5-1 首步探针先验**，不过即改方案 |
+| 2 | 真实认证写流量采集不到（无用户配合 / 不可重放签名） | 降级为构造签名请求的双向对拍（P3 批 B 已做），并**在 §7 把判据 3 标为弱证据**，不假装是强证据 |
+| 3 | 采集线上样本把生产节点当压力源 | 限速 + 只读 + 小样本；只采匿名面响应基线 |
+| 4 | Node 直读 Go data 目录读到 WAL 不一致状态 | 用 `VACUUM INTO` 产快照副本（P3 已实测可用），不做目录直拷 |
+| 5 | 双跑实例占资源 / 端口冲突 / 单元名撞车 | 独立端口 + 独立目录 + 独立单元名 + **一次性运行结束即清理** |
+| 6 | 退役后才发现某判据不过 | 定案 4「保留代码、停止部署」本身就是回退路径；`ExecStart` 切回 `based` 一次 restart 即恢复 |
+
+## 7. 不做
+
+- **不删 Go 实现**（`internal/` / `cmd/` / `web/` / `based-linux-amd64` 全留 —— 定案 4）。
+- 不改任何 Go 文件；不改内容包规范 v1；不 bump `schema_version`。
+- **不切客户端**（APK 不动、落地页与 `/v1/release` 指向不动、`min_version` 不动）。
+- 不在生产节点执行任何写操作。
+- 不做 P6（融合治理实现轨）。
+- 不改 `#72` 已冻结的 `Adapters` / `ServerAdapters` 边界。
+- 不为兼容复制双份核心；不做 iOS。
+
+## 8. 执行实况
+
+（待执行；执行后回填各 Task 落地情况、G1–G8 原始结论、§7 追溯表逐条「过/不过」与执行期发现。）
