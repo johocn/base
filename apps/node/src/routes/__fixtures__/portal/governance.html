@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>治理看板</title>
+<style>
+:root { color-scheme: light dark; }
+body { margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; line-height: 1.75; }
+header { padding: 14px 18px; border-bottom: 1px solid #e5e5e5; font-weight: 600; }
+header a { text-decoration: none; color: inherit; }
+main { max-width: 720px; margin: 0 auto; padding: 18px; }
+ul.items { list-style: none; padding: 0; margin: 0; }
+ul.items li { padding: 12px 0; border-bottom: 1px solid #eee; }
+ul.items a { text-decoration: none; font-size: 17px; }
+.meta { color: #888; font-size: 13px; }
+.tag { display: inline-block; font-size: 12px; color: #666; border: 1px solid #ddd; border-radius: 10px; padding: 0 8px; margin-left: 6px; }
+.cover img { max-width: 100%; border-radius: 8px; }
+footer { padding: 18px; text-align: center; color: #999; font-size: 12px; }
+.pair { padding: 10px 18px; border-bottom: 1px solid #e5e5e5; font-size: 13px; color: #555; }
+.pair code { user-select: all; }
+.board { list-style: none; padding: 0; margin: 0; }
+.board li { padding: 14px 0; border-bottom: 1px solid #eee; }
+.board h2 { font-size: 16px; margin: 0 0 4px; font-weight: 600; }
+.badge { display: inline-block; font-size: 12px; color: #666; border: 1px solid #ddd; border-radius: 10px; padding: 0 8px; margin-right: 6px; }
+.badge-on { color: #2b6cb0; border-color: #2b6cb0; }
+.badge-off { color: #c53030; border-color: #c53030; }
+.bar { height: 6px; background: #eee; border-radius: 3px; margin: 6px 0; }
+.bar i { display: block; height: 6px; background: #2b6cb0; border-radius: 3px; }
+.small { color: #888; font-size: 13px; }
+.c-red { color: #C53030; }
+.c-orange { color: #B7791F; }
+.c-green { color: #2F855A; }
+.c-blue { color: #2B6CB0; }
+.c-purple { color: #6B46C1; }
+.c-gray { color: #718096; }
+.c-mark { background: #FFF3BF; }
+details { margin-top: 6px; }
+details pre { white-space: pre-wrap; font-family: inherit; background: #fafafa; padding: 8px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<header><a href="/">base · 分布式学习节点</a></header>
+<div class="pair">节点配对码 <code>PAIR-1</code> · 指纹 <code>ab:cd</code></div>
+<main>
+<h1>治理看板</h1>
+<p class="small">
+	下架 3 票、改写与复活各 2 票 · 票数按当前名册实时复判
+	· 名册暂不可用，按空名册计
+</p>
+
+
+<ul class="board">
+
+	<li>
+		<h2>
+			<span class="badge">下架</span>
+			<a href="/a/ffee0011ffee0011ffee0011ffee0011">公开条目 &lt;&amp;&#34;&#39;&#43;</a>
+			
+			<span class="badge badge-on">在架</span>
+		</h2>
+		<div class="small">理由 &lt;&amp;&#34;&#39;&#43;</div>
+		<div class="bar"><i style="width:66%"></i></div>
+		<div class="small">2 / 3 票 · 待决 · 2026-10-02 15:04</div>
+		
+		<div class="small">投票人：甲 &lt;&amp;&#34;&#39;&#43;、乙</div>
+		
+		
+	</li>
+
+	<li>
+		<h2>
+			<span class="badge">新增词条</span>
+			新词条 &lt;&amp;&#34;&#39;&#43;
+			<span class="badge">待票选</span>
+			<span class="badge badge-off">已下架</span>
+		</h2>
+		<div class="small"></div>
+		<div class="bar"><i style="width:0%"></i></div>
+		<div class="small">0 / 0 票 · 已作废 · </div>
+		
+		
+	</li>
+
+	<li>
+		<h2>
+			<span class="badge">改写</span>
+			公开条目
+			
+			<span class="badge badge-on">在架</span>
+		</h2>
+		<div class="small">改写理由</div>
+		<div class="bar"><i style="width:100%"></i></div>
+		<div class="small">3 / 2 票 · 已生效 · 2026-10-02 15:04</div>
+		
+		
+		<details>
+			<summary class="small">拟改标题与正文</summary>
+			<pre>拟改标题 &lt;&amp;&#34;&#39;&#43;</pre>
+			<pre>拟改正文
+&lt;b&gt;不是 HTML&lt;/b&gt; &amp; &#34;引&#34;</pre>
+		</details>
+		
+	</li>
+
+</ul>
+
+
+<h2>贡献者名册</h2>
+
+<ul class="board">
+
+	<li>甲 &lt;&amp;&#34;&#39;&#43; · 3 条 <span class="small">aaaa1111aaaa1111aaaa1111aaaa1111</span></li>
+
+	<li> · 1 条 <span class="small">cccc3333</span></li>
+
+</ul>
+
+</main>
+<footer>base-node-1 · 匿名可读 · 内容可自由复制分发</footer>
+</body>
+</html>

@@ -14,6 +14,11 @@ import { directoryHandler } from "./routes/directory";
 import { commentHandler } from "./routes/comment";
 import { dmHandler } from "./routes/dm";
 import { escrowGetHandler, identityGetHandler } from "./routes/identity";
+import {
+  articlePageHandler,
+  governancePageHandler,
+  indexPageHandler,
+} from "./routes/portal";
 import { GOVERN_BURST_PER_IP, GOVERN_PER_MINUTE_PER_IP, IpLimiter } from "./routes/derived";
 
 /** 节点对外服务选项；后五项均为可选，保持既有 `startServer(adapters, db, {host, port})` 调用兼容。 */
@@ -61,6 +66,17 @@ export async function startServer(
   // 身份公开只读面（契约 5.2/5.4，批 A3）：公钥查询与 escrow 读取均匿名。
   adapters.http.handle("GET /v1/identity/{id}", identityGetHandler({ db }));
   adapters.http.handle("GET /v1/identity/escrow/{username}", escrowGetHandler({ db, limiter: escrowLimiter }));
+  // 门户 HTML 页面（批 A4）：服务端直读库渲染，与 Go html/template 逐字节一致。
+  const portalDeps = {
+    db,
+    storeKey,
+    issuer: opts.issuer ?? "",
+    pairingCode: opts.pairingCode ?? "",
+    fingerprintHex: opts.fingerprintHex ?? "",
+  };
+  adapters.http.handle("GET /", indexPageHandler(portalDeps));
+  adapters.http.handle("GET /a/{item_id...}", articlePageHandler(portalDeps));
+  adapters.http.handle("GET /governance", governancePageHandler(portalDeps));
 
   const listener = await adapters.http.listen(opts);
   adapters.lifecycle.onShutdown(() => listener.close());

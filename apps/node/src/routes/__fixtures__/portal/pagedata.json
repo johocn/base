@@ -1,0 +1,168 @@
+{
+  "index": {
+    "Title": "内容目录 <A&B> \"引号\" '单引' + 加号",
+    "Issuer": "base-node-1 <i>&+'\"",
+    "PairingCode": "PAIR-<1234>&\"+'",
+    "Fingerprint": "ab:cd:ef<>&",
+    "Items": [
+      {
+        "ItemID": "a1b2-c3_d4",
+        "Type": "article",
+        "Title": "标题 <b>粗</b> & \"引\" + 'x' = 100%",
+        "Rev": "rev1<&"
+      },
+      {
+        "ItemID": "ffee0011ffee0011ffee0011ffee0011",
+        "Type": "article",
+        "Title": "多行\n标题\t带制表",
+        "Rev": ""
+      }
+    ]
+  },
+  "index-url": {
+    "Title": "URL 上下文",
+    "Issuer": "base-node-1",
+    "PairingCode": "",
+    "Fingerprint": "",
+    "Items": [
+      {
+        "ItemID": "a b/c?d=e&f#g+h%i'j\"k<l>m~,;:!$()@[]{}|\\^`",
+        "Type": "article",
+        "Title": "URL 探针",
+        "Rev": ""
+      }
+    ]
+  },
+  "article-url": {
+    "Title": "URL 上下文",
+    "Issuer": "base-node-1",
+    "PairingCode": "",
+    "Fingerprint": "",
+    "Article": {
+      "ItemID": "x",
+      "Title": "URL 探针",
+      "Digest": "",
+      "PublishedAt": "",
+      "TagViews": [],
+      "Body": "",
+      "CoverBlobID": "a b/c?d=e&f#g+h%i'j\"k<l>m~,;:!$()@[]{}|\\^`",
+      "Badges": [],
+      "TitleColor": ""
+    }
+  },
+  "index-empty": {
+    "Title": "内容目录",
+    "Issuer": "base-node-1",
+    "PairingCode": "",
+    "Fingerprint": "",
+    "Items": []
+  },
+  "article": {
+    "Title": "文章 <b>标题</b> & \"引\" + 'x' = 50%",
+    "Issuer": "base-node-1 <i>&",
+    "PairingCode": "",
+    "Fingerprint": "ab:cd",
+    "Article": {
+      "ItemID": "ffee0011ffee0011ffee0011ffee0011",
+      "Title": "文章 <b>标题</b> & \"引\" + 'x' = 50%",
+      "Digest": "摘要 <b>&</b> \"引\" + '单'",
+      "PublishedAt": "2026-10-02 15:04",
+      "TagViews": [
+        { "Name": "标签<&\"'+", "Pending": true },
+        { "Name": "纯标签", "Pending": false }
+      ],
+      "Body": "<p>正文 <strong>加粗</strong> &amp; 已转义 &lt;script&gt;</p>\n",
+      "CoverBlobID": "00112233445566778899aabbccddeeff",
+      "Badges": ["活动", "推荐"],
+      "TitleColor": "blue"
+    }
+  },
+  "governance": {
+    "Title": "治理看板",
+    "Issuer": "base-node-1",
+    "PairingCode": "PAIR-1",
+    "Fingerprint": "ab:cd",
+    "RosterReady": false,
+    "RemoveThreshold": 3,
+    "EditThreshold": 2,
+    "Proposals": [
+      {
+        "Action": "remove",
+        "ActionLabel": "下架",
+        "ItemID": "ffee0011ffee0011ffee0011ffee0011",
+        "Title": "公开条目 <&\"'+",
+        "TermName": "",
+        "TermPending": false,
+        "Linkable": true,
+        "ItemState": "active",
+        "ItemStateLabel": "在架",
+        "Reason": "理由 <&\"'+",
+        "VoteCount": 2,
+        "Threshold": 3,
+        "Percent": 66,
+        "Status": "pending",
+        "StatusLabel": "待决",
+        "CreatedAt": "2026-10-02 15:04",
+        "Voters": [
+          { "ID": "aaaa1111aaaa1111aaaa1111aaaa1111", "Name": "甲 <&\"'+", "Count": 0 },
+          { "ID": "bbbb2222bbbb2222bbbb2222bbbb2222", "Name": "乙", "Count": 0 }
+        ]
+      },
+      {
+        "Action": "directory_add",
+        "ActionLabel": "新增词条",
+        "ItemID": "term:tag:foo",
+        "Title": "新词条 <&\"'+",
+        "TermName": "新词条 <&\"'+",
+        "TermPending": true,
+        "Linkable": false,
+        "ItemState": "removed",
+        "ItemStateLabel": "已下架",
+        "Reason": "",
+        "VoteCount": 0,
+        "Threshold": 0,
+        "Percent": 0,
+        "Status": "void",
+        "StatusLabel": "已作废",
+        "CreatedAt": "",
+        "Voters": [],
+        "Edit": null
+      },
+      {
+        "Action": "edit",
+        "ActionLabel": "改写",
+        "ItemID": "ffee0011ffee0011ffee0011ffee0011",
+        "Title": "公开条目",
+        "TermName": "",
+        "TermPending": false,
+        "Linkable": false,
+        "ItemState": "active",
+        "ItemStateLabel": "在架",
+        "Reason": "改写理由",
+        "VoteCount": 3,
+        "Threshold": 2,
+        "Percent": 100,
+        "Status": "effective",
+        "StatusLabel": "已生效",
+        "CreatedAt": "2026-10-02 15:04",
+        "Voters": [],
+        "Edit": { "Title": "拟改标题 <&\"'+", "BodyMD": "拟改正文\n<b>不是 HTML</b> & \"引\"" }
+      }
+    ],
+    "Roster": [
+      { "ID": "aaaa1111aaaa1111aaaa1111aaaa1111", "Name": "甲 <&\"'+", "Count": 3 },
+      { "ID": "cccc3333", "Name": "", "Count": 1 }
+    ]
+  },
+  "governance-roster": {
+    "Title": "治理看板",
+    "Issuer": "base-node-1",
+    "PairingCode": "",
+    "Fingerprint": "",
+    "RosterReady": true,
+    "RemoveThreshold": 3,
+    "EditThreshold": 2,
+    "Proposals": [],
+    "Roster": []
+  }
+}

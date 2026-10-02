@@ -320,6 +320,7 @@ export interface ProposalView {
   reason: string;
   title: string;
   bodyMd: string;
+  createdAt: number;
   status: string;
   votes: string[];
   threshold: number;
@@ -342,6 +343,7 @@ export function listProposalViews(
     reason: toStr(r.reason),
     title: toStr(r.title),
     bodyMd: toStr(r.body_md),
+    createdAt: Number(r.created_at ?? 0),
     executedAt: Number(r.executed_at ?? 0),
     voidedAt: Number(r.voided_at ?? 0),
     revokedRev: Number(r.revoked_rev ?? 0),
@@ -358,6 +360,7 @@ export function listProposalViews(
       reason: p.reason,
       title: p.title,
       bodyMd: p.bodyMd,
+      createdAt: p.createdAt,
       status: proposalStatus(p.executedAt, p.voidedAt),
       votes: filterRosterAtWatermarkSet(voters, roster, restored),
       threshold: governThreshold(p.action),
@@ -462,4 +465,54 @@ export class IpLimiter {
       if (now - b.last > 10 * 60 * 1000) this.buckets.delete(ip);
     }
   }
+}
+
+/** nameOrShortID（web.go:274-282）：与 GET /v1/contributors 同口径，缺昵称回退 id 前 8 位。 */
+export function nameOrShortID(name: string, id: string): string {
+  if (name !== "") return name;
+  return id.length > 8 ? id.slice(0, 8) : id;
+}
+
+/** 对应 Go `strings.TrimSpace`：去首尾 Go 空白（按 code point 迭代，不拆代理对）。 */
+function trimGoSpace(s: string): string {
+  const rs = [...s];
+  let i = 0;
+  let j = rs.length;
+  while (i < j && isGoSpace(rs[i].codePointAt(0) as number)) i++;
+  while (j > i && isGoSpace(rs[j - 1].codePointAt(0) as number)) j--;
+  return rs.slice(i, j).join("");
+}
+
+/** collapseSpaces（directory.go:85-101）：连续 Go 空白折叠为单个半角空格。 */
+function collapseGoSpaces(s: string): string {
+  let out = "";
+  let prevSpace = false;
+  for (const ch of s) {
+    if (isGoSpace(ch.codePointAt(0) as number)) {
+      if (!prevSpace) {
+        out += " ";
+        prevSpace = true;
+      }
+      continue;
+    }
+    out += ch;
+    prevSpace = false;
+  }
+  return out;
+}
+
+/** stripControl（directory.go:117-...）：剥离控制字符 U+0000–U+001F 与 U+007F。 */
+function stripControlChars(s: string): string {
+  let out = "";
+  for (const ch of s) {
+    const cp = ch.codePointAt(0) as number;
+    if (cp <= 0x1f || cp === 0x7f) continue;
+    out += ch;
+  }
+  return out;
+}
+
+/** CleanDisplayName（directory.go:63-65）：stripControl(collapseSpaces(TrimSpace(raw)))，不做全角/大小写折叠。 */
+export function cleanDisplayName(raw: string): string {
+  return stripControlChars(collapseGoSpaces(trimGoSpace(raw)));
 }
