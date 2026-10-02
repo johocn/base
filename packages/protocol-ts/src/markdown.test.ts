@@ -11,7 +11,7 @@ interface VectorCase {
 }
 
 const vectors = JSON.parse(
-  readFileSync(new URL('../../../../vectors/v1/markdown.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../vectors/v1/markdown.json', import.meta.url), 'utf8'),
 ) as { version: number; cases: VectorCase[] };
 
 describe('markdown：与 Go 共读同一份契约向量', () => {

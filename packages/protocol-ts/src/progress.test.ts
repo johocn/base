@@ -35,7 +35,7 @@ interface VectorFile {
 // 与 Go 侧 internal/protocol/progress_vector_test.go 读**同一个文件**（#8 册子 §3.4）。
 // 层深 4：apps/mobile/src/core → apps/mobile/src → apps/mobile → apps → 仓库根。
 const vector = JSON.parse(
-  readFileSync(new URL('../../../../vectors/v1/progress.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../vectors/v1/progress.json', import.meta.url), 'utf8'),
 ) as VectorFile;
 
 describe('progress 契约向量（与 Go 侧共用同一文件）', () => {

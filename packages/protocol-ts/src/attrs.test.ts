@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { sha256Hex, utf8 } from '@base/protocol-ts';
+import { sha256Hex, utf8 } from './hash';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -29,7 +29,7 @@ interface VectorCase {
 }
 
 const vectors = JSON.parse(
-  readFileSync(new URL('../../../../vectors/v1/attrs.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../../vectors/v1/attrs.json', import.meta.url), 'utf8'),
 ) as { version: number; cases: VectorCase[] };
 
 describe('attrs：与 Go 共读同一份契约向量', () => {
