@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { segmentsContentHash } from './attrs';
+import { segmentsContentHash } from '@base/protocol-ts';
 import { MemoryRepo } from './fakes';
 import type { MySubmissionRow } from './types';
 

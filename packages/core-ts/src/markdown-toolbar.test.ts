@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { renderMarkdown } from './markdown';
+import { renderMarkdown } from '@base/protocol-ts';
 import {
   COLOR_BUTTONS,
   INLINE_BUTTONS,

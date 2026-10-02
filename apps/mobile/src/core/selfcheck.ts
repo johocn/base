@@ -6,10 +6,10 @@
  */
 import { keyPairFromSeed, randomBytes, sign, utf8, verify } from '@base/protocol-ts';
 
-import type { Adapters, LocalDb } from '../platform/adapter';
+import type { Adapters, LocalDb } from '@base/core-ts/platform/adapter';
+import { CommentError, sendComment } from '@base/core-ts/comment';
+import type { LocalRepo } from '@base/core-ts/repo';
 import { base64ToBytes, bytesToBase64, pickCapabilityOf, pickHandle, plusRuntime, type PickHandle } from '../platform/uni';
-import { CommentError, sendComment } from './comment';
-import type { LocalRepo } from './repo';
 import { fetchReleaseDoc } from './update';
 
 export type Capability = 'unknown' | 'ok' | 'fail';

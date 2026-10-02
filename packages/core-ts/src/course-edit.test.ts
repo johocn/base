@@ -1,7 +1,7 @@
 import { utf8 } from '@base/protocol-ts';
 import { describe, expect, it } from 'vitest';
 
-import { attrSeqsCanonical, segmentsContentHash } from './attrs';
+import { attrSeqsCanonical, segmentsContentHash } from '@base/protocol-ts';
 import {
   buildContainerSegments,
   emptyContainerForm,

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { bytesToHex, canonicalize, hexToBytes, openWithNonce, sign, utf8, type Json } from '@base/protocol-ts';
 
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, MemoryStorage } from './fakes';
-import type { Adapters } from '../platform/adapter';
+import type { Adapters } from './platform/adapter';
 import { flushPending } from './comment';
 import { deviceKek, ensureLocalIdentity, type Identity } from './identity';
 import { decodeUtf8 } from './sync';

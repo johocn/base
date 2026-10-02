@@ -13,7 +13,7 @@ import {
   type Tombstone,
 } from '@base/protocol-ts';
 
-import type { Adapters } from '../platform/adapter';
+import type { Adapters } from './platform/adapter';
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { syncOnce, type Catalog, type SyncOptions } from './sync';
 import type { ArticleRow, QuizRow, SegmentRow } from './types';

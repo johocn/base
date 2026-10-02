@@ -8,7 +8,7 @@ import {
   ATTR_INSTRUCTOR,
   DIGEST_KIND,
   attrSeqsCanonical,
-} from './attrs';
+} from '@base/protocol-ts';
 import type { ContainerForm } from './course-edit';
 import { loadContainerForm } from './course-edit';
 import { MemoryRepo } from './fakes';

@@ -1,7 +1,7 @@
 import { utf8 } from '@base/protocol-ts';
 import { describe, expect, it } from 'vitest';
 
-import { segmentsContentHash } from './attrs';
+import { segmentsContentHash } from '@base/protocol-ts';
 import { CREATOR_VISIBILITY_MIGRATION_KEY, LEDGER_HEAL_KEY, runCreatorVisibilityMigration, runLedgerHealMigration } from './creator-migrate';
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import type { SubmitOptions } from './submit';

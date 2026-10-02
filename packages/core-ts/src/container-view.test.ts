@@ -10,7 +10,7 @@ import {
   ATTR_DURATION,
   ATTR_INSTRUCTOR,
   ATTR_TITLE_COLOR,
-} from './attrs';
+} from '@base/protocol-ts';
 import { attrsOf, childCounts, childrenRowsOf, digestOf, firstLine, lessonDigest } from './container-view';
 import type { SegmentRow } from './types';
 

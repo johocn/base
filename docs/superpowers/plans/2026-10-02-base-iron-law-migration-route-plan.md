@@ -74,7 +74,26 @@
 | CLI 子命令 | `cmd/based/*.go`（12 个子命令） | Node CLI |
 | 进程信号 / 优雅停机 | `cmd/based/serve.go` | Node 进程事件 |
 
-**门禁**：§3.2 五项接口在本阶段**一次锁定**；P3 起不得再改这组边界。锁定产物写入本册附表（开工时补）。
+**门禁**：§3.2 五项接口在本阶段**一次锁定**；P3 起不得再改这组边界。锁定产物见下方**附表**（2026-10-02 冻结，任务级计划 = `#72`）。
+
+#### 附表：接口冻结产物（2026-10-02 锁定）
+
+**客户端侧**（原样上提，逐字不变）——落点 `packages/core-ts/src/platform/adapter.ts`：
+`FsAdapter` / `StorageAdapter` / `HttpResponse` / `HttpAdapter` / `SqliteConnection` / `PackReader` / `LocalDb` / `Adapters`。
+
+**服务端侧**（新增，**独立一组**，不复用/不扩展客户端 `Adapters`）——落点 `packages/core-ts/src/platform/server.ts`，纯类型声明、零 `node:` 依赖：
+
+| 能力 | 接口 | 方法 |
+|---|---|---|
+| 监听 / 路由 | `HttpServerAdapter`（+ `ServerRequest` / `ServerResponse` / `ServerHandler` / `Listener` / `ListenOptions`） | `handle(pattern, handler)`（pattern 沿用 Go `http.ServeMux` 体例）、`listen(opts)` |
+| TLS / 指纹固定 / node-key | `TlsAdapter`（+ `TlsMaterial` / `TlsInfo`） | `loadOrCreate` / `serverConfig` / `clientConfig` / `verifyPeer`（空名单 fail-closed）/ `nodeKeyMatches`（常量时间） |
+| 定时调度 | `SchedulerAdapter`（+ `ScheduledHandle`） | `every(intervalMs, fn)` |
+| CLI 子命令 | `CliHost`（+ `CliCommand`） | `register(cmd)` / `run(argv)` |
+| 进程信号 / 优雅停机 | `LifecycleAdapter` | `onShutdown(fn)`（逆序）/ `exit(code)` |
+
+**聚合**：`interface ServerAdapters { http; tls; scheduler; cli; lifecycle }`。
+
+**冻结口径**：接口面一次留全五类（依据本册 §8 风险 2「宁可多留一个方法，也不二次改边界」）；**实现面**可分期——P2 在 `apps/node` 实现「路由/监听、TLS 载入+指纹校验、定时包装、CLI 分发、信号停机」，`TlsAdapter.loadOrCreate`（自签生成）留 P3 随 `tlscert` 落地。**P3 起不得再改这组边界。**
 
 ## 4. P4 融合治理【设计】范围
 

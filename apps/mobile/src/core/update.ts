@@ -6,9 +6,9 @@
 
 import { verifyRelease, type ReleaseDoc } from '@base/protocol-ts';
 
-import type { HttpAdapter } from '../platform/adapter';
+import type { HttpAdapter } from '@base/core-ts/platform/adapter';
+import { decodeUtf8 } from '@base/core-ts/sync';
 import { plusRuntime } from '../platform/uni';
-import { decodeUtf8 } from './sync';
 
 /** 三段数值解析；任一段非数字或为空即 null。 */
 export function parseVersionName(s: string): number[] | null {

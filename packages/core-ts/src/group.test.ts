@@ -11,7 +11,7 @@ import {
 } from '@base/protocol-ts';
 
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, MemoryStorage } from './fakes';
-import type { Adapters } from '../platform/adapter';
+import type { Adapters } from './platform/adapter';
 import { deviceKek, ensureLocalIdentity } from './identity';
 import { CommentError, flushPending } from './comment';
 import { decodeUtf8 } from './sync';

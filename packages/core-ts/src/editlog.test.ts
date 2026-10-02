@@ -1,7 +1,7 @@
 import { utf8 } from '@base/protocol-ts';
 import { describe, expect, it } from 'vitest';
 
-import type { FsAdapter } from '../platform/adapter';
+import type { FsAdapter } from './platform/adapter';
 import { EDIT_LOG_MAX_BYTES, EDIT_LOG_NAME, readEditLog, recordEditFailure } from './editlog';
 import { MemoryFs } from './fakes';
 import { decodeUtf8 } from './sync';
