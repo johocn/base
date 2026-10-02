@@ -59,6 +59,11 @@ export function isHexN(s: string, n: number): boolean {
   return s.length === n * 2 && /^[0-9a-fA-F]*$/.test(s);
 }
 
+/** 对齐 isHexNonEmptyEven（identity.go:58-64）：非空、偶数长度、全十六进制。 */
+export function isHexNonEmptyEven(s: string): boolean {
+  return s.length > 0 && s.length % 2 === 0 && /^[0-9a-fA-F]*$/.test(s);
+}
+
 /** 对齐 unicode.IsSpace 的 White_Space 口径（不是 JS 的 `\s`）。 */
 function isGoSpace(r: number): boolean {
   if (r <= 0xff) {
@@ -474,7 +479,7 @@ export function nameOrShortID(name: string, id: string): string {
 }
 
 /** 对应 Go `strings.TrimSpace`：去首尾 Go 空白（按 code point 迭代，不拆代理对）。 */
-function trimGoSpace(s: string): string {
+export function trimGoSpace(s: string): string {
   const rs = [...s];
   let i = 0;
   let j = rs.length;

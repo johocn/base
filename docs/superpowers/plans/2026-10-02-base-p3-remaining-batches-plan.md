@@ -2,7 +2,7 @@
 
 - 日期：2026-10-02
 - 上游：路线计划 `#70`（§1 P3 行、§5 节点职能清单、§6 P5 等价判据）；首批计划 `#73`（§8 不做「P3 余下批次」、§9.2 执行期发现）；接口边界冻结面 `#72`
-- 状态：**批 A 已收口、批 B 已切子批开工**（批 A 全量见 §9；批 B 切 B1–B4 见 §10；批 C–E 未开工）
+- 状态：**批 A 已收口、批 B1 已收口**（批 A 全量见 §9；批 B 切 B1–B4 见 §10，B1 实况见 §10.7；B2–B4 未开工；批 C–E 未开工）
 - 范围：**P3 余下批次**，共五批（§1）。本册详列**批 A**（§9 收口）与**批 B**（§10，切 B1–B4）；批 C–E 只登记边界（§8）
 - 性质：任务级计划。契约一律回册子，本册不承载契约。
 
@@ -24,7 +24,7 @@
 | 批 | 范围 | 对应判据 | 状态 |
 |---|---|---|---|
 | **A** | **纯匿名公开读 JSON 面 12 条 + 门户页 3 个** | **判据 2**（字节级） | **已收口**（§9） |
-| B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **已切 B1–B4**（§10）开工中 |
+| B | 认证读写面：身份写（`identity/register`、`escrow` PUT）/ `me` / `event` / `profile` / `submit` / `blob` POST / `group` 读权（`optionalAuth`）+ `authmw` 的 `X-Base-*` 五头 | 判据 3（签名域与错误码） | **B1 已收口**（§10，实况 §10.7）；B2–B4 未开工 |
 | C | 治理派生面：`proposal` POST / `proposal/{id}/vote` / `proposal` GET | 判据 5（含 `#65` 小节点豁免） | 未开工 |
 | D | 对端同步·反熵：`inventory` / `sync` / `fetch` / `scrub` / `event-sync` + CLI `peer-sync` / `scrub` | 判据 4（结果集一致 + 只增不减） | 未开工 |
 | E | `importer` 容器 / 题库 / 视频派生 + CLI `import-video` | 判据 6（pack_id 与 merkle_root 同一） | 未开工 |
@@ -202,7 +202,7 @@
 
 ## 10. 批 B：认证读写面（判据 3）
 
-**状态：已切子批，B1 开工中。**
+**状态：B1 已收口（实况见 §10.7），B2–B4 未开工。**
 
 **开工前决策（2026-10-02，用户拍板）**：
 
@@ -270,3 +270,47 @@ G4 对拍口径照 §9.2 方法：Go 真 mux + 真 handler（`httptest`）vs Nod
 | 5 | `POST /v1/event` body 键集保真（B2） | 保留客户端原始键集，不补键不删键 |
 | 6 | `group.go` 800 行体量（B4） | 单独成批、内聚 group 派生，不拆到 B2 |
 | 7 | 工作区既有改动被误提交 | 严格 G6；`.gitignore` / `internal/httpapi/web.go` 绝不 `add` |
+
+### 10.7 执行实况（B1）
+
+**状态：B1 已收口**（B2–B4 未开工）。
+
+**产出**：
+- `routes/authmw.ts`：`authErrText` 全表（逐字取 `authmw.go:20-79`）+ `writeAuthErr`（`{"code":...,"error":...}`，Go map 字典序 code 在前）+ `authenticate` 契约 3.2 七步 + `requireAuth` / `requireAuthLimit` / `optionalAuth` / `hasAnyAuthHeader`。
+- `routes/decode.ts`：严格 JSON 解码器，对齐 Go `json.NewDecoder(...).Decode(&struct)` 口径（只解首值不拒尾随、顶层 `null` 为 no-op、字段类型严格、int64 只收十进制字面量）；含**保留数字原始字面量**的极简解析器（`JSON.parse` 会把 `1e2` 归一成 100，无法判 int64）。
+- `routes/identity.ts` 扩 register（匿名，`409 identity_pubkey_conflict`）+ escrow PUT（`AuthedHandler`，`EqualFold` 比对 → `403 escrow_identity_mismatch`）；新增 `routes/me.ts` / `routes/profile.ts`；`serve.ts` 装配 4 条路由（`requireAuth({db}, ...)` 三条 + register 匿名）；`derived.ts` 新增导出 `isHexNonEmptyEven`、`trimGoSpace` 转 export。
+- 测试：新增 `authmw.test.ts` / `me.test.ts` / `profile.test.ts`，`identity.test.ts` 扩 2 组。
+
+#### 10.7.1 门禁 G1–G6（逐条通过）
+
+| 门 | 结果 | 证据 |
+|---|---|---|
+| G1 | 通过 | `go build ./...` / `go vet ./...` / `go test ./...` 全绿（本批不动 Go，作基线回归） |
+| G2 | 通过 | `apps/node` `npx tsc --noEmit` **0 错误** |
+| G3 | 通过 | `apps/node` `npx vitest run`：**23 文件 / 168 用例全绿**（B1 开工前 23/158 ⇒ +10 用例） |
+| G4 | 通过 | **字节级对拍 0 分歧（40/40 token）**，实况见 §10.7.2 |
+| G5 | 通过 | `git diff --stat -- internal/` **无输出**；`packages/protocol-ts/**`、`#72` 冻结的 `Adapters` / `ServerAdapters` 未动 |
+| G6 | 通过 | 只 `add` 本批文件；`.gitignore` / `internal/httpapi/web.go` / `based-linux-amd64` / `.tmp/`（含 `g4/` 取证件）均未入暂存 |
+
+#### 10.7.2 G4 字节级对拍实况（B1）
+
+**方法**：Node `openDb` + `migrate()` 建全量 schema → 插固定数据（`identities` 1 行 / `progress` 2 行 / `checkin_days` 1 行）→ 关闭 → **复制两份**（`go/base.db` / `node/base.db`）→ Go 侧 `store.Open` + `httpapi.New` + `httptest` 真 server；Node 侧 `openDb` + `startServer` 真 server → 按**同一顺序**发 40 条 token（真私钥签、真公钥验）→ 逐条比对 `status` / 4 对照头（`content-type` / `cache-control` / `x-content-type-options` / `access-control-allow-origin`）/ body 字节。取证件在 `.tmp/g4/`（`goprobe/main.go` + 两个 vitest probe + `compare.mjs`），**未入提交**。
+
+**为何用两份独立副本**：B1 是写面，两侧共用一份库时 `auth_nonces` 去重表会互相污染（Go 先跑登记 nonce ⇒ Node 同 nonce 被判重放）；同时规避 §9.3 发现 2 的「Go `store.Open` 必须先于 Node `openDb`」取数定序约束。两侧初始数据逐字节同源（同一 seed 复制）。
+
+**结果：40/40 逐条 0 分歧。** 归一化 1 条：token `escrow-put-ok` 的 `updated_at` 两侧各为自身 `Date.now()`（比对前替换为 0）。覆盖：
+- register 10 条：正常 / 幂等重复 / 已登记 / alg 非 ed25519 / pubkey 非 32 字节 / id 与 pubkey 不匹配 / 顶层 `null` / 字段类型错（`id` 收数字）/ 空对象 / **尾随垃圾**（Go 只解首值 ⇒ 两侧同 200）。
+- escrow PUT 7 条：无签名头 / 正常 / body `id` 不符 403 / 用户名非法 / kdf 非法 / salt 非法 / 冲突 409。
+- me 3 条：无签名头 / 身份 A（固定 progress + checkin）/ 身份 B（空数组）。
+- profile 8 条：无签名头 / 正常 / `id` 出现 / `id:null` / 名称空 / 名称首尾空白（`TrimSpace` 对齐）/ 名称 33 字 / 控制字符。
+- authmw 拒绝矩阵 11 条：alg 不支持 / id 非 32hex / ts 非十进制 / **ts 前导 `+`**（Go `strconv.ParseInt` 与 Node `parseGoInt64` 同接受 ⇒ 两侧 200）/ nonce 非 16 字节 hex / sig 非 hex / 身份未登记 403 / 时间窗越界 401 / nonce 重放 401 / 签名错 401 / 体超 64 KiB 413。
+
+逐字节证据（两侧原文一致）：`{"code":"profile_id_forbidden","error":"请求体不得携带 id"}\n`、`{"error":"escrow_conflict"}\n`、`{"checkin_days":[…],"events":[],"id":"…","progress":[…]}\n`（三数组非 null + 键序字典序 + `done` 为 JSON bool）。
+
+**执行期发现**（登记，不在本批修）：
+1. **沙箱缺 TCP 环回**：Go 进程内 `net.Listen` + 自连被阻断（Node 自连正常），故 Go 取证件以 `net.Pipe` 承载真 `http.Server` + 真 `http.Client`——HTTP/1.1 线上字节仍真实，仅底层 conn 换管道；Node 侧为真监听。后续 Go 侧对拍若遇同问题照此处理。
+2. **同一批内两种错误体形状并存**（已对拍确认两侧各自一致）：`authenticate` 与 `handleProfilePut` 走 `writeAuthErr`（`{"code":…,"error":…}`）；`handleEscrowPut` / register / 只读面走 `writeError`（`{"error":…}`，无 code）。§10.0 错误体表的适用范围仅认证中间件自身。
+3. **register 的 `identity_pubkey_conflict` 分支在真实流量下不可达**（分析，非实跑）：handler 强制 `alg==ed25519`，conflict 条件是「同 id 不同 pubkey 或不同 alg」，而 id 由 pubkey 派生 ⇒ 需 sha256 前 128 bit 碰撞才可能触发。两侧等价性由「同输入同结果」覆盖，非分支级覆盖。
+4. **`rawQueryOf` 回构限制**（沿用 §10.0）：本壳 `ServerRequest` 未暴露 `RawQuery` 原文，B1 四条路由均无 query 故恒为 `""`；**B4 带 query 的签名读路由必须复核**。
+
+**待决点（登记）**：`decodeStrict` 未做 Go struct 键名 `EqualFold` 匹配（Go 精确优先、其次大小写不敏感）——B1 各路由结果不受影响，B2/B4 接 event/group body 时需复核。

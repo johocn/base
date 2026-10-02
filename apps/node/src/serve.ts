@@ -13,7 +13,15 @@ import { contributorsHandler } from "./routes/contributors";
 import { directoryHandler } from "./routes/directory";
 import { commentHandler } from "./routes/comment";
 import { dmHandler } from "./routes/dm";
-import { escrowGetHandler, identityGetHandler } from "./routes/identity";
+import {
+  escrowGetHandler,
+  escrowPutHandler,
+  identityGetHandler,
+  identityRegisterHandler,
+} from "./routes/identity";
+import { requireAuth } from "./routes/authmw";
+import { meHandler } from "./routes/me";
+import { profilePutHandler } from "./routes/profile";
 import {
   articlePageHandler,
   governancePageHandler,
@@ -66,6 +74,14 @@ export async function startServer(
   // 身份公开只读面（契约 5.2/5.4，批 A3）：公钥查询与 escrow 读取均匿名。
   adapters.http.handle("GET /v1/identity/{id}", identityGetHandler({ db }));
   adapters.http.handle("GET /v1/identity/escrow/{username}", escrowGetHandler({ db, limiter: escrowLimiter }));
+  // 身份写面（批 B1）：匿名单登记；托管写入与 /v1/me、/v1/profile 均走签名中间件（体上限 64 KiB）。
+  adapters.http.handle("POST /v1/identity/register", identityRegisterHandler({ db }));
+  adapters.http.handle(
+    "PUT /v1/identity/escrow/{username}",
+    requireAuth({ db }, escrowPutHandler({ db })),
+  );
+  adapters.http.handle("GET /v1/me", requireAuth({ db }, meHandler({ db })));
+  adapters.http.handle("POST /v1/profile", requireAuth({ db }, profilePutHandler({ db })));
   // 门户 HTML 页面（批 A4）：服务端直读库渲染，与 Go html/template 逐字节一致。
   const portalDeps = {
     db,

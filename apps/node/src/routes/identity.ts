@@ -1,11 +1,17 @@
-// 逐行对齐 internal/httpapi/identity.go 的两条匿名只读路由：
-// handleIdentityGet（:121-140）与 handleEscrowGet（:210-236）；
-// 读路径对齐 internal/store/identity.go 的 LookupIdentity（:66-78）/ GetEscrow（:167-180）。
-import type { ServerHandler, ServerRequest } from "@base/core-ts";
-import { isIdentityId } from "@base/protocol-ts";
+// 逐行对齐 internal/httpapi/identity.go：
+// 匿名只读 handleIdentityGet（:121-140）/ handleEscrowGet（:210-236）；
+// 匿名写 handleIdentityRegister（:91-119，批 B1）；
+// 签名写 handleEscrowPut（:161-208，身份由 requireAuth 的形参传入）。
+// 读路径对齐 internal/store/identity.go 的 LookupIdentity（:66-78）/ GetEscrow（:167-180）；
+// 写路径对齐 RegisterIdentity（:38-64）/ PutEscrow（:141-165）；
+// 请求体严格解码见 ./decode.ts（对齐 Go 的 decodeJSON，:40-48）。
+import type { ServerHandler, ServerRequest, ServerResponse } from "@base/core-ts";
+import { ALG_ED25519, deriveIdentityId, isIdentityId } from "@base/protocol-ts";
 import type { Db } from "../db";
-import { type IpLimiter, toStr } from "./derived";
-import { RawJSON, jsonResponse } from "./json";
+import type { AuthedHandler } from "./authmw";
+import { decodeStrict } from "./decode";
+import { type IpLimiter, isHexN, isHexNonEmptyEven, toStr } from "./derived";
+import { RawJSON, encodeJSON, jsonResponse } from "./json";
 
 export interface IdentityGetDeps {
   db: Db;
@@ -107,5 +113,160 @@ export function escrowGetHandler(deps: EscrowGetDeps): ServerHandler {
     } catch (err) {
       return jsonResponse(500, { error: err instanceof Error ? err.message : String(err) });
     }
+  };
+}
+
+// —— 以下是批 B1 的身份写面 ——
+
+function errResponse(err: unknown): ServerResponse {
+  return jsonResponse(500, { error: err instanceof Error ? err.message : String(err) });
+}
+
+/**
+ * RegisterIdentity（store/identity.go:38-64）的等价实现（幂等）。
+ * registered=false 表示此前已登记同 id 同公钥；同 id 换公钥/换算法即冲突。
+ * Go 走事务；本壳的 Db 未暴露事务，但同步单线程驱动下「先查后写」与之一致。
+ */
+function registerIdentity(
+  db: Db,
+  id: string,
+  alg: string,
+  pubKey: string,
+  now: number,
+): { registered: boolean; conflict: boolean } {
+  const rows = db.select(`SELECT pubkey, alg FROM identities WHERE id=?`, [id]);
+  if (rows.length > 0) {
+    if (toStr(rows[0].pubkey) !== pubKey || toStr(rows[0].alg) !== alg) {
+      return { registered: false, conflict: true };
+    }
+    db.execute(`UPDATE identities SET last_seen_at=? WHERE id=?`, [now, id]);
+    return { registered: false, conflict: false };
+  }
+  db.execute(`INSERT INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, [
+    id,
+    alg,
+    pubKey,
+    now,
+    now,
+  ]);
+  return { registered: true, conflict: false };
+}
+
+/** handleIdentityRegister（identity.go:91-119）：匿名登记公钥（契约 5.1），请求自证无需签名。 */
+export function identityRegisterHandler(deps: IdentityGetDeps): ServerHandler {
+  return async (req) => {
+    const dec = decodeStrict(req, { id: "string", alg: "string", pubkey: "string" });
+    if (!dec.ok) return dec.resp;
+    const body = dec.value;
+    const alg = body.alg as string;
+    if (alg !== ALG_ED25519) {
+      return jsonResponse(400, { error: "identity_alg_unsupported" });
+    }
+    const pubKeyRaw = body.pubkey as string;
+    let wantID: string;
+    try {
+      wantID = deriveIdentityId(pubKeyRaw);
+    } catch {
+      return jsonResponse(400, { error: "identity_pubkey_invalid" });
+    }
+    if (wantID.toLowerCase() !== (body.id as string).toLowerCase()) {
+      return jsonResponse(400, { error: "identity_id_mismatch" });
+    }
+    try {
+      const r = registerIdentity(deps.db, wantID, alg, pubKeyRaw.toLowerCase(), Date.now());
+      if (r.conflict) {
+        return jsonResponse(409, { error: "identity_pubkey_conflict" });
+      }
+      // Go map 键按字典序：alg, id, registered。
+      return jsonResponse(200, { alg, id: wantID, registered: r.registered });
+    } catch (err) {
+      return errResponse(err);
+    }
+  };
+}
+
+interface KdfParams {
+  alg: string;
+  m: number;
+  t: number;
+  p: number;
+  len: number;
+}
+
+/**
+ * 对齐 Go `json.Marshal(kdfParams)`：**结构体字段序** alg,m,t,p,len（不是字典序），且末尾无换行。
+ * encodeJSON 镜像的是 json.Encoder（末尾带 \n），故此处去掉尾换行。
+ */
+function marshalKDF(k: KdfParams): string {
+  const s = Buffer.from(encodeJSON({ alg: k.alg, m: k.m, t: k.t, p: k.p, len: k.len })).toString(
+    "utf8",
+  );
+  return s.endsWith("\n") ? s.slice(0, -1) : s;
+}
+
+/**
+ * handleEscrowPut（identity.go:161-208）：写入密码托管密文（契约 5.3，需签名头）。
+ * 已验签身份 id 由 requireAuth 以**形参**传入——不写入 ServerRequest。
+ */
+export function escrowPutHandler(deps: IdentityGetDeps): AuthedHandler {
+  return async (req, identityId) => {
+    const username = req.params.username ?? "";
+    if (!validUsername(username)) {
+      return jsonResponse(400, { error: "escrow_username_invalid" });
+    }
+    const dec = decodeStrict(req, {
+      id: "string",
+      alg: "string",
+      salt: "string",
+      kdf: { alg: "string", m: "int64", t: "int64", p: "int64", len: "int64" },
+      enc_nonce: "string",
+      priv_cipher: "string",
+    });
+    if (!dec.ok) return dec.resp;
+    const body = dec.value;
+    const id = body.id as string;
+    if (id.toLowerCase() !== identityId.toLowerCase()) {
+      return jsonResponse(403, { error: "escrow_identity_mismatch" });
+    }
+    const alg = body.alg as string;
+    if (alg !== ALG_ED25519) {
+      return jsonResponse(400, { error: "identity_alg_unsupported" });
+    }
+    const salt = body.salt as string;
+    const encNonce = body.enc_nonce as string;
+    const privCipher = body.priv_cipher as string;
+    if (!isHexN(salt, 16) || !isHexN(encNonce, 12) || !isHexNonEmptyEven(privCipher)) {
+      return jsonResponse(400, { error: "escrow_param_invalid" });
+    }
+    const kdf = body.kdf as Record<string, unknown>;
+    const kdfAlg = kdf.alg as string;
+    const m = kdf.m as number;
+    const t = kdf.t as number;
+    const p = kdf.p as number;
+    const len = kdf.len as number;
+    if (kdfAlg !== "argon2id" || !(m > 0) || !(t > 0) || !(p > 0) || len !== 32) {
+      return jsonResponse(400, { error: "escrow_kdf_invalid" });
+    }
+    const kdfJSON = marshalKDF({ alg: kdfAlg, m, t, p, len });
+    const now = Date.now();
+    try {
+      // PutEscrow（store/identity.go:141-165）：同 username 只允许同一 id 覆盖，否则冲突。
+      const owner = deps.db.select(`SELECT id FROM escrow WHERE username=?`, [username]);
+      if (owner.length > 0 && toStr(owner[0].id) !== id.toLowerCase()) {
+        return jsonResponse(409, { error: "escrow_conflict" });
+      }
+      deps.db.execute(
+        `INSERT INTO escrow(username,id,alg,salt,kdf_json,enc_nonce,priv_cipher,updated_at)
+			VALUES(?,?,?,?,?,?,?,?)
+			ON CONFLICT(username) DO UPDATE SET
+				id=excluded.id, alg=excluded.alg, salt=excluded.salt, kdf_json=excluded.kdf_json,
+				enc_nonce=excluded.enc_nonce, priv_cipher=excluded.priv_cipher, updated_at=excluded.updated_at`,
+        [username, id.toLowerCase(), alg, salt, kdfJSON, encNonce, privCipher, now],
+      );
+    } catch (err) {
+      return errResponse(err);
+    }
+    // Go map 键按字典序：updated_at, username。
+    return jsonResponse(200, { updated_at: now, username });
   };
 }
