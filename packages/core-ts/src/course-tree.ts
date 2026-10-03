@@ -32,6 +32,28 @@ export function lessonNo(segs: SegmentRow[], lessonId: string): number {
   return idx < 0 ? 0 : idx + 1;
 }
 
+/** 课时在课程里的位置：{ cur: 位次(1基), total: 课时总数 }；不在清单里返回 null */
+export function lessonPosition(segs: SegmentRow[], lessonId: string): { cur: number; total: number } | null {
+  const list = childrenOf(segs);
+  const idx = list.indexOf(lessonId);
+  if (idx < 0) return null;
+  return { cur: idx + 1, total: list.length };
+}
+
+/** 课时的上下讲 itemId：{ prev, next }；边界到了就 null */
+export function prevNextLesson(segs: SegmentRow[], lessonId: string): { prev: string | null; next: string | null } {
+  const list = childrenOf(segs);
+  const idx = list.indexOf(lessonId);
+  if (idx < 0) return { prev: null, next: null };
+  return { prev: idx > 0 ? list[idx - 1]! : null, next: idx < list.length - 1 ? list[idx + 1]! : null };
+}
+
+/** 同课程其他讲（排除当前），保持清单位次，取前 topN（默认 5） */
+export function relatedLessons(segs: SegmentRow[], lessonId: string, topN = 5): string[] {
+  const list = childrenOf(segs);
+  return list.filter((id) => id !== lessonId).slice(0, topN);
+}
+
 /** 分类条目：source=category，按 itemId 升序（册子 §5.1）。分类之间无上级容器，故不排序字段。 */
 export function splitCategories(items: ItemRow[]): ItemRow[] {
   return items.filter((it) => it.source === 'category').sort(byItemId);

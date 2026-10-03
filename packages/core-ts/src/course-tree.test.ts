@@ -6,6 +6,9 @@ import {
   groupCoursesByCategory,
   lessonOfCarrier,
   lessonNo,
+  lessonPosition,
+  prevNextLesson,
+  relatedLessons,
   splitCategories,
   splitCourses,
 } from './course-tree';
@@ -94,6 +97,143 @@ describe('lessonNo', () => {
 
   it('不在清单里返回 0', () => {
     expect(lessonNo(segs, 'course/c1/lesson/l9')).toBe(0);
+  });
+});
+
+describe('lessonPosition', () => {
+  const segs = [
+    seg('course/c1', 0, 'digest', '课程简介\n'),
+    seg('course/c1', 1, 'lesson', 'course/c1/lesson/l1'),
+    seg('course/c1', 2, 'lesson', 'course/c1/lesson/l2'),
+    seg('course/c1', 3, 'lesson', 'course/c1/lesson/l3'),
+    seg('course/c1', 4, 'lesson', 'course/c1/lesson/l4'),
+    seg('course/c1', 5, 'lesson', 'course/c1/lesson/l5'),
+    seg('course/c1', 6, 'lesson', 'course/c1/lesson/l6'),
+    seg('course/c1', 7, 'lesson', 'course/c1/lesson/l7'),
+  ];
+
+  it('返回 {cur,total}：cur 从 1 计、total = 课时总数（不包含 seq=0 的 digest）', () => {
+    expect(lessonPosition(segs, 'course/c1/lesson/l1')).toEqual({ cur: 1, total: 7 });
+    expect(lessonPosition(segs, 'course/c1/lesson/l4')).toEqual({ cur: 4, total: 7 });
+    expect(lessonPosition(segs, 'course/c1/lesson/l7')).toEqual({ cur: 7, total: 7 });
+  });
+
+  it('不在清单里返回 null', () => {
+    expect(lessonPosition(segs, 'course/c1/lesson/l9')).toBeNull();
+    expect(lessonPosition(segs, '')).toBeNull();
+  });
+
+  it('与 lessonNo 同源：childrenOf 同一次调用，cur === lessonNo 返回值', () => {
+    const pos = lessonPosition(segs, 'course/c1/lesson/l4');
+    if (pos) expect(pos.cur).toBe(lessonNo(segs, 'course/c1/lesson/l4'));
+  });
+});
+
+describe('prevNextLesson', () => {
+  const segs = [
+    seg('course/c1', 0, 'digest', ''),
+    seg('course/c1', 1, 'lesson', 'course/c1/lesson/l1'),
+    seg('course/c1', 2, 'lesson', 'course/c1/lesson/l2'),
+    seg('course/c1', 3, 'lesson', 'course/c1/lesson/l3'),
+  ];
+
+  it('中间课时：prev = 前一个 itemId，next = 后一个 itemId', () => {
+    expect(prevNextLesson(segs, 'course/c1/lesson/l2')).toEqual({
+      prev: 'course/c1/lesson/l1',
+      next: 'course/c1/lesson/l3',
+    });
+  });
+
+  it('首课时：prev = null，next = 第二讲', () => {
+    expect(prevNextLesson(segs, 'course/c1/lesson/l1')).toEqual({
+      prev: null,
+      next: 'course/c1/lesson/l2',
+    });
+  });
+
+  it('末课时：prev = 倒数第二讲，next = null', () => {
+    expect(prevNextLesson(segs, 'course/c1/lesson/l3')).toEqual({
+      prev: 'course/c1/lesson/l2',
+      next: null,
+    });
+  });
+
+  it('不在清单里：prev/next 都 null', () => {
+    expect(prevNextLesson(segs, 'course/c1/lesson/l9')).toEqual({ prev: null, next: null });
+  });
+
+  it('单课时课程：prev/next 都 null', () => {
+    const single = [
+      seg('course/s', 0, 'digest', ''),
+      seg('course/s', 1, 'lesson', 'course/s/lesson/only'),
+    ];
+    expect(prevNextLesson(single, 'course/s/lesson/only')).toEqual({ prev: null, next: null });
+  });
+});
+
+describe('relatedLessons', () => {
+  const segs = [
+    seg('course/c1', 0, 'digest', ''),
+    seg('course/c1', 1, 'lesson', 'course/c1/lesson/l1'),
+    seg('course/c1', 2, 'lesson', 'course/c1/lesson/l2'),
+    seg('course/c1', 3, 'lesson', 'course/c1/lesson/l3'),
+    seg('course/c1', 4, 'lesson', 'course/c1/lesson/l4'),
+    seg('course/c1', 5, 'lesson', 'course/c1/lesson/l5'),
+    seg('course/c1', 6, 'lesson', 'course/c1/lesson/l6'),
+    seg('course/c1', 7, 'lesson', 'course/c1/lesson/l7'),
+  ];
+
+  it('排除当前课时、保持清单位次、默认 top 5', () => {
+    expect(relatedLessons(segs, 'course/c1/lesson/l4')).toEqual([
+      'course/c1/lesson/l1',
+      'course/c1/lesson/l2',
+      'course/c1/lesson/l3',
+      'course/c1/lesson/l5',
+      'course/c1/lesson/l6',
+    ]);
+  });
+
+  it('末尾课时：取前 5（不含自己 + 后面不够 5 个不补 null）', () => {
+    expect(relatedLessons(segs, 'course/c1/lesson/l7')).toEqual([
+      'course/c1/lesson/l1',
+      'course/c1/lesson/l2',
+      'course/c1/lesson/l3',
+      'course/c1/lesson/l4',
+      'course/c1/lesson/l5',
+    ]);
+  });
+
+  it('首课时：跳过自己后取 l2..l6', () => {
+    expect(relatedLessons(segs, 'course/c1/lesson/l1')).toEqual([
+      'course/c1/lesson/l2',
+      'course/c1/lesson/l3',
+      'course/c1/lesson/l4',
+      'course/c1/lesson/l5',
+      'course/c1/lesson/l6',
+    ]);
+  });
+
+  it('不在清单里：不排除任何，直接取前 topN', () => {
+    expect(relatedLessons(segs, 'course/c1/lesson/l99', 3)).toEqual([
+      'course/c1/lesson/l1',
+      'course/c1/lesson/l2',
+      'course/c1/lesson/l3',
+    ]);
+  });
+
+  it('自定义 topN：topN=2 只给 2 条', () => {
+    expect(relatedLessons(segs, 'course/c1/lesson/l3', 2)).toEqual([
+      'course/c1/lesson/l1',
+      'course/c1/lesson/l2',
+    ]);
+  });
+
+  it('单课时课程：排除自己后空数组', () => {
+    const single = [
+      seg('course/s', 0, 'digest', ''),
+      seg('course/s', 1, 'lesson', 'course/s/lesson/only'),
+    ];
+    expect(relatedLessons(single, 'course/s/lesson/only')).toEqual([]);
   });
 });
 
