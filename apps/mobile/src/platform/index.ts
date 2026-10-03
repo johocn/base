@@ -1,7 +1,7 @@
 import { hexToBytes } from '@base/protocol-ts';
 
 import { ENTROPY_FILL_BYTES, installRandomFallback } from '../core/entropy';
-import { SCHEMA_SQL, SqlRepo, ensureGroupColumns, ensureProgressColumns, ensureSubmissionColumns, type LocalRepo } from '../core/repo';
+import { SCHEMA_SQL, SqlRepo, ensureGroupColumns, ensureItemsColumns, ensureProgressColumns, ensureSubmissionColumns, type LocalRepo } from '../core/repo';
 import { UNKNOWN_FLAGS, type CapabilityFlags, type SelfCheckReport } from '../core/selfcheck';
 import type { SyncOptions } from '../core/sync';
 import type { Adapters, LocalDb } from './adapter';
@@ -28,6 +28,7 @@ export async function bootstrap(): Promise<AppContext> {
   const db = new PlusLocalDb(p, `${root}/base.db`);
   for (const sql of SCHEMA_SQL) await db.execute(sql);
   await ensureGroupColumns(db); // 存量库（老 DB 已有 groups 表）幂等补 encrypted / roster_rev 两列
+  await ensureItemsColumns(db); // 存量库幂等补 items.author_id / author_sig 两列
   await ensureSubmissionColumns(db); // 存量库幂等补 my_submissions.links_json
   await ensureProgressColumns(db); // 存量库幂等补 progress.done / day / event_id 三列
 

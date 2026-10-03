@@ -145,7 +145,8 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS config(key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS items(
      item_id TEXT PRIMARY KEY, source TEXT, type TEXT, title TEXT, rev TEXT,
-     content_hash TEXT, state TEXT, updated_at TEXT)`,
+     content_hash TEXT, state TEXT, updated_at TEXT,
+     author_id TEXT NOT NULL DEFAULT '', author_sig TEXT NOT NULL DEFAULT '')`,
   `CREATE TABLE IF NOT EXISTS articles(
      item_id TEXT PRIMARY KEY, title TEXT, digest TEXT, published_at TEXT,
      tags_json TEXT, body_md TEXT, content_hash TEXT, rev TEXT)`,
@@ -204,6 +205,23 @@ export async function ensureGroupColumns(db: LocalDb): Promise<void> {
   }
   if (!cols.has('roster_rev')) {
     await db.execute(`ALTER TABLE groups ADD COLUMN roster_rev INTEGER NOT NULL DEFAULT 0`);
+  }
+}
+
+/**
+ * 存量库幂等补列（`items.author_id` / `author_sig`）。
+ * `listItems()` / `getItem()` / `commitPack()` 都读写这两列，而老库的 `items` 建表语句里没有，
+ * 不补则全新装机/升级后一律报 `no such column: author_id`。
+ * 表不存在（`PRAGMA table_info` 返回空）说明是首启前的空库，直接跳过，等 DDL 建全。
+ */
+export async function ensureItemsColumns(db: LocalDb): Promise<void> {
+  const cols = new Set((await db.select(`PRAGMA table_info(items)`)).map((r) => String(r.name)));
+  if (cols.size === 0) return;
+  if (!cols.has('author_id')) {
+    await db.execute(`ALTER TABLE items ADD COLUMN author_id TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!cols.has('author_sig')) {
+    await db.execute(`ALTER TABLE items ADD COLUMN author_sig TEXT NOT NULL DEFAULT ''`);
   }
 }
 
