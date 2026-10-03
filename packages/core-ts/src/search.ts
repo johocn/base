@@ -15,8 +15,11 @@ export function searchPattern(q: string): string | null {
 /**
  * 占位符只用匿名 `?`：sqlWithParams 是单遍替换，不支持 `?1` 编号形式。
  * 同一模式串出现三次（两次筛选 + 一次排序），故调用方要传三个参数。
+ *
+ * 列名对齐**本地库** `articles`（`SCHEMA_SQL`，见 repo.ts）：`rev` 而非节点侧的 `source_rev`。
+ * 这条 SQL 只在 `LocalRepo.searchArticles` 上跑；写成 `source_rev` 会 no such column。
  */
 export const SEARCH_SQL =
-  `SELECT item_id,title,digest,published_at,tags_json,body_md,content_hash,source_rev FROM articles` +
+  `SELECT item_id,title,digest,published_at,tags_json,body_md,content_hash,rev FROM articles` +
   ` WHERE title LIKE ? ESCAPE '\\' OR body_md LIKE ? ESCAPE '\\'` +
   ` ORDER BY (title LIKE ? ESCAPE '\\') DESC, published_at DESC LIMIT 50`;

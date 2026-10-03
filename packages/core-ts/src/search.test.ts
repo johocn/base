@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { SCHEMA_SQL } from './repo';
 import { SEARCH_SQL, escapeLike, searchPattern } from './search';
 
 describe('escapeLike', () => {
@@ -35,5 +36,18 @@ describe('SEARCH_SQL', () => {
     expect(SEARCH_SQL).toContain("ESCAPE '\\'");
     expect(SEARCH_SQL).toContain('ORDER BY (title LIKE');
     expect(SEARCH_SQL).toContain('LIMIT 50');
+  });
+
+  // 曾经 SELECT 写成节点侧的 source_rev，而本地库 articles 只有 rev，
+  // 查询必抛 no such column 且被页面 catch 吞掉 → 搜索恒为「没搜到」。
+  it('SELECT 的每一列都存在于本地库 articles 建表语句', () => {
+    const ddl = SCHEMA_SQL.find((s) => s.includes('CREATE TABLE IF NOT EXISTS articles')) ?? '';
+    expect(ddl).not.toBe('');
+    const cols = SEARCH_SQL.slice(0, SEARCH_SQL.indexOf(' FROM '))
+      .replace(/^SELECT\s+/, '')
+      .split(',')
+      .map((c) => c.trim());
+    expect(cols.length).toBeGreaterThan(0);
+    for (const c of cols) expect(ddl).toContain(c);
   });
 });
