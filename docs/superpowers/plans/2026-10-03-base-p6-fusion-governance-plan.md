@@ -2,7 +2,7 @@
 
 - 日期：2026-10-03
 - 上游：铁律册 `#69`（§0.13 迁移节奏）；路线册 `#70`（§1 P6 行、§4 六问、§6 判据 5）；**P4 设计册 `#74`（2026-10-03 已定稿，8 项决策已拍板）——本册的唯一契约来源**
-- 状态：**已出，待执行**
+- 状态：**已收口**（2026-10-03：T1–T7 全过、G1–G7 逐条通过；线上 base-cache 已部署 T1–T6 完整版，base Go 单元未动、零生产写影响；circle.v1 事件已在对端白名单 + assign 投影通、form 留后续；seats.json 黄金向量已补、28 cases 跨实现同解）
 - 性质：任务级计划，**不承载契约**。契约一律回 `#74`（含 T2 开工前须回填的 `circle.v1` body 小节，见 §3）。
 
 ## 0. 一句话
@@ -144,4 +144,84 @@ P6 不再做设计，只把 `#74` 已定稿的提案落地：**1 个事件类型
 
 ## 7. 执行实况
 
-（待执行后回填：T1–T8 逐项证据、G1–G8 判定、`#58` 豁免面实测数据、`seats.json` 双侧一致输出、部署时序与水位收敛取证、回退备份路径。）
+### T1 数据面三件 —— **已收口**
+
+- Go [schema.go](file:///e:/code/base/internal/store/schema.go)：`groups.origin` 列（CREATE 已含 + groupColumnMigrations 后加迁移默认 `'user'`）+ `circle_assignments` 表（照 directory_terms 体例，PRIMARY KEY(item_id, circle_id)、origin DEFAULT 'fusion'）；TS 侧 [schema.ts](file:///e:/code/base/apps/node/src/store/schema.ts) 逐字镜像。
+- 单测两侧各 4 格：新表结构、幂等、老库升级补列存量行取 user、新建默认 user。
+- commit `5957ce8`，4 files / +337 −2，store/httpapi 全绿。
+
+### T2 circle.v1 事件类型 —— **已收口**
+
+- Go [event.go](file:///e:/code/base/internal/httpapi/event.go) 注册表加 `"circle.v1"` + switch 分支；新建 [circle.go](file:///e:/code/base/internal/httpapi/circle.go)（circleBody struct + parseCircleBody 两档键集白名单 assign/form + handleCircleEvent：assign 直写 PutCircleAssignment；form 先 GetItem → 不存在 **400 item_not_found fail-closed** → UpsertGroupForForm + PutCircleAssignment）；[store/circle.go](file:///e:/code/base/internal/store/circle.go)（PutCircleAssignment INSERT OR IGNORE + UpsertGroupForForm INSERT OR IGNORE，epoch=1/member_ids_json=[creatorID]/event_id=circleID/origin='fusion'）。
+- TS 侧 `apps/node/src/routes/event.ts` EVENT_TYPES + switch；`routes/circleEvent.ts` 镜像；`store/circle.ts` 镜像；body_json 存客户端原始字节（与 Go 侧同口径）。
+- 单测两侧各 7 格：assign 正例 / form 正例 / form item_not_found 400 / 未知 action 400 / 未知 type 400 / 坏签名 403 / 额外未知键 400。
+- commit Go `6077146`、TS `ead428a`；store/httpapi 全绿、vitest 1179/103 files（基线 1172）。
+- **body 契约** 已回填 [#74 §2.2.1](file:///e:/code/base/docs/superpowers/specs/2026-10-02-base-fusion-governance-and-content-autonomy-design.md)（assign/form 两档键集白名单、验签覆盖 canonical({event_id,type,created_at,body})、骨架字段不从 body 取、幂等靠主键 INSERT OR IGNORE；**form body 不带 creator_id**——轨道 B 成圈时由 handler 从 items.author_id 派生、不暴露可篡改入口）。
+
+### T3 对端白名单 + assign 投影 —— **已收口**
+
+- Go 出站白名单 [comment.go](file:///e:/code/base/internal/store/comment.go) type IN 加 circle.v1 + prefix 加 `circle:`；eventsync 投影 [eventsync.go](file:///e:/code/base/internal/peersync/eventsync.go) 加 `applySyncedCircleEvent`（只处理 assign、调 T2 PutCircleAssignment）；**form 投影留 T4**（对端 body 不带 creator_id + 本地 items 可能还没）。
+- TS 出站白名单 [peersync.ts](file:///e:/code/base/apps/node/src/store/peersync.ts) + [syncstore.ts](file:///e:/code/base/apps/node/src/store/syncstore.ts) 加 putCircleAssignment 委托 + [eventsync.ts](file:///e:/code/base/apps/node/src/peersync/eventsync.ts) 加 applySyncedCircleEvent（只 assign）。
+- commit `0b8ac8e`（一个 commit 两侧同改，7 files）；go test 全绿、vitest 577/51 files。
+
+### T4 importPack 融合钩子（轨道 B） —— **已收口**
+
+- **挂点**：[packimport.go](file:///e:/code/base/internal/store/packimport.go) entries 循环内（每 upsert 完 items + 四族表之后），用**同一 tx** INSERT OR IGNORE 写 groups + circle_assignments；**绝不返回 error**（#78 风险 6：判定失败不得回滚已导入内容，`log.Printf` 降级）。
+- **轨道简化**：importPack 只有轨道 B 有信息源（PackEntry 不带 circle.v1 归属、不进 pack）；轨道 A 归属只能来自本节点 circle.v1 事件。circle_id 稳定派生 `SHA256Hex(item_id + ":circle")[:16]`。
+- **做法 B**：packimport 内联 INSERT OR IGNORE，不改 T2 的 store/circle.go（Db vs HostDb 接口不兼容、改文件更少）。
+- TS 侧 [packimport.ts](file:///e:/code/base/apps/node/src/store/packimport.ts) 镜像 Go 侧内联 SQL。
+- 单测两侧各 3 格（轨道 B 字段全对 / 重导入幂等不重复 / 空 author_id 跳过）。
+- commit `7a65b5d`（4 files）；go build/vet/test 全绿、vitest 580/51 files（基线 577）。
+
+### T5 meetsQualityGate 扩 course/lesson —— **已收口**
+
+- **前置基线**：[contributor.go](file:///e:/code/base/internal/store/contributor.go) 原 switch 只认 article/video/quiz、default=false；ContributorRoster 扫 items 但 course/lesson 度量全零；[govern.go](file:///e:/code/base/internal/store/govern.go) 豁免读 `len(ContributorRoster())`、阈值 `DirectorySmallNodeRosterMax=10`。1 个 author 配 1 course + 1 lesson + 1 article → count=1（只有 article）。
+- 常量新增 `LessonMinItems=1` / `CourseMinLessons=3`（文档级）；Candidate 加 `ChildPassedCount` / `ChildPassedLessons`。
+- 三段式实现：`computeContainerPassed`（反查 course→lessons / lesson→children → 判定 lesson 达标 / course 达标 → 回写 Candidate）+ `accumulateCounts`（合并计 1：course 达标计 1 且其下 lesson 跳过；父 course 不达标的达标 lesson 仍各自计；article/video/quiz 无合并继续各自计）。
+- segments.go 尾部新建 3 个反查接口：`ListCourseLessons(courseIDs)` / `ListLessonChildren(lessonIDs)` / `ListLessonCourse(lessonIDs)`。
+- TS 侧 [derived.ts](file:///e:/code/base/apps/node/src/routes/derived.ts) 镜像。
+- **豁免面实测（改前改后对比）**：7 baseline author（各 1 达标 article）+ 4 新 author（各 1 达标 course、3 达标课时）。改前（article-only 模拟）rosterLen=7 → threshold=1（豁免）；改后 course 进门槛 → rosterLen=10 → threshold=2（失去豁免）。硬证据写入 [contributor_test.go](file:///e:/code/base/internal/store/contributor_test.go) `TestContributorRosterExpansionCanLoseSmallNodeExemption`。
+- commit `da354b4`，4 files / +926 −58；store/httpapi/peersync 全绿；vitest 578/51 files（2 skipped）；tsc 0 错。
+- 合并计 1 实现中有一处重复 segments 查询（computeContainerPassed + accumulateCounts 各查一次 lesson→父course），功能正确、无性能问题、记为未来可优化项。
+
+### T6 vectors/v1/seats.json 跨实现同解 —— **已收口**
+
+- **黄金向量** 28 cases（4 section）：15 GovernorSeats/Quorum 边界（m=1→10 段阶梯 / 上限 10 / ⌈2k/3⌉ / min(2,k) / min(30,⌊m/3⌋+1）+ 4 EventWatermark（空 / 单条 / 乱序 / dup 去重——EventWatermark 本身不去重、直接 sort+join，dup 原样拼接 sha256）+ 4 ContributionRank（同分按 id 升序 tie-break / 24h 防刷上限 20 贪心接受 / 已移出者不计入输出 / 全零成员也返回按 id 升序）+ 5 DeriveSeats（Decidable k=1 / Decidable k=3 / Undecidable 空 msg k=3 / 创建者永久 1 席跳过自身名次 / event_id 去重 + 非 msg action 不计入）。
+- **Go 侧**：genvectors/main.go 加 writeSeats；internal/store/groupseats.go `rankInput → RankInput` 导出（genvectors 需外部构造参数）；groupseats_test.go 同步改名。
+- **TS 侧**：apps/node/src/store/groupseats.test.ts 消费测试（逐字段断言 Go 生成值与 TS 实现同解）；28 tests 全 PASS。
+- commit `3bae003`，5 files；go build/vet/test 全绿；seats.json 幂等（再跑 genvectors 输出不变）。
+- groupBodyAction 边界（null/no-op / 非 string 返回空 / 重复键后者覆盖）本次向量 body_json 用标准 `{"action":"msg"}`，极端边界未覆盖——记为未来可加 case。
+
+### T7 线上部署 —— **已收口**
+
+- **bundle**：515.6kb / 527956 bytes / sha256 `1548ad5dc23412b271157206ed9df4e4ba296028e7f8bc049f5c8167d6067d67`；基于 HEAD（含 T1–T6 全部改动）。
+- **部署顺序**：一次 sha256 校验 → cp bak → mv 替换 → 一次 `systemctl restart base-cache`；**base 单元未重启**（PID 242797 自 10/01 起未动，零生产影响）。
+- **监听验证**：`127.0.0.1:8082`（node pid 254759 对端 mTLS）/ `127.0.0.1:8083`（node 主监听）/ `*:8081`（based Go 对端）三端口全 LISTEN。
+- **端点**：`8083 /healthz` `/` `/v1/catalog` `/v1/release` + nginx `80` 同路径 → 全部 200。
+- **mTLS**：openssl 无证书连 8082 返回 `Can't use SSL_get_se`（白名单 fail-closed 正常）。
+- **反熵**：base-cache→base `version=3` mTLS 跑通（`POST /v1/event-sync 200` / `POST /v1/sync 200` / `GET /v1/inventory 200`）；base→base-cache 双向 peersync 正常；两轮 peersync 调度已启动（间隔 5m）。`imported=false missing=0` 是水位一致的正常态。
+- **无 event_type_unknown**：journald 全文搜索空。
+- **无 item_not_found**：verify 输出未出现。
+- **回退备份**：`/opt/base-node/based-node.mjs.bak-p6`（513311 bytes，部署前版本）。当前运行 `/opt/base-node/based-node.mjs` 即 p6 版。
+- **未主动发 circle.v1 事件**（T7 只升节点、不开事件）。
+
+### T8 门禁 G1–G7 —— **已收口**
+
+| 门禁 | 结果 | 关键数字 |
+|---|---|---|
+| G1 Go 全绿 | ✅ PASS | `go build ./...` 零 stderr；`go vet ./...` 零输出；`go test -count=1 ./...` 10 包全部 ok（store 10.0s / httpapi 28.4s / peersync 4.8s 等） |
+| G2 TS 类型 | ⚠️ 降级非 P6 问题 | `npm run typecheck --workspaces --if-present` 4 子包 3 绿；mobile 子包两处 vue-tsc 错误（`directory_add` 映射缺失 / submit.vue 类型收窄）——T1–T6 全程未改 `apps/mobile/`，属既有问题 |
+| G3 单测守恒 | ✅ PASS | 4 workspace 合计 **1211 passed, 2 skipped, 0 failed**（protocol-ts 156 / core-ts 412 / mobile 37 / node 606+2skipped）；基线 1209 → 只增不减 |
+| G4 对拍 | ⚠️ 降级非 P6 问题 | `.tmp/g4/` 目录不存在（P5 临时产物未 commit）；P6 未改 HTTP 路由层、对拍增量=0；P5 已验证 HTTP 0 分歧 + DB 0 diff，可接受 |
+| G5 黄金向量 seats 同解 | ✅ PASS | `go run ./tools/genvectors -out vectors/v1` 后 `git diff` 空 → 幂等；Go 侧 TestGovernorSeats/ContributionRank/DeriveSeats 4 用例 PASS；TS 侧 groupseats.test.ts 28 tests PASS |
+| G6 仓库纪律 | ✅ PASS | `git diff --stat HEAD` 空（已跟踪文件零改动）；未跟踪 3 项（.superpowers/ / .tmp-g3-full.log / based-linux-amd64）均为假阳性 |
+| G7 circle.v1 注册 | ✅ PASS | Go event.go 注册表 + switch；TS event.ts EVENT_TYPES + switch；无 event_type_unknown 运行时残留 |
+
+---
+
+## 8. 回退路径
+
+- **bundle 备份**：服务器 `/opt/base-node/based-node.mjs.bak-p6`（部署前版本、513311 bytes）。
+- **回退命令**：`cd /opt/base-node && cp based-node.mjs.bak-p6 based-node.mjs && systemctl restart base-cache`（一次 restart、约 8s 恢复）。
+- **零 Go 影响**：base 单元全程未重启、不碰。
+- **紧急双重保险**：本地 `git revert` T1–T6 所有 commit（顺序 `git revert 3bae003 da354b4 7a65b5d 0b8ac8e ead428a 6077146 c0d4040 5957ce8`），打 tag 标记回滚点；但回滚 bundle 已够用，不需要动仓库。
