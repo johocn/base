@@ -2,7 +2,7 @@
 
 - 日期：2026-10-03
 - 上游：总纲 `#69`（§0.13 迁移节奏 = 并行双跑 → 行为等价后 Go 节点退役）；路线计划 `#70`（§1 P5 行、§6 六条等价判据、§8 风险）；P4 设计册 `#74`（**2026-10-03 已定稿，P5 开工闸门已解除**）；P3 各批 = 计划 `#75`（批 A–G 已全收口，判据 2–7 均已各自对拍过）
-- 状态：**执行中**（P5-1 ~ P5-4 已收口；P5-5 前置「双影子对练」补验已通过并修 GAP-A/GAP-C、登记 GAP-B；退役待执行）
+- 状态：**已收口**（2026-10-03：P5-1 ~ P5-6 全过、G1–G8 逐条通过；线上 `base-cache` 已切 Node 壳、tag `last-go-node`；Go 实现全留、客户端零改动）
 - 性质：任务级计划，**不承载契约**。契约一律回册子。
 
 ## 0. 一句话
@@ -324,4 +324,56 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 - **工装**（`.tmp/g4/`，不入版本控制；服务器 `/root/`）：`p55_setup.sh`（快照 + 证书 + 环境 + 起双影子）、
   `p55_verify.sh`（五段验证）、`p55_tlsprobe.mjs`（只读取证探针）、`p55_c_verify.sh`（GAP-C 复验）。
 
-### Task P5-5 ~ P5-6（退役与门禁）
+#### P5-5 退役实况 —— **已收口**
+
+- **落点**：**只切 `base-cache` 单元**（nginx `:80` 的真实上游 = `127.0.0.1:8083`）；`base` 单元（源节点）继续跑 Go。
+- **切换时序（照 §3 未颠倒）**：**先停 Go**（`systemctl stop base-cache`）→ **再起 Node**。
+  Go 停止后 WAL **干净收敛**：`base.db-wal` / `-shm` 消失，只剩 `base.db` ⇒ 未触发 Node「拒绝打开」分支，**无需手工 checkpoint**。
+- **单元改动**：
+  - `ExecStart` 由 `/opt/base/based serve -peer-addr 127.0.0.1:8082 -peers '<json>' -issuer-pubkeys '<json>'`
+    改为 `/opt/base-cache/run-node.sh` —— bash wrapper：先 `export BASE_PEERS` / `BASE_ISSUER_PUBKEYS`（**单引号字面量**）
+    再 `exec /opt/base-node/bin/node /opt/base-node/based-node.mjs serve`。
+    原因：Node `serve` **只读 env、不解析 flag**，而 systemd `EnvironmentFile` 会剥值中引号 ⇒ JSON 不能进 env 文件。
+  - `EnvironmentFile` 保持 `/opt/base-cache/base.env`，追加 4 项：`BASE_DB=/opt/base-cache/data/base.db`、
+    `BASE_PEER_ADDR=127.0.0.1:8082`、`BASE_STORE_KEY_FILE=/opt/base-cache/data.key`、`BASE_WEB_DIR=/opt/base-node/web/templates`。
+    （`BASE_ADDR` / `BASE_DATA` / `BASE_ISSUER` / `BASE_TLS_CERT=off` / `BASE_SYNC_INTERVAL=5m` / `BASE_SCRUB_INTERVAL=24h` 原样沿用。）
+- **备份（回退用）**：`/root/base-cache.service.bak-20261003-090413`、`/root/base-cache.env.bak-20261003-090413`。
+- **启动日志**（Node base-cache）：`listening 127.0.0.1:8083`；`based 对端接口监听 127.0.0.1:8082（双向 TLS + 指纹固定，白名单 1 个）`；
+  `反熵调度已启动（1 个对端，间隔 5m0s）`；`scrub 调度已启动（间隔 24h0m0s，首轮延迟 10 分钟）`。
+- **证书零改动（关键不变量）**：`BASE_TLS_CERT=off` ⇒ `resolveTlsMaterial` 落回默认路径 `<data>/tls/node.{crt,key}` —— 正是**退役前那张证书**；
+  Node **复用不重签** ⇒ 指纹仍 `96de46405be76287c0f89c59a09905507ead8c789e2ef0260e0c710ff1c1745e`，与 `base` 单元 `-peers` 白名单**逐字相同** ⇒ 节点间 mTLS 不断链。
+  - 佐证（GAP-A 的生产实证）：`:8083` 门户页显示 `节点配对码 S3PE-MQC3-45RI-PQHY · 指纹 96de46405be76287c0f89c59a09905507ead8c789e2ef0260e0c710ff1c1745e`。
+- **切换后首轮反熵即成功**（Node base-cache ← Go base `https://127.0.0.1:8081`）：
+  `peer=https://127.0.0.1:8081 version=3 pack= imported=false equal=false missing=0 extra=3 fetched=0 bad_frames=0 no_replica=3`，耗时 `100ms`；
+  近 3 分钟计数 `对端未提供证书=0`、`本轮失败=0`。
+- **探活（全 200）**：
+  - 直连 `127.0.0.1:8083`：`/healthz` `/v1/catalog` `/` `/v1/release` `/v1/manifest/dd8feadc113331bc233641bb7ba36067` `/v1/directory`；
+  - 经 nginx `127.0.0.1:80`：`/healthz` `/v1/catalog` `/` `/v1/release` `/v1/manifest/{pack_id}`；
+  - 公网 `http://118.190.217.242`：`/` `/v1/catalog` `/v1/release` `/v1/manifest/{pack_id}`。
+- **客户端零改动**：APK / 落地页 / `/v1/release` 指向全未动；`base`（Go 源节点）全程 `active`。
+- **tag**：`last-go-node`（退役前最后一版，已 push）。
+- **回退路径**：`ExecStart` 切回 `/opt/base/based serve -peer-addr 127.0.0.1:8082 -peers '…' -issuer-pubkeys '…'`（备份在 `/root/`）
+  → `systemctl daemon-reload && systemctl restart base-cache`。
+
+#### 影子清理 —— **已完成**
+
+- `p5-go-shadow` / `p5-node-shadow` 已停；瞬态单元由 `--collect` 自动回收（`systemctl list-unit-files 'p5-*'` → 0 条）。
+- `rm -rf /opt/p5-shadow-go /opt/p5-shadow-node`、`rm -f /opt/p5-shadow-fp.env`、`rm -f /root/p55_*`（工装 + 日志 + 前述备份保留）。
+- **保留** `/opt/base-node`（运行时 + 产物 + 模板 + `node-sqlite3-wasm`，169 MB）—— 线上 `base-cache` 正在使用。
+
+### Task P5-6　门禁 G1–G8 + 回填 + 提交 —— **已收口**
+
+| # | 门禁 | 结果 |
+|---|---|---|
+| G1 | Go 侧全绿 | `go build ./...` / `go vet ./...` 0 错；`go test ./...` 全 `ok`（`cmd/based` + `internal` 7 包 + `tools`）→ **过** |
+| G2 | TS 类型 | `@base/protocol-ts` / `@base/core-ts` / `@base/node` 各 **0 错**；**`apps/mobile` 2 条既有 `.vue` 错**（`governance.vue` 缺 `directory_add`、`submit.vue` 类型联合），册外既有、与 P5 无关 → **过（既有例外）** |
+| G3 | 单测守恒 | `@base/node` **550/550**、`@base/core-ts` **412/412**、`@base/protocol-ts` **156/156** 全绿；本阶段未动 mobile，用例未减 → **过** |
+| G4 | 全量对拍 0 分歧 | P5-2 单次全量：HTTP **0/210 令牌**、DB 快照对称差 **0 行** → **过** |
+| G5 | 影子重放 0 分歧 | P5-3：真实流量 **47 条 0 分歧** → **过** |
+| G6 | 并存无回归 | P5-4：**22 条 0 分歧**（19 直接 MATCH + 3 门户归一化后 MATCH），线上 Go 零影响 → **过** |
+| G7 | 判据全过 | §5 追溯表 7 条全 **过**（判据 3 明标弱证据）；另经「双影子对练」补验运行态 → **过** |
+| G8 | 仓库纪律 | `git diff --stat HEAD -- internal/` **无输出**（零 Go 改动；`internal/httpapi/web.go` 仅有工作区既有的 stat 脏标记，`git diff --raw HEAD` 亦无输出）；只 add 本册相关文件（**未** add `.tmp/`、`based-linux-amd64`、`.gitignore`、`internal/httpapi/web.go`）→ **过** |
+
+- **提交**：GAP-A/GAP-C 修复 + 双影子对练回填 = `6713e61`；退役实况 + G1–G8 回填 + `docs/README.md` 同步（`#70` 行状态 + `#76` 行登记）= 本册末次提交。**tag `last-go-node` 已 push**。
+- **结论：P5 收口** —— 线上 `base-cache` 已由 Node 壳接管；`base`（源节点）仍为 Go。
+  Go 实现（`internal/` / `cmd/` / `web/` / `based-linux-amd64`）**全留**，回退 = 一次 `restart`。
