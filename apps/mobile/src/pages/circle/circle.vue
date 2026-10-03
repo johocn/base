@@ -15,16 +15,19 @@
     </view>
 
     <text v-if="groups.length === 0" class="empty">还没有圈子。可以新建一个，或粘贴伙伴给的邀请码入组。</text>
+    <!-- 卡片的 flex 必须落在 navigator 内侧：H5 端 navigator 会把子节点再包一层 `<a>`，
+         直接给 navigator 加 display:flex 时它只剩这一个子元素，头像与正文会被竖排。 -->
     <navigator
       v-for="g in groups"
       :key="g.groupId"
-      class="card"
       :url="'/pages/group/group?groupId=' + g.groupId"
     >
-      <view class="card-avatar" :style="{ background: avatarBg(g.groupId) }"></view>
-      <view class="card-body">
-        <text class="t">{{ g.name || '未命名圈子' }}</text>
-        <text class="meta">{{ g.encrypted === 1 ? '封闭' : '开放' }} · 成员 {{ memberCount(g.memberIdsJson) }} · epoch {{ g.epoch }}</text>
+      <view class="card">
+        <view class="card-avatar" :style="{ background: avatarBg(g.groupId) }"></view>
+        <view class="card-body">
+          <text class="t">{{ g.name || '未命名圈子' }}</text>
+          <text class="meta">{{ g.encrypted === 1 ? '封闭' : '开放' }} · 成员 {{ memberCount(g.memberIdsJson) }} · epoch {{ g.epoch }}</text>
+        </view>
       </view>
     </navigator>
   </view>

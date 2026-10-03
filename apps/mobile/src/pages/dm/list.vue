@@ -14,11 +14,15 @@
     </view>
 
     <text v-if="friends.length === 0" class="empty">还没有好友。可以「添加好友」生成好友码，或粘贴伙伴给的好友码。</text>
-    <navigator v-for="f in friends" :key="f.peerId" class="card" :url="'/pages/dm/chat?peerId=' + f.peerId">
-      <view class="card-avatar" :style="{ background: avatarBg(f.peerId) }"></view>
-      <view class="card-body">
-        <text class="t">{{ authorName(f.peerId) }}</text>
-        <text class="meta">{{ f.hasKey ? '已建立会话' : '未交换好友码，只读到来信' }}</text>
+    <!-- 卡片的 flex 必须落在 navigator 内侧：H5 端 navigator 会把子节点再包一层 `<a>`，
+         直接给 navigator 加 display:flex 时它只剩这一个子元素，头像与正文会被竖排。 -->
+    <navigator v-for="f in friends" :key="f.peerId" :url="'/pages/dm/chat?peerId=' + f.peerId">
+      <view class="card">
+        <view class="card-avatar" :style="{ background: avatarBg(f.peerId) }"></view>
+        <view class="card-body">
+          <text class="t">{{ authorName(f.peerId) }}</text>
+          <text class="meta">{{ f.hasKey ? '已建立会话' : '未交换好友码，只读到来信' }}</text>
+        </view>
       </view>
     </navigator>
   </view>
