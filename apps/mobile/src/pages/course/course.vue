@@ -30,33 +30,39 @@
           {{ collapsed[g.slug] ? '▸ ' : '▾ ' }}{{ groupTitle(g) }}<text v-if="groupPending(g)" class="term-badge">待票选</text>
         </text>
         <block v-if="!collapsed[g.slug]">
-          <view v-for="it in g.courses" :key="it.itemId" class="item" @click="openCourse(it.itemId)">
-            <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-            <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-              <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-            </view>
-            <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-            <view v-if="completionPercent(it.itemId)" class="completion-bar">
-              <view class="progress-track">
-                <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
+          <view v-for="it in g.courses" :key="it.itemId" class="item" :class="{ 'course-card': !!courseCover(it.itemId) }" @click="openCourse(it.itemId)">
+            <image v-if="courseCover(it.itemId)" :src="courseCover(it.itemId)" mode="aspectFill" class="course-cover" />
+            <view class="course-content">
+              <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
+              <view v-if="badgesOf(it.itemId).length > 0" class="chips">
+                <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
               </view>
-              <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
+              <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
+              <view v-if="completionPercent(it.itemId)" class="completion-bar">
+                <view class="progress-track">
+                  <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
+                </view>
+                <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
+              </view>
             </view>
           </view>
         </block>
       </block>
       <text v-if="unclassified.length > 0" class="group">未归类课程</text>
-      <view v-for="it in unclassified" :key="it.itemId" class="item" @click="openCourse(it.itemId)">
-        <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-        <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-          <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-        </view>
-        <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-        <view v-if="completionPercent(it.itemId)" class="completion-bar">
-          <view class="progress-track">
-            <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
+      <view v-for="it in unclassified" :key="it.itemId" class="item" :class="{ 'course-card': !!courseCover(it.itemId) }" @click="openCourse(it.itemId)">
+        <image v-if="courseCover(it.itemId)" :src="courseCover(it.itemId)" mode="aspectFill" class="course-cover" />
+        <view class="course-content">
+          <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
+          <view v-if="badgesOf(it.itemId).length > 0" class="chips">
+            <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
           </view>
-          <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
+          <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
+          <view v-if="completionPercent(it.itemId)" class="completion-bar">
+            <view class="progress-track">
+              <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
+            </view>
+            <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
+          </view>
         </view>
       </view>
       <text v-if="standalone.length > 0" class="group">独立内容</text>
@@ -70,17 +76,20 @@
     </block>
     <block v-else>
       <text v-if="courses.length > 0" class="group">课程</text>
-      <view v-for="it in courses" :key="it.itemId" class="item" @click="openCourse(it.itemId)">
-        <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-        <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-          <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-        </view>
-        <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-        <view v-if="completionPercent(it.itemId)" class="completion-bar">
-          <view class="progress-track">
-            <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
+      <view v-for="it in courses" :key="it.itemId" class="item" :class="{ 'course-card': !!courseCover(it.itemId) }" @click="openCourse(it.itemId)">
+        <image v-if="courseCover(it.itemId)" :src="courseCover(it.itemId)" mode="aspectFill" class="course-cover" />
+        <view class="course-content">
+          <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
+          <view v-if="badgesOf(it.itemId).length > 0" class="chips">
+            <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
           </view>
-          <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
+          <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
+          <view v-if="completionPercent(it.itemId)" class="completion-bar">
+            <view class="progress-track">
+              <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
+            </view>
+            <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
+          </view>
         </view>
       </view>
       <text v-if="standalone.length > 0" class="group">未归类</text>
@@ -131,6 +140,8 @@ const directory = ref<DirectorySnapshot>({ version: 0, approved: new Map(), pend
 const marksByItemId = ref(new Map<string, { badge: string[]; titleColor: string }>());
 /** 每门课的完成度（已学 a / b 讲）；分母为 0 的课**不入 Map** ⇒ 模板不显示该行（#8 册子 §6） */
 const completionByCourse = ref(new Map<string, { done: number; total: number }>());
+/** 课程封面图路径；key=courseItemId → 本地 blob 路径（无封面不入 Map） */
+const coverByCourse = ref(new Map<string, string>());
 const total = computed(
   () => courses.value.length + groups.value.reduce((n, g) => n + g.courses.length, 0) + standalone.value.length,
 );
@@ -177,6 +188,11 @@ function completionPercent(courseId: string): { percent: number; done: boolean }
   return { percent, done: c.done === c.total };
 }
 
+/** 课程封面图路径；无封面返回空串 ⇒ 模板不渲染封面缩略图。 */
+function courseCover(itemId: string): string {
+  return coverByCourse.value.get(itemId) ?? '';
+}
+
 async function load() {
   try {
     const { repo, capabilities, opts } = await bootstrap();
@@ -214,15 +230,20 @@ async function load() {
     marksByItemId.value = marks;
 
     // 每门课的完成度（#8 册子 §6）：只读派生，复用上面已建的 segsByItemId；零写入。
+    // 循环内顺便查课程封面：cover item_id 约定 = {courseId}/cover（文章页同口径），零封面不入 Map。
     const byId = new Map(active.map((i) => [i.itemId, i]));
     const progressByItem = new Map((await repo.listProgress()).map((r) => [r.itemId, r]));
     const completion = new Map<string, { done: number; total: number }>();
+    const covers = new Map<string, string>();
     for (const it of active) {
       if (it.type !== 'course') continue;
       const c = await courseCompletion(it.itemId, repo, byId, progressByItem);
       if (c.total > 0) completion.set(it.itemId, c);
+      const p = await repo.findBlobPathByItem(`${it.itemId}/cover`);
+      if (p) covers.set(it.itemId, p.startsWith('file://') ? p : `file://${p}`);
     }
     completionByCourse.value = completion;
+    coverByCourse.value = covers;
 
     // 独立内容 = 独立文章 article/<aid> ∪ 独立题库 quiz/<qid>（册子 §5.2）
     standalone.value = [
@@ -392,6 +413,12 @@ onShow(() => {
 /* 课程卡片：仿 Discuz 版块条目 */
 .item { padding: 14px 14px; margin-bottom: 12px; background: #ffffff; border: 1px solid #edf2f7; border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
 .item:active { background: #f7fafc; }
+/* 带封面的课程卡片：左图右文 flex */
+.item.course-card { padding: 12px; display: flex; gap: 12px; align-items: flex-start; }
+.course-cover { width: 80px; height: 60px; border-radius: 6px; flex-shrink: 0; background: #edf2f7; }
+.course-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.course-content .item-title { font-size: 15px; }
+.course-content .meta { margin-top: 2px; }
 .item-title { font-size: 16px; font-weight: 500; }
 .meta { display: block; color: #888888; font-size: 12px; }
 /* 进度条：完成度从文字改成可视化 */
