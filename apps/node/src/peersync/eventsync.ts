@@ -632,9 +632,11 @@ export function deriveGovernRoster(st: SyncStore): { roster: Set<string>; ok: bo
 }
 
 /**
- * applySyncedCircleEvent（eventsync.go:452-477）：把对端来的 circle.v1 事件投影进本地
- * circle_assignments（融合治理册 §2.2）。只处理 action=assign；form 投影留 T4
- * （对端事件 body 不带 creator_id，本地 items 可能还没）。
+ * applySyncedCircleEvent（eventsync.go:452-498）：把对端来的 circle.v1 事件投影进本地
+ * circle_assignments +（form 时）groups（融合治理册 §2.2）。
+ * action=assign → putCircleAssignment（轨道 A 归属声明）。
+ * action=form   → upsertGroupForForm + putCircleAssignment（轨道 B 成圈）。
+ * form 投影用本地 items 表取 author_id；不存在 → 静默跳过（事件行已落、投影等重放）。
  * 与 group / progress 同强度：投影失败**阻断整页**（真错误抛异常）。
  */
 export function applySyncedCircleEvent(st: SyncStore, it: EventSyncItem): void {
@@ -649,8 +651,18 @@ export function applySyncedCircleEvent(st: SyncStore, it: EventSyncItem): void {
   for (const f of [action, itemId, circleId, origin]) {
     if (!f.ok) return;
   }
-  // assign 必带 item_id + circle_id。缺省 origin="fusion"（与 httpapi.parseCircleBody 同口径）。
-  if (action.value !== "assign" || itemId.value === "" || circleId.value === "") return;
+  if (itemId.value === "" || circleId.value === "") return;
   const o = origin.value === "" ? "fusion" : origin.value;
-  st.putCircleAssignment(itemId.value, circleId.value, o, it.createdAt);
+  switch (action.value) {
+    case "assign":
+      st.putCircleAssignment(itemId.value, circleId.value, o, it.createdAt);
+      return;
+    case "form": {
+      const item = st.getItemRow(itemId.value);
+      if (item === null) return; // 事件行已落、投影等重放
+      st.upsertGroupForForm(circleId.value, item.authorId, it.createdAt, o);
+      st.putCircleAssignment(itemId.value, circleId.value, o, it.createdAt);
+      return;
+    }
+  }
 }

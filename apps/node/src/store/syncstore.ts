@@ -28,7 +28,8 @@ import {
   type GovernVoteEvent,
 } from "./governProjection";
 import { contributorRoster as contributorRosterOf, type Contributor } from "../routes/derived";
-import { putCircleAssignment as putCircleAssignmentOf } from "./circle";
+import { putCircleAssignment as putCircleAssignmentOf, upsertGroupForForm as upsertGroupForFormOf } from "./circle";
+import { getItemRow as getItemRowOf } from "./govern";
 import {
   contentVersion,
   countBlobsWithoutReplica,
@@ -125,6 +126,8 @@ export interface SyncStore {
   settleGovernProposal(proposalId: number, roster: Set<string>, rosterReady: boolean): void;
   contributorRoster(): Contributor[];
   putCircleAssignment(itemID: string, circleID: string, origin: string, createdAt: number): void;
+  upsertGroupForForm(circleID: string, creatorID: string, epochStamp: number, origin: string): void;
+  getItemRow(itemID: string): { itemId: string; authorId: string } | null;
   listRevokedPayloads(): Set<string>;
   replicaPeers(blobId: string): string[];
   deleteBlob(blobId: string): void;
@@ -247,6 +250,16 @@ class SyncStoreImpl implements SyncStore {
 
   putCircleAssignment(itemID: string, circleID: string, origin: string, createdAt: number): void {
     putCircleAssignmentOf(hostDbAsDb(this.db), itemID, circleID, origin, createdAt);
+  }
+
+  upsertGroupForForm(circleID: string, creatorID: string, epochStamp: number, origin: string): void {
+    upsertGroupForFormOf(hostDbAsDb(this.db), circleID, creatorID, epochStamp, origin);
+  }
+
+  getItemRow(itemID: string): { itemId: string; authorId: string } | null {
+    const r = getItemRowOf(hostDbAsDb(this.db), itemID);
+    if (r === null) return null;
+    return { itemId: itemID, authorId: r.authorId };
   }
 
   listRevokedPayloads(): Set<string> {

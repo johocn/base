@@ -444,10 +444,12 @@ func deriveGovernRoster(st *store.Store) (map[string]bool, bool) {
 	return set, true
 }
 
-// applySyncedCircleEvent 把对端来的 circle.v1 事件投影进本地 circle_assignments（融合治理册 §2.2）。
-// 只处理 action=assign——写一行 circle_assignments。
-// form 投影留 T4：对端事件 body 不带 creator_id，本地 items 可能还没；
-// T4 在「主动发 form 事件时同步写 groups」或补 creator_id 字段后再启。
+// applySyncedCircleEvent 把对端来的 circle.v1 事件投影进本地 circle_assignments +（form 时）groups。
+// action=assign → 写一行 circle_assignments（轨道 A 归属声明）。
+// action=form   → 写 UpsertGroupForForm + PutCircleAssignment（轨道 B 成圈）。
+// form 投影用本地 items 表取 author_id（handleCircleEvent 同口径）；
+// 本地 items 不存在 → 静默跳过（对端发事件前已 fail-closed 校验 item_not_found，
+// 反熵时若本地 items 仍缺失则等后续反熵补齐后再重放事件）。
 // 投影失败**阻断整页反熵**（与 group / progress 同强度：纯本地 SQL 双写，失败即真异常）。
 func applySyncedCircleEvent(st *store.Store, it eventSyncItem) (bool, error) {
 	if it.Type != "circle.v1" {
@@ -462,16 +464,35 @@ func applySyncedCircleEvent(st *store.Store, it eventSyncItem) (bool, error) {
 	if err := json.Unmarshal([]byte(it.BodyJSON), &m); err != nil {
 		return false, nil
 	}
-	// assign 必带 item_id + circle_id。缺省 origin="fusion"（与 httpapi.parseCircleBody 同口径）。
-	if m.Action != "assign" || m.ItemID == "" || m.CircleID == "" {
+	if m.ItemID == "" || m.CircleID == "" {
 		return false, nil
 	}
 	origin := m.Origin
 	if origin == "" {
 		origin = "fusion"
 	}
-	if err := st.PutCircleAssignment(m.ItemID, m.CircleID, origin, it.CreatedAt); err != nil {
-		return false, err
+	switch m.Action {
+	case "assign":
+		if err := st.PutCircleAssignment(m.ItemID, m.CircleID, origin, it.CreatedAt); err != nil {
+			return false, err
+		}
+		return true, nil
+	case "form":
+		// 本地 items 取 author_id；不存在 → 静默跳过（等补齐后重放）。
+		item, found, err := st.GetItem(m.ItemID)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			return false, nil // 事件行已落、投影等重放
+		}
+		if err := st.UpsertGroupForForm(m.CircleID, item.AuthorID, it.CreatedAt, origin); err != nil {
+			return false, err
+		}
+		if err := st.PutCircleAssignment(m.ItemID, m.CircleID, origin, it.CreatedAt); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	return true, nil
+	return false, nil
 }

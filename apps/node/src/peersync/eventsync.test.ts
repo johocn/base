@@ -465,28 +465,47 @@ describe("applySyncedCircleEvent", () => {
     expect(putCircleAssignment).toHaveBeenCalledWith("i/1", "c1", "user", 0);
   });
 
-  it("form 事件不投影（留 T4），非 circle.v1 直接返回", () => {
+  it("form 事件：本地 item 存在 → 投影 upsertGroupForForm + putCircleAssignment；本地 item 不存在 → 不投影", () => {
     const putCircleAssignment = vi.fn();
-    const st = { putCircleAssignment } as unknown as SyncStore;
+    const upsertGroupForForm = vi.fn();
+    const getItemRow = vi.fn().mockReturnValue({ itemId: "i/1", authorId: "a1" });
+    const st = { putCircleAssignment, upsertGroupForForm, getItemRow } as unknown as SyncStore;
     applySyncedCircleEvent(
       st,
       item({
         type: "circle.v1",
+        createdAt: 42,
         bodyJson: JSON.stringify({ action: "form", item_id: "i/1", circle_id: "c1", origin: "fusion" }),
       }),
     );
+    expect(upsertGroupForForm).toHaveBeenCalledWith("c1", "a1", 42, "fusion");
+    expect(putCircleAssignment).toHaveBeenCalledWith("i/1", "c1", "fusion", 42);
+
+    // 本地 item 不存在 → 不投影
+    vi.clearAllMocks();
+    getItemRow.mockReturnValue(null);
     applySyncedCircleEvent(
       st,
-      item({ type: "comment.v1", bodyJson: JSON.stringify({ target_id: "t" }) }),
+      item({
+        type: "circle.v1",
+        bodyJson: JSON.stringify({ action: "form", item_id: "i/unknown", circle_id: "c1" }),
+      }),
     );
-    applySyncedCircleEvent(
-      st,
-      item({ type: "circle.v1", bodyJson: "not json" }),
-    );
-    applySyncedCircleEvent(
-      st,
-      item({ type: "circle.v1", bodyJson: JSON.stringify({ action: "assign" }) }), // 缺 item_id/circle_id
-    );
+    expect(upsertGroupForForm).not.toHaveBeenCalled();
     expect(putCircleAssignment).not.toHaveBeenCalled();
+  });
+
+  it("负向：非 circle.v1 / 坏 JSON / assign 缺字段 → 不投影", () => {
+    const putCircleAssignment = vi.fn();
+    const upsertGroupForForm = vi.fn();
+    const getItemRow = vi.fn();
+    const st = { putCircleAssignment, upsertGroupForForm, getItemRow } as unknown as SyncStore;
+    applySyncedCircleEvent(st, item({ type: "comment.v1", bodyJson: JSON.stringify({ target_id: "t" }) }));
+    applySyncedCircleEvent(st, item({ type: "circle.v1", bodyJson: "not json" }));
+    applySyncedCircleEvent(st, item({ type: "circle.v1", bodyJson: JSON.stringify({ action: "assign" }) })); // 缺 item_id/circle_id
+    applySyncedCircleEvent(st, item({ type: "circle.v1", bodyJson: JSON.stringify({ action: "unknown", item_id: "i", circle_id: "c" }) })); // 未知 action
+    expect(putCircleAssignment).not.toHaveBeenCalled();
+    expect(upsertGroupForForm).not.toHaveBeenCalled();
+    expect(getItemRow).not.toHaveBeenCalled();
   });
 });
