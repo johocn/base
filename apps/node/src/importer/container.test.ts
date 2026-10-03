@@ -3,7 +3,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openHostDb } from "../host/sqlite";
 import { openStore, type Store } from "../store/store";
 import {
@@ -14,6 +14,9 @@ import {
   SubmittedContainerError,
 } from "./container";
 import type { ParsedMD } from "./container";
+
+// 每个用例都要建真库 + mkdtemp，默认 5s 在并发全量跑下会超时（单跑 ~1.5s）。同 schema.test.ts 等重型用例。
+vi.setConfig({ testTimeout: 20_000 });
 
 const dirs: string[] = [];
 function tmpDir(): string {

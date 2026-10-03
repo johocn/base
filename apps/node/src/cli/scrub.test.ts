@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createScrubCommand } from "./scrub";
 
+// 空 scrub 一轮要在临时目录建库 + 走完整 CLI 分发，默认 5s 在并发全量跑下会超时。
+vi.setConfig({ testTimeout: 20_000 });
+
 const KEYS = ["BASE_PEERS", "BASE_STORE_KEY", "BASE_STORE_KEY_FILE", "BASE_TLS_CERT", "BASE_TLS_KEY"] as const;
 const saved: Record<string, string | undefined> = {};
 beforeAll(() => {
