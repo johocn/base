@@ -150,6 +150,27 @@ export function needsTlsIdentity(
   return !isTlsOff(tlsCertRaw) || peerAddr !== "" || peerCount > 0;
 }
 
+/**
+ * 对端 DER 指纹固定（计划 #77 T2 **单一实现**，对齐 tlscfg.go:151-167 的 PeerVerifier）：
+ * 只接受 DER 的 sha256 命中白名单的证书；`raw` 为空（未提供证书）或不在白名单 ⇒ 返回 Error，通过返回 null。
+ * 空白名单 = 拒绝一切（fail-closed），绝不退化成「不校验」。
+ * `TlsAdapter.verifyPeer` 与 `host/http.ts` 对端监听的握手钩子共用此函数 ⇒ 不产生第二份实现。
+ */
+export function verifyPeerFingerprint(
+  raw: Uint8Array | undefined,
+  allowed: string[],
+): Error | null {
+  if (raw === undefined || raw.length === 0) {
+    return fingerprintMismatch("tls_fingerprint_mismatch: 对端未提供证书");
+  }
+  const allowedSet = new Set(allowed.map((f) => f.trim().toLowerCase()));
+  const got = sha256Hex(raw);
+  if (!allowedSet.has(got)) {
+    return fingerprintMismatch(`tls_fingerprint_mismatch: 对端指纹 ${got} 不在白名单`);
+  }
+  return null;
+}
+
 export function createTlsAdapter(): TlsAdapter {
   return {
     async loadOrCreate(info: TlsMaterial): Promise<TlsInfo> {
@@ -198,14 +219,9 @@ export function createTlsAdapter(): TlsAdapter {
     },
 
     verifyPeer(rawCertsDer: Uint8Array[], allowed: string[]): void {
-      if (rawCertsDer.length === 0) {
-        throw fingerprintMismatch("tls_fingerprint_mismatch: 对端未提供证书");
-      }
-      const allowedSet = new Set(allowed.map((f) => f.trim().toLowerCase()));
-      const got = sha256Hex(rawCertsDer[0]);
-      if (!allowedSet.has(got)) {
-        throw fingerprintMismatch(`tls_fingerprint_mismatch: 对端指纹 ${got} 不在白名单`);
-      }
+      // 与对端监听握手钩子共用 verifyPeerFingerprint（计划 #77 T2 单一实现）。
+      const err = verifyPeerFingerprint(rawCertsDer[0], allowed);
+      if (err !== null) throw err;
     },
 
     nodeKeyMatches(want: string, got: string): boolean {

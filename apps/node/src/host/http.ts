@@ -8,7 +8,9 @@ import type {
   ServerHandler,
   ServerRequest,
   ServerResponse,
+  TlsConfig,
 } from "@base/core-ts";
+import { verifyPeerFingerprint } from "./tls";
 
 type Segment =
   | { kind: "literal"; value: string }
@@ -205,6 +207,36 @@ function writeResponse(res: http.ServerResponse, resp: ServerResponse): void {
   res.end(Buffer.from(body));
 }
 
+/**
+ * 对端监听 TLS（计划 #77 T2 / B-③）：对齐 Go ServerTLSConfig（tlscfg.go:170-182）。
+ * 白名单非空 ⇒ 双向 TLS：要求对端证书 + 握手期指纹固定；空白名单 ⇒ 不设 ClientAuth（与 Go 一致）。
+ */
+function createTlsServer(tls: TlsConfig, handler: http.RequestListener): https.Server {
+  const requirePeer = tls.trustPeerByFingerprint;
+  const server = https.createServer(
+    {
+      cert: readFileSync(tls.certFile),
+      key: readFileSync(tls.keyFile),
+      // 自签证书链校验必失败，信任完全由指纹承担（对齐 Go 的 InsecureSkipVerify + 指纹固定）。
+      ...(requirePeer ? { requestCert: true, rejectUnauthorized: false } : {}),
+      // 对齐 ServerTLSConfig 的 MinVersion: tls.VersionTLS12（恒设）。
+      minVersion: "TLSv1.2",
+    },
+    handler,
+  );
+  if (requirePeer) {
+    // 唯一的 fail-closed 点：rejectUnauthorized:false 下「不带证书」的握手会成功，
+    // 故握手完成即刻校验对端 DER 指纹，失败即 destroy（对齐 Go 握手期拒绝）。
+    server.on("secureConnection", (socket) => {
+      const raw = socket.getPeerCertificate(false).raw;
+      if (verifyPeerFingerprint(raw, tls.peerFingerprints) !== null) {
+        socket.destroy();
+      }
+    });
+  }
+  return server;
+}
+
 export function createHttpServerAdapter(): HttpServerAdapter {
   const router = createRouter();
 
@@ -237,15 +269,8 @@ export function createHttpServerAdapter(): HttpServerAdapter {
         })();
       };
 
-      const server = opts.tls
-        ? https.createServer(
-            {
-              cert: readFileSync(opts.tls.certFile),
-              key: readFileSync(opts.tls.keyFile),
-            },
-            handler,
-          )
-        : http.createServer(handler);
+      const server: http.Server | https.Server =
+        opts.tls === undefined ? http.createServer(handler) : createTlsServer(opts.tls, handler);
 
       await new Promise<void>((resolve, reject) => {
         const onError = (err: Error): void => reject(err);

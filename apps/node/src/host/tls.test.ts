@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createHash, X509Certificate } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTlsCertCommand } from "../cli/tls-cert";
-import { createTlsAdapter, generateSelfSigned, isTlsOff, needsTlsIdentity } from "./tls";
+import { createTlsAdapter, generateSelfSigned, isTlsOff, needsTlsIdentity, verifyPeerFingerprint } from "./tls";
 
 const BASED_EXE = fileURLToPath(new URL("../../../../based.exe", import.meta.url));
 
@@ -53,6 +53,27 @@ describe("verifyPeer：指纹固定 fail-closed", () => {
     } catch (err) {
       expect((err as Error & { code: string }).code).toBe("tls_fingerprint_mismatch");
     }
+  });
+});
+
+describe("verifyPeerFingerprint：单一实现三格（计划 #77 T2）", () => {
+  const der = new Uint8Array([9, 8, 7]);
+  const hex = createHash("sha256").update(der).digest("hex");
+
+  it("空 raw（未提供证书）⇒ 报错，绝不放过", () => {
+    const missing = verifyPeerFingerprint(undefined, [hex]);
+    expect(missing).not.toBeNull();
+    expect(missing?.message).toMatch(/对端未提供证书/);
+    expect(verifyPeerFingerprint(new Uint8Array(0), [hex])).not.toBeNull();
+  });
+
+  it("指纹不在白名单 ⇒ 报错", () => {
+    expect(verifyPeerFingerprint(der, ["00".repeat(32)])?.message).toMatch(/不在白名单/);
+  });
+
+  it("命中白名单 ⇒ null（大小写与空白不影响判定）", () => {
+    expect(verifyPeerFingerprint(der, [hex])).toBeNull();
+    expect(verifyPeerFingerprint(der, [`  ${hex.toUpperCase()}  `])).toBeNull();
   });
 });
 
