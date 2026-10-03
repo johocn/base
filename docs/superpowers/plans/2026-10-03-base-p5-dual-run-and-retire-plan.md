@@ -2,7 +2,7 @@
 
 - 日期：2026-10-03
 - 上游：总纲 `#69`（§0.13 迁移节奏 = 并行双跑 → 行为等价后 Go 节点退役）；路线计划 `#70`（§1 P5 行、§6 六条等价判据、§8 风险）；P4 设计册 `#74`（**2026-10-03 已定稿，P5 开工闸门已解除**）；P3 各批 = 计划 `#75`（批 A–G 已全收口，判据 2–7 均已各自对拍过）
-- 状态：**执行中**（P5-1 / P5-2 / P5-3 已收口；**P5-4 阻塞待确认**：线上服务器无 Node 运行时）
+- 状态：**执行中**（P5-1 / P5-2 / P5-3 / P5-4 已收口；P5-5 起待执行，**含 1 项待定案**：门户模板路径 vs 产物布局）
 - 性质：任务级计划，**不承载契约**。契约一律回册子。
 
 ## 0. 一句话
@@ -66,6 +66,7 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 
 - 拓扑：**独立端口**（严格避开 443 / 8081 / 8082 / 8083）+ **独立 data 目录** + 该目录内容 = **Go data 目录的只读快照副本**（定案 2：Go 权威写、Node 只读影子）。
 - 副本制作方式：用 `VACUUM INTO` 产快照（P3 已实测可用）——Node 侧驱动打不开 WAL，直接拷目录会读到不一致状态。
+  **（实况修正）**：线上 `sqlite3` 为 3.26.0、**无 `VACUUM INTO`**（3.27 才引入），改用 `.backup` 点命令（在线备份 API，同为一致快照），见 §8。
 - 单元文件沿用 [install.sh](file:///e:/code/base/scripts/install.sh#L129-L132) 的 `EnvironmentFile` + `ExecStart` 体例；**绝不复用 `base.service` / `base-cache.service` 的单元名与端口**。
 - 观测项：Node `/healthz`、公开读面与线上 Go 逐条字节比对、`journalctl` 有无错误、常驻内存（wasm 驱动的内存占用要实测）。
 - 结束动作：停并删除临时单元、清理独立 data 目录；**线上 Go 生产实例全程不受影响**（这是本 Task 的门禁条件）。
@@ -116,7 +117,8 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 | 4 | Node 直读 Go data 目录读到 WAL 不一致状态 | 用 `VACUUM INTO` 产快照副本（P3 已实测可用），不做目录直拷 |
 | 5 | 双跑实例占资源 / 端口冲突 / 单元名撞车 | 独立端口 + 独立目录 + 独立单元名 + **一次性运行结束即清理** |
 | 6 | 退役后才发现某判据不过 | 定案 4「保留代码、停止部署」本身就是回退路径；`ExecStart` 切回 `based` 一次 restart 即恢复 |
-| 7 | **（P5-4 实测新发现）线上服务器无 Node 运行时** | 取得方式需用户定夺后再动（隔离目录放 Node 最轻，回退 = `rm -rf`）；未定夺前 P5-4 / P5-5 挂起 |
+| 7 | （P5-4 实测新发现）线上服务器无 Node 运行时 | **已解**：官方 `node-v20.20.2-linux-x64.tar.xz` 解到隔离目录 `/opt/base-node`（不动系统目录、不装包管理器；卸载 = `rm -rf`） |
+| 8 | （P5-4 实测新发现）门户模板路径 `TPL_DIR` 按**源码层级**算，产物落到 `apps/node/dist` 后少一层 → 门户三页 500 | **P5-5 待定案**：① 部署布局对齐（不改代码，路径须满足「产物目录下 4 层 = 含 `web/` 的根」）／ ② Node 侧加 `BASE_WEB_DIR` 环境变量覆盖（改 `portal.ts` 一行，需重跑 G2/G3）。**未定案前不得执行退役** |
 
 ## 7. 不做
 
@@ -211,25 +213,42 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
   线上 `/v1/pubkey` 返回 404（只读分发节点无签名密钥），本地两侧已按同口径对齐。
 - **注**：线上无 SSH 部署信息（仓库 `scripts/install.sh` 仅客户端脚本），P5-4 的服务器访问可用性待确认。
 
-### Task P5-4　服务器短时并存 —— **阻塞待确认（环境前置未满足）**
+### Task P5-4　服务器短时并存 —— **已收口（G6 过）**
 
-- **SSH 可用**：`ssh me` = `118.190.217.242`（root；仓库既有登记见 `#70` 相关计划）。已实测联通并采集下列事实。
-- **硬阻塞**：**服务器无任何 Node 运行时** —— `node: command not found`，无 nvm、无 docker。
-  本册 §2 只解决了**本机**「打包后能不能跑」，未覆盖「服务器上有没有运行时」；
-  P5-4（起 Node 影子实例）与 P5-5（`ExecStart` 切 `node dist/based-node.mjs`）均依赖它。
-  **取得方式待用户定夺**（隔离目录放官方 tar.xz / 打自包含可执行文件 / 系统包管理器），
-  因涉及对生产主机写操作，按「影响面出界先停」约定挂起。
-- **服务器事实（已采集，供恢复时直接用）**：
-  - 系统 `Alibaba Cloud Linux 3.2104`（OpenAnolis）/ `x86_64` / `/` 40G（可用 32G）。
-  - 端口占用：`443`(based 源，客户端 TLS) / `8081`(based 源，对端) / `8082`(based 缓存，对端) /
-    `8083`(based 缓存，客户端) / `80`(nginx) / `8080`(python3) / `22`(sshd)
-    ⇒ **P5-4 可用空闲端口：8084 / 8085 / 8090**。
-  - nginx `:80` 反代到 `127.0.0.1:8083`（= `base-cache`）⇒ **公网读面的真实上游是缓存节点**。
-  - 两个单元的 `ExecStart` 都指向 `/opt/base/based`（**共用同一二进制**）；环境文件
-    `/opt/base/base.env` + `/opt/base/base.secret.env`、`/opt/base-cache/base.env`。
-- **快照源定案（用户已确认）**：`/opt/base-cache/data`（nginx 上游 = 公网读面真实来源），
-  `VACUUM INTO` 只读快照；**不选** `/opt/base/data`（源节点，不直接对外服务）。
-- **未执行任何写操作**：本轮只做 `ssh` 只读勘察（`systemctl cat` / `ss` / `ls` / `cat env`），
-  未装运行时、未起实例、未碰 `base.service` / `base-cache.service`。
+- **拓扑**：线上服务器起 Node 实例与 Go 生产实例**短时并存**，结束即清理。
+  - 运行时：官方 `node-v20.20.2-linux-x64.tar.xz` → **隔离目录 `/opt/base-node`**（服务器原本无 node/npm/nvm/docker；不动系统目录）。
+  - 端口：影子 `127.0.0.1:8090`（避开 443/8081/8082/8083/80/8080）；独立 data 目录 `/opt/base-node-shadow/data`。
+  - 单元：**瞬态单元** `base-node-shadow`（`systemd-run --unit=... --collect`，即「独立单元名 + 停止即自动清理」）。
+  - 只读影子：**不配 `BASE_PEERS` / `-peer-addr`** ⇒ 不起对端监听、不启反熵/scrub、不接任何写（定案 2）。
+- **快照**：源 = `/opt/base-cache/data`（nginx `:80` 上游 = 公网读面真实来源）。
+  服务器 `sqlite3` 仅 **3.26.0**、**不支持 `VACUUM INTO`**（3.27 才引入）⇒ 改用 `.backup` 点命令（SQLite 在线备份 API，同为一致快照），已产无 `-wal`/`-shm` 兄弟文件的主库。
+  文件件 `blobs/` `packs/` `release.json` 用 `cp -a`；并把 `packs.dir` 改指影子路径（自包含，不读生产文件）。
+- **对拍口径**：`127.0.0.1:8083`（Go 生产缓存节点）↔ `127.0.0.1:8090`（Node 影子）**都是源站**（不经过 nginx）
+  ⇒ 可比**完整头集**（剔除 hop-by-hop / 框架头：`Date`/`Connection`/`Keep-Alive`/`Transfer-Encoding`/`Content-Length`）+ status + **body 字节**。
+- **G6 判定：过 —— 22 条令牌，19 条直接 MATCH，余 3 条门户页归一化后 MATCH**：
+
+  | 类别 | 条数 | 结果 |
+  |---|---|---|
+  | 公开读 JSON 面（healthz/release/pubkey/catalog×4/directory×3/contributors/manifest×3/pack/identity/blob/unknown-route） | 19 | **MATCH**（status + 应用头排序后 + body 字节全等） |
+  | 门户 HTML 页（`/`、`/governance`、`/a/{item}`） | 3 | 应用头 MATCH；body 归一化（剔除节点私有身份行）后 **MATCH**，页脚 issuer 逐字相同 |
+
+- **P5-1 未覆盖缺口（本 Task 暴露，须 P5-5 定案）**：门户模板 `TPL_DIR = new URL("../../../../web/templates/", import.meta.url)`
+  按**源码层级**（`apps/node/src/routes/`）计算；打包到 `apps/node/dist/based-node.mjs` 后**少一层** ⇒ 解析成 `/web/templates/base.html` ⇒ 门户三页 **500**。
+  P5-1 探针只验了 `version`/`/healthz`/`/v1/catalog`，未覆盖门户页，故当时未暴露。
+  本次以**布局对齐**取证（产物放到「下 4 层即含 `web/` 的根」处 + 补齐 `web/templates/`）⇒ 门户三页回到 200 且逐字节一致。**代码未改**。
+- **两个部署前置（本次实测）**：
+  1. **store 密钥**：密钥是 **data 目录的兄弟文件** `<data>.key`（`serve.ts:99` → `loadStoreKey(dataDir)`）。
+     影子初始缺失 ⇒ Node **自造了一把新钥**，解不开生产密文 ⇒ `/v1/contributors` 与门户页 **500**（`aes/gcm: invalid ghash tag`）。
+     处置：`BASE_STORE_KEY_FILE=/opt/base-cache/data.key`（**指向生产密钥，不复制密件**），并删掉自造的 `data.key`。
+  2. **`node-sqlite3-wasm`**：打包列为 external ⇒ 部署目录需带该包（`node_modules/node-sqlite3-wasm`，含 `.wasm`），否则驱动加载失败。
+- **节点私有身份的边界（与 P5-3 S 组同口径）**：Go 门户页第 44 行渲染 `配对码 + TLS 指纹`，影子为空（只读影子未加载 TLS 身份）。
+  **证据**：生产证书 `data/tls/node.crt` 的 SHA256 指纹 = `96de4640…745e`，与 Go 页面显示的指纹**逐字相同**
+  ⇒ 该身份块派生自 TLS 证书（影子未配 peer 监听故未加载），属**配置差异、非实现缺口**；归一化剔除该行后 body 逐字节一致。
+- **观测**：影子常驻内存 **RSS ≈ 119 MB**；`journalctl -u base-node-shadow -p warning` **无条目**；`listening 127.0.0.1:8090`。
+- **门禁条件（线上 Go 生产实例全程零影响）**：并存期间 `base` / `base-cache` 均 **active**；
+  公网 `http://118.190.217.242/` 与 `/v1/release`、`/v1/catalog` 均 **200**；未触碰任何生产单元与文件。
+- **清理**：单元已停且消失（瞬态 + `--collect`）、`/opt/base-node-shadow` 已 `rm -rf`、端口 8090 已释放；
+  **保留** `/opt/base-node`（运行时，167 MB，供 P5-5 退役使用）。
+- **工装**（`.tmp/g4/`，不入版本控制）：`p54_snapshot.sh`（快照）、`p54_compare.sh`（22 条逐条对拍）、`p54_compare_html.sh`（门户页归一化对拍）。
 
 ### Task P5-5 ~ P5-6
