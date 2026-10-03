@@ -120,7 +120,7 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 
 1. 出站指纹校验在 `rejectUnauthorized:false` 下 `checkServerIdentity` **不生效**，唯一校验点是**响应后**对
    `res.socket.getPeerCertificate().raw` 的复核 ⇒ 依赖「每次连接都传证书」；**GAP-C 已通过禁用 TLS 会话复用保证**。
-2. **GAP-B（登记未修）**：身份加载判定与 Go 不一致（详见 §8），现有两单元均配 `-peer-addr` 故不受影响。
+2. **GAP-B → 已修（= #77）**：身份加载判定与 Go 不一致，另挖出主监听从不 TLS / 对端监听不校验证书两处，已由 `#77`「节点 TLS 身份面收敛」三层全修并线上复验（详见 §8）。
 
 ## 6. 风险与回退
 
@@ -315,11 +315,10 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
   - 修复：`tlsTransport` 改用自带 `new https.Agent({ keepAlive: true, maxCachedSessions: 0 })`（对齐 Go 语义：每次全握手、证书必在）。
   - 复验：重打包上线后连续 **11 轮**（180 s，间隔 15 s）**0 次**「对端未提供证书」、**0 次**「本轮失败」（修复前约半数轮次失败）。
 
-- **GAP-B（身份加载判定与 Go 不一致）—— 登记，未修**
-  - Go（`serve.go:61-76`）加载身份 ⟺ `tls-cert ≠ off` **或** `-peer-addr` 非空；Node（`main.ts:91-94`）⟺ `-peer-addr` 非空 **或** `-peers` 非空。
-  - 两处可复现分歧：① `tls-cert≠off` 且无 `-peer-addr`/`-peers` → Go 加载、Node 不加载（Node 主监听将丢失 TLS 身份）；
-    ② `-peers` 非空但无 `-peer-addr` 且 `tls-cert=off` → Node 加载、Go 不加载（仅门户页身份行可见性差异）。
-  - **现有两单元均配 `-peer-addr`，不受影响**；本阶段不修（改判定会牵动 GAP-A 修复的边界）。
+- **GAP-B（身份加载判定与 Go 不一致）—— 已修（= #77）**
+  - 当时取证：Go（`serve.go:61-76`）加载身份 ⟺ `tls-cert ≠ off` **或** `-peer-addr` 非空；Node（`main.ts:91-94`）⟺ `-peer-addr` 非空 **或** `-peers` 非空。两处分歧：① `tls-cert≠off` 且无 `-peer-addr`/`-peers` → Go 加载、Node 不加载（Node 主监听将丢失 TLS 身份）；② `-peers` 非空但无 `-peer-addr` 且 `tls-cert=off` → Node 加载、Go 不加载。
+  - **`#77` 处置（2026-10-03，已收口）**：三层全修 —— **B-① 加载判定**改三因子并集（`!isTlsOff(tlsCert) || peerAddr !== "" || peerCount > 0`，超集语义，**不复制** Go 漏判 `-peers` 的缺陷；分歧 ② 一格 Node 加载为**刻意**）、**B-② 主监听 TLS 接线**（`tls-cert` 非 `off` 时传 `opts.tls = serverConfig(info, [])`，分歧 ① 已消）、**B-③ 对端监听 mTLS 指纹固定**（`requestCert:true` + `secureConnection` 钩子 fail-closed）。
+  - 复验：本机 G 向三格（`openssl s_client`）+ B-① 五格矩阵；线上 `base-cache` 部署后三格 fail-closed 成立（无证书拒绝 / `base` 证书通过 / 自身证书拒绝）、`base`（Go）反熵零失败。详见 `#77` 册 §7。
 
 - **工装**（`.tmp/g4/`，不入版本控制；服务器 `/root/`）：`p55_setup.sh`（快照 + 证书 + 环境 + 起双影子）、
   `p55_verify.sh`（五段验证）、`p55_tlsprobe.mjs`（只读取证探针）、`p55_c_verify.sh`（GAP-C 复验）。

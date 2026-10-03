@@ -2,7 +2,7 @@
 
 - 日期：2026-10-03
 - 上游：P5 计划 `#76`（§5 残留风险 2 = **GAP-B 登记未修**；§8 GAP-B 段）；路线计划 `#70`（§6 判据 2 / 判据 4）；Go 参照实现 = `cmd/based/serve.go:61-76`、`cmd/based/peerconfig.go:61-92`、`internal/httpapi/tlscfg.go:151-199`
-- 状态：**已出，待执行**
+- 状态：**已收口**（2026-10-03：T1–T6 全过、G1–G7 逐条通过；线上 `base-cache` 已部署新 bundle 并复验三格 fail-closed 成立、Go 反熵零失败；Go 零改动、`base` 单元未退役、客户端零改动）
 - 性质：任务级计划，**不承载契约**。契约一律回册子。
 
 ## 0. 一句话
@@ -132,4 +132,91 @@ P5 把节点从 Go 切到了 Node，等价判据是按**当时真实存在的配
 
 ## 7. 执行实况
 
-（待执行后回填：T1–T6 逐项证据、G1–G7 判定、超集格与 Go 缺失判据的对照、服务器复验输出、回退备份路径。）
+### Task T1　身份加载判定 + 主监听 TLS 接线（B-① + B-②）—— **已收口**
+
+- 落点：[tls.ts](file:///e:/code/base/apps/node/src/host/tls.ts) 新增 `isTlsOff(raw)` / `needsTlsIdentity(tlsCertRaw, peerAddr, peerCount)`
+  （三因子并集）；[main.ts](file:///e:/code/base/apps/node/src/main.ts) 改用它做加载判定，`resolveTlsMaterial` 改调 `isTlsOff`，
+  并在 `!off` 时写入 `opts.tls = adapters.tls.serverConfig(info, [])`（**空白名单 = 不要求客户端证书**，对齐 `ServerTLSConfig(info, nil)`）。
+- **首步探针（硬门）四项全过**：① `BASE_TLS_CERT=<路径>` 起单实例 ⇒ `curl -k https://127.0.0.1:<port>/healthz` = **200**；
+  ② 同端口 `curl http://…` = **000（失败）**；③ `based-node.mjs tls-cert` 的指纹/配对码与进程内一致
+  （配对码 `KJVX-VMAC-6IMB-HXEP`、指纹 `526b7ab0…0fd97`）；④ 门户 `GET /` 身份行非空（GAP-A 不回退）。
+- **反格**：`off` 且无 peer/peers ⇒ `http://…/healthz` = **200**、`https://…` 拒绝（对齐 Go 不加载）。
+- 提交：`c0d4040`（已 push）。
+
+### Task T2　对端监听双向 TLS 指纹固定（B-③）—— **已收口**
+
+- 落点：`verifyPeerFingerprint(raw, allowed)` 抽为 [tls.ts](file:///e:/code/base/apps/node/src/host/tls.ts) 的导出**单一实现**，
+  [tls.ts](file:///e:/code/base/apps/node/src/host/tls.ts) 的 `TlsAdapter.verifyPeer` 改调它（对外形态不变）；
+  [http.ts](file:///e:/code/base/apps/node/src/host/http.ts) 新增 `createTlsServer`：`trustPeerByFingerprint` 为真时
+  以 `requestCert:true` + `rejectUnauthorized:false` + `minVersion:"TLSv1.2"` 建 https，并挂
+  `server.on("secureConnection", …)` **握手完成即校验** `socket.getPeerCertificate(false).raw`，失败 `socket.destroy()`；
+  为假（空白名单）时**不设** `requestCert`。`peersync/peer.ts` **零改动**（GAP-C 修复未扰）。
+- **单测**：`tls.test.ts` 增 `verifyPeerFingerprint` 三格（空 raw / 错指纹 / 白名单命中）；
+  `http.test.ts` 增 `listen` 决策四格（白名单命中 200 / 无证书拒绝 / 错指纹拒绝 / 空白名单 200）。
+- 提交：`81d30ef`（已 push）——4 files changed，215 insertions(+)，21 deletions(-)。
+
+### Task T3　本机双影子对练（G 向补验）—— **已收口（G 向 3/4 直证 + F 向由替代证据覆盖）**
+
+- **G 向（本册主目标）**：`openssl s_client` 与 Go 影子（`-peers` 指向 Node 对端口）各取一遍，`peersync` 日志
+  `peer=https://127.0.0.1:18201 … equal=true` ⇒ **Go 作出站客户端连 Node 对端口通过**。
+- **F 向（Node→Go）**：**本机 blocked（环境，非产品）**——本机安全软件静默丢弃 `based.exe` 的入站连接（含环回）：
+  `based.exe` 确在 `LISTENING`（netstat + stderr `监听 127.0.0.1:18290（**明文 HTTP**…）`），但 `TcpClient.Connect` 超时、
+  `curl` = 000、netstat 见 `SYN_SENT`。**替代证据三件**：① `git diff --name-only c0d4040 81d30ef` 无 `peersync/peer.ts`（出站一字未改）；
+  ② F′（Node→Node 出站）通过；③ **T5 线上真实 F 向**（见下，Go 侧反熵成功）。
+- **B-② 取证**：Node 影子以 `BASE_TLS_CERT=<路径>` 起主监听，T1 探针四项**全过**。
+- **B-① 五格判定矩阵**（Node / Go 各跑一次，逐格对照「是否加载身份」）：
+
+  | 格 | `tls-cert` | `-peer-addr` | `-peers` | Node | Go | 判定 |
+  |---|---|---|---|---|---|---|
+  | G1 | off | 无 | 无 | 不加载 | 不加载 | **一致** |
+  | G2 | off | 无 | **有** | **加载** | 不加载 | **超集格（定案 2）**：Node 加载为**刻意**，不复制 Go 漏判 `-peers` 的缺陷 |
+  | G3 | off | 有 | 有 | 加载 | 加载 | **一致** |
+  | G4 | 非 off | 无 | 无 | 加载 | 加载 | **一致**（B-① 第 ① 处不等价已消） |
+  | G5 | 非 off | 无 | 有 | 加载 | 加载 | **一致** |
+
+### Task T4　门禁 + 全量对拍回归 —— **已收口**
+
+- **G1**：`go build ./... && go vet ./... && go test ./...` 全 0；`git diff --stat -- internal/` **无输出**
+  （另行逐行核过 `internal/httpapi/web.go` 的 ` M` 在 numstat / diff 中**无内容行**，纯 CRLF 假阳性）。
+- **G2**：`npx tsc --noEmit` **0 错误**。
+- **G3**：`npx vitest run` **563 passed / 49 files**（基线 556 ⇒ **只增不减**）。
+  （首次与后台 `go test -count=1` 并行跑时 3 个 based.exe 子进程类用例假失败，清空后台后单独重跑该 3 文件 37 passed、全量重跑 563/563 全绿。）
+- **G7（全量对拍）**：HTTP 分歧 **0 条 / 210 令牌**（批 B 40 + C 63 + D 43 + G 25 + EB 39）；
+  DB 快照对称差 **0 行**（批 C 141 / 批 D 27 / 批 G 3 / EB 13）。
+  入口：`npx vitest run --config .tmp/g4/vitest.g4.config.ts` → `go run .tmp/g4/<batch>goprobe/main.go` → `node .tmp/g4/<batch>compare.mjs`。
+
+### Task T5　部署 + 线上复验 —— **已收口**
+
+- **产物**：本机 `apps/node/dist/based-node.mjs` sha256 `08d6319a64726771eb157bf13b1835691f1a66ca686b21bf0b4788501c82f76c`，size `513311`；
+  远端旧 bundle（P5 版）`e51e207cb91ffec4137e3be07693c429cd37ea1402c74efb86b1ed14f6faf666`，size `512113`。
+- **部署**：`scp` → 远端校验 hash 一致 ⇒ `mv -f`（旧件先留 `.prev`）⇒ `systemctl restart base-cache`；
+  结果 `base=active`、`base-cache=active`；监听 `127.0.0.1:8082` + `127.0.0.1:8083`（node pid 253834）、`*:8081`（based pid 242797）。
+- **端点全 200**（直连 `8083` 与 nginx `:80` 的 `/healthz` / `/` / `/v1/catalog` / `/v1/release`）。
+- **G6 线上三格 fail-closed**（`openssl s_client -connect 127.0.0.1:8082`）：
+  **无证书 → REJECTED**、**带 `base` 单元证书 → ACCEPTED**、**带 `base-cache` 自身证书 → REJECTED**。
+- **反熵（风险 4 证伪）**：base-cache 重启后 `peer=https://127.0.0.1:8081 … 本轮耗时 112ms`；
+  **`base`（Go）于 12:12:27 成功 `peer=https://127.0.0.1:8082 …`** ⇒ 「对端口改要求客户端证书会挡掉 Go」**不成立**；
+  日志 `对端未提供证书=0`、`本轮失败=0`。
+- **指纹台账**：base-cache 自身 `96de46405be76287c0f89c59a09905507ead8c789e2ef0260e0c710ff1c1745e`
+  （pairing `S3PE-MQC3-45RI-PQHY`，`/opt/base-cache/data/tls/node.crt`）；base 自身
+  `d899ebcad9590e2d397537af388e44ee28ccbe1648e74e33451fdd3f2e0151f3`（`/opt/base/data/tls/node.crt`）。
+  两侧白名单互为对方：base-cache 的 `BASE_PEERS` = `d899ebca…`；base 的 `-peers` = `96de4640…`。
+- **回退路径**：`cp` 回 `/opt/base-node/based-node.mjs.bak-20261003-1210`（另有 `.prev`）+ 一次 `systemctl restart base-cache`。
+- 零生产写：未动 `base.service`（仍 Go）、未动 nginx、未动客户端任何指向。
+
+### Task T6　回填 + 提交 —— **已收口**
+
+- 回填本册 §7；`docs/README.md` 第 103 行 `#77` 状态列 + §5 条目改「已收口」并补证据；把 `#76` 册 §5 残留风险 2 / §8 GAP-B 措辞改为**「已修（= #77）」**。
+- 只 add 本册相关文件（**未** add `.tmp/`、`based-linux-amd64`、`.gitignore`、`internal/httpapi/web.go`）。
+
+### 门禁判定汇总
+
+| # | 门禁 | 判定 | 证据 |
+|---|---|---|---|
+| G1 | Go 侧全绿且零改动 | **过** | T4：全 0 且 `git diff --stat -- internal/` 无输出 |
+| G2 | TS 类型 | **过** | T4：`tsc --noEmit` 0 错 |
+| G3 | 单测只增不减 | **过** | T4：563 / 49 files（基线 556） |
+| G4 | B-① 判定矩阵全过 | **过** | T3 五格表；G2 格标注定案 2 |
+| G5 | B-② 主监听 TLS | **过** | T1 探针四项；T5 线上复验 |
+| G6 | B-③ 对端 mTLS 拒绝 | **过** | T2 本机三格（openssl）；T5 线上三格 fail-closed 成立 |
+| G7 | 回归 + 仓库纪律 | **过** | HTTP 0/210 令牌、DB 对称差 0 行；仅 add 本册文件 |
