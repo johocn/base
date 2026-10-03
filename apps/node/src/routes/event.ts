@@ -12,6 +12,7 @@ import { type IpLimiter, isHexN, onlyKeys, parseGoInt64, toStr } from "./derived
 import { dmEventHandler } from "./dm";
 import { governEventHandler } from "./governEvent";
 import { groupEventHandler } from "./groupEvent";
+import { circleEventHandler } from "./circleEvent";
 import { jsonResponse } from "./json";
 import { progressEventHandler } from "./progress";
 
@@ -26,10 +27,11 @@ const MAX_COMMENT_BYTES = 8192;
 
 // eventTypeRegistry（event.go:25-31）：节点放行的事件类型表，5 条全抄。
 export const EVENT_TYPES: ReadonlySet<string> = new Set([
+  "circle.v1",
   "comment.v1",
-  "group.v1",
   "dm.v1",
   "govern.v1",
+  "group.v1",
   "progress.v1",
 ]);
 
@@ -283,6 +285,8 @@ export function eventPostHandler(deps: EventDeps): AuthedHandler {
         return progressEventHandler(deps, actor, env, createdAt);
       case "govern.v1":
         return governEventHandler(deps, actor, env, createdAt);
+      case "circle.v1":
+        return circleEventHandler(deps, actor, env, createdAt);
     }
     return putBareEvent(deps, actor, env, createdAt);
   };
