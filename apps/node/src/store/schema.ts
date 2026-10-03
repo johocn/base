@@ -157,7 +157,8 @@ export const schemaStatements: string[] = [
 \t\tmember_ids_json  TEXT NOT NULL,
 \t\tkey_envelopes    TEXT NOT NULL DEFAULT '[]',
 \t\tevent_id         TEXT NOT NULL,
-\t\tupdated_at       INTEGER NOT NULL
+\t\tupdated_at       INTEGER NOT NULL,
+\t\torigin           TEXT NOT NULL DEFAULT 'user'
 \t)`,
 
   `CREATE TABLE IF NOT EXISTS govern_proposals(
@@ -232,6 +233,17 @@ export const schemaStatements: string[] = [
 \t\tPRIMARY KEY(kind, term_key)
 \t)`,
   `CREATE INDEX IF NOT EXISTS idx_directory_terms_state ON directory_terms(kind, state)`,
+
+  // circle_assignments：圆圈归属声明（融合治理册 §2.2）。**节点侧独立数据面**——
+  // 不新增 items 行、不进 segments、不进内容包。主键 (item_id, circle_id)，**只插不删**（无删除路径）。
+  // 新表（无存量列演进问题），故直接进 schemaStatements，不入 ColumnMigrations。
+  `CREATE TABLE IF NOT EXISTS circle_assignments(
+\t\titem_id    TEXT    NOT NULL,
+\t\tcircle_id  TEXT    NOT NULL,
+\t\torigin     TEXT    NOT NULL DEFAULT 'fusion', -- fusion | user
+\t\tcreated_at INTEGER NOT NULL,
+\t\tPRIMARY KEY(item_id, circle_id)
+\t)`,
 ];
 
 // events 表的后加列（B 阶段引入）。
@@ -252,6 +264,7 @@ export const groupColumnMigrations: { column: string; ddl: string }[] = [
   { column: "roster_rev", ddl: `ALTER TABLE groups ADD COLUMN roster_rev INTEGER NOT NULL DEFAULT 0` },
   { column: "encrypted", ddl: `ALTER TABLE groups ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 1` },
   { column: "key_envelopes", ddl: `ALTER TABLE groups ADD COLUMN key_envelopes TEXT NOT NULL DEFAULT '[]'` },
+  { column: "origin", ddl: `ALTER TABLE groups ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'` },
 ];
 
 // govern_* 两表的后加列（#33 册子 §4.4）。

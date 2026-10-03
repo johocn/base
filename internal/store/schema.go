@@ -175,7 +175,8 @@ var schemaStatements = []string{
 		member_ids_json  TEXT NOT NULL,
 		key_envelopes    TEXT NOT NULL DEFAULT '[]',
 		event_id         TEXT NOT NULL,
-		updated_at       INTEGER NOT NULL
+		updated_at       INTEGER NOT NULL,
+		origin           TEXT NOT NULL DEFAULT 'user'
 	)`,
 
 	// govern_proposals / govern_votes：审批治理的提案与票（第 3 册 §5.1）。
@@ -266,6 +267,17 @@ var schemaStatements = []string{
 		PRIMARY KEY(kind, term_key)
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_directory_terms_state ON directory_terms(kind, state)`,
+
+	// circle_assignments：圆圈归属声明（融合治理册 §2.2）。**节点侧独立数据面**——
+	// 不新增 items 行、不进 segments、不进内容包。主键 (item_id, circle_id)，**只插不删**（无删除路径）。
+	// 新表（无存量列演进问题），故直接进 schemaStatements，不入 ColumnMigrations。
+	`CREATE TABLE IF NOT EXISTS circle_assignments(
+		item_id    TEXT    NOT NULL,
+		circle_id  TEXT    NOT NULL,
+		origin     TEXT    NOT NULL DEFAULT 'fusion', -- fusion | user
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY(item_id, circle_id)
+	)`,
 }
 
 // eventColumnMigrations 是 events 表的**后加列**（B 阶段引入）。
@@ -291,6 +303,7 @@ var groupColumnMigrations = []struct{ column, ddl string }{
 	{"roster_rev", `ALTER TABLE groups ADD COLUMN roster_rev INTEGER NOT NULL DEFAULT 0`},
 	{"encrypted", `ALTER TABLE groups ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 1`},
 	{"key_envelopes", `ALTER TABLE groups ADD COLUMN key_envelopes TEXT NOT NULL DEFAULT '[]'`},
+	{"origin", `ALTER TABLE groups ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'`},
 }
 
 // governColumnMigrations 是 govern_* 两表的**后加列**（#33 册子 §4.4）。
