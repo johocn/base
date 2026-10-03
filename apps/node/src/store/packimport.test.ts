@@ -262,3 +262,99 @@ describe("importPack 错误路径", () => {
     expect(db.get(`SELECT value FROM meta WHERE key='content_version'`)).toBeUndefined();
   });
 });
+
+describe("importPack 融合钩子（轨道 B）", () => {
+  it("有 authorId 的条目 → groups + circle_assignments 都写入，creator_id=authorId，origin=fusion", () => {
+    const { db, dir } = newEnv();
+    const authorId = "f78672b2f87ff80b248323a4be7c3da6";
+    const itemId = "art/fusion";
+    const body = "融合正文";
+
+    importPack(
+      db,
+      dir,
+      KEY,
+      1,
+      [
+        entry({
+          itemId,
+          sqliteTable: "articles",
+          title: "融合文",
+          bodyMd: body,
+          authorId,
+          contentHash: sha256Hex(Buffer.from(body)),
+        }),
+      ],
+      [],
+    );
+
+    const expectedCircleId = sha256Hex(utf8(itemId + ":circle")).slice(0, 16);
+
+    const group = db.get(`SELECT * FROM groups WHERE group_id=?`, [expectedCircleId]);
+    expect(group).toBeDefined();
+    expect(group?.creator_id).toBe(authorId);
+    expect(group?.epoch).toBe(1);
+    expect(group?.roster_rev).toBe(0);
+    expect(group?.encrypted).toBe(1);
+    expect(group?.event_id).toBe(expectedCircleId);
+    expect(group?.origin).toBe("fusion");
+    const memberList = JSON.parse(String(group?.member_ids_json ?? "[]")) as string[];
+    expect(memberList).toEqual([authorId]);
+
+    const ca = db.get(
+      `SELECT item_id,circle_id,origin FROM circle_assignments WHERE item_id=?`,
+      [itemId],
+    );
+    expect(ca).toBeDefined();
+    expect(ca?.item_id).toBe(itemId);
+    expect(ca?.circle_id).toBe(expectedCircleId);
+    expect(ca?.origin).toBe("fusion");
+  });
+
+  it("同条目重导入 → INSERT OR IGNORE 幂等，groups/circle_assignments 行数不增", () => {
+    const { db, dir } = newEnv();
+    const authorId = "f78672b2f87ff80b248323a4be7c3da6";
+    const e = entry({
+      itemId: "art/idem",
+      sqliteTable: "articles",
+      title: "幂等文",
+      bodyMd: "幂等",
+      authorId,
+      contentHash: sha256Hex(Buffer.from("幂等")),
+    });
+
+    importPack(db, dir, KEY, 1, [e], []);
+    const g1 = db.all(`SELECT 1 FROM groups`).length;
+    const ca1 = db.all(`SELECT 1 FROM circle_assignments`).length;
+    expect(g1).toBe(1);
+    expect(ca1).toBe(1);
+
+    importPack(db, dir, KEY, 2, [e], []);
+    const g2 = db.all(`SELECT 1 FROM groups`).length;
+    const ca2 = db.all(`SELECT 1 FROM circle_assignments`).length;
+    expect(g2).toBe(g1);
+    expect(ca2).toBe(ca1);
+  });
+
+  it("authorId 为空 → 不触发融合", () => {
+    const { db, dir } = newEnv();
+    importPack(
+      db,
+      dir,
+      KEY,
+      1,
+      [
+        entry({
+          itemId: "art/no-author",
+          sqliteTable: "articles",
+          title: "无归属",
+          bodyMd: "无归属",
+          // authorId 默认 ""
+        }),
+      ],
+      [],
+    );
+    expect(db.all(`SELECT 1 FROM groups`).length).toBe(0);
+    expect(db.all(`SELECT 1 FROM circle_assignments`).length).toBe(0);
+  });
+});

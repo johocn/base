@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -215,5 +216,161 @@ func TestImportPackStoresAuthorColumns(t *testing.T) {
 	}
 	if it3.AuthorID != "" || it3.AuthorSig != "" {
 		t.Fatalf("重导后归属应被覆盖为空: %+v", it3)
+	}
+}
+
+// 融合钩子（轨道 B）基础验证：entries 循环后 groups + circle_assignments 都有对应行，
+// creator_id 命中 author_id，origin=fusion，circle_id 由 item_id 稳定派生。
+func TestImportPackFusionHook(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	const authorID = "f78672b2f87ff80b248323a4be7c3da6"
+	const itemID = "article:fusion-test"
+	body := "融合正文"
+	hash := protocol.SHA256Hex([]byte(body))
+
+	if _, err := st.ImportPack(1, []PackEntry{{
+		ItemID: itemID, Source: "article", Type: "article", Title: "融合文",
+		ContentHash: hash, SQLiteTable: "articles", DistClass: "public", BodyMD: body,
+		AuthorID: authorID,
+	}}, nil); err != nil {
+		t.Fatalf("ImportPack: %v", err)
+	}
+
+	// 派生 circle_id 与生产代码同口径
+	expectedCircleID := protocol.SHA256Hex([]byte(itemID + ":circle"))[:16]
+
+	// groups 行：GetGroup 能取到
+	gr, ok, err := st.GetGroup(expectedCircleID)
+	if err != nil {
+		t.Fatalf("GetGroup: %v", err)
+	}
+	if !ok {
+		t.Fatalf("groups 表应有 group_id=%s", expectedCircleID)
+	}
+	if gr.CreatorID != authorID {
+		t.Fatalf("creator_id 应为 %s, got %s", authorID, gr.CreatorID)
+	}
+	if gr.EventID != expectedCircleID {
+		t.Fatalf("event_id 应等于 circle_id, got %s", gr.EventID)
+	}
+	if gr.Epoch != 1 || gr.RosterRev != 0 || gr.Encrypted != 1 {
+		t.Fatalf("groups 字段不对: %+v", gr)
+	}
+	// member_ids_json = [authorID]
+	var memberList []string
+	if err := json.Unmarshal([]byte(gr.MemberIDsJSON), &memberList); err != nil {
+		t.Fatalf("member_ids_json 解析失败: %v", err)
+	}
+	if len(memberList) != 1 || memberList[0] != authorID {
+		t.Fatalf("member_ids_json = %v, want [%s]", memberList, authorID)
+	}
+	// origin 列——GetGroup 不返回 origin，直接查
+	var origin string
+	if err := st.db.QueryRow(`SELECT origin FROM groups WHERE group_id=?`, expectedCircleID).Scan(&origin); err != nil {
+		t.Fatalf("查 origin: %v", err)
+	}
+	if origin != "fusion" {
+		t.Fatalf("groups.origin 应为 fusion, got %s", origin)
+	}
+
+	// circle_assignments 行
+	var caItem, caCircle, caOrigin string
+	if err := st.db.QueryRow(
+		`SELECT item_id,circle_id,origin FROM circle_assignments WHERE item_id=?`, itemID,
+	).Scan(&caItem, &caCircle, &caOrigin); err != nil {
+		t.Fatalf("circle_assignments 查询失败: %v", err)
+	}
+	if caItem != itemID || caCircle != expectedCircleID || caOrigin != "fusion" {
+		t.Fatalf("circle_assignments = (%s,%s,%s)", caItem, caCircle, caOrigin)
+	}
+}
+
+// 同一条目重复导入 → INSERT OR IGNORE 幂等，groups/circle_assignments 行数不增。
+func TestImportPackFusionHookIdempotent(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	const authorID = "f78672b2f87ff80b248323a4be7c3da6"
+	const itemID = "article:idem"
+	body := "幂等"
+	hash := protocol.SHA256Hex([]byte(body))
+	entries := []PackEntry{{
+		ItemID: itemID, Source: "article", Type: "article", Title: "幂等文",
+		ContentHash: hash, SQLiteTable: "articles", DistClass: "public", BodyMD: body,
+		AuthorID: authorID,
+	}}
+
+	if _, err := st.ImportPack(1, entries, nil); err != nil {
+		t.Fatalf("v1 ImportPack: %v", err)
+	}
+
+	countGroups := func() int {
+		var c int
+		if err := st.db.QueryRow(`SELECT COUNT(*) FROM groups`).Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	countCA := func() int {
+		var c int
+		if err := st.db.QueryRow(`SELECT COUNT(*) FROM circle_assignments`).Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	g1 := countGroups()
+	ca1 := countCA()
+	if g1 != 1 || ca1 != 1 {
+		t.Fatalf("首轮: groups=%d circle_assignments=%d, 都应为 1", g1, ca1)
+	}
+
+	// 同条目再导一次（同版本，触发 upsert items；融合钩子再跑一次但 INSERT OR IGNORE 跳过）
+	if _, err := st.ImportPack(2, entries, nil); err != nil {
+		t.Fatalf("v2 ImportPack: %v", err)
+	}
+	g2 := countGroups()
+	ca2 := countCA()
+	if g2 != g1 || ca2 != ca1 {
+		t.Fatalf("重复导入后: groups=%d(==%d?) circle_assignments=%d(==%d?)", g2, g1, ca2, ca1)
+	}
+}
+
+// AuthorID 为空的条目 → 不触发融合。
+func TestImportPackFusionHookNoAuthor(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	body := "无归属"
+	hash := protocol.SHA256Hex([]byte(body))
+
+	if _, err := st.ImportPack(1, []PackEntry{{
+		ItemID: "article:no-author", Source: "article", Type: "article", Title: "无归属",
+		ContentHash: hash, SQLiteTable: "articles", DistClass: "public", BodyMD: body,
+		// AuthorID 字段留空（零值）
+	}}, nil); err != nil {
+		t.Fatalf("ImportPack: %v", err)
+	}
+
+	var g int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM groups`).Scan(&g); err != nil {
+		t.Fatal(err)
+	}
+	var ca int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM circle_assignments`).Scan(&ca); err != nil {
+		t.Fatal(err)
+	}
+	if g != 0 || ca != 0 {
+		t.Fatalf("无 author_id 时不应触发融合: groups=%d circle_assignments=%d", g, ca)
 	}
 }

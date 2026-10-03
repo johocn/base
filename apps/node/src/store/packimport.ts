@@ -350,6 +350,42 @@ export function importPack(
         default:
           throw new Error(`store: 条目 ${e.itemId} 的 sqlite_table=${e.sqliteTable} 不支持入库`);
       }
+
+      // 融合治理册 §2.2 轨道 B：条目有 author_id 时，用稳定派生出的 circle_id
+      // 内联 INSERT OR IGNORE 写 groups 与 circle_assignments。
+      // 钩子永不返回 error：写失败只打 console.warn，不破坏导入事务。
+      if (e.authorId !== "") {
+        const nowMs = Date.now();
+        const circleID = sha256Hex(utf8(e.itemId + ":circle")).slice(0, 16);
+        try {
+          db.run(
+            `INSERT OR IGNORE INTO groups(group_id,creator_id,epoch,roster_rev,encrypted,member_ids_json,key_envelopes,event_id,updated_at,origin)
+\t\t\t\tVALUES(?,?,?,?,?,?,?,?,?,?)`,
+            [
+              circleID,
+              e.authorId,
+              1,
+              0,
+              1,
+              JSON.stringify([e.authorId]),
+              "[]",
+              circleID,
+              nowMs,
+              "fusion",
+            ],
+          );
+        } catch (err) {
+          console.warn(`store: 融合条目 ${e.itemId} 写 groups 失败: ${String(err)}`);
+        }
+        try {
+          db.run(
+            `INSERT OR IGNORE INTO circle_assignments(item_id,circle_id,origin,created_at) VALUES(?,?,?,?)`,
+            [e.itemId, circleID, "fusion", nowMs],
+          );
+        } catch (err) {
+          console.warn(`store: 融合条目 ${e.itemId} 写 circle_assignments 失败: ${String(err)}`);
+        }
+      }
       res.entries++;
     }
 

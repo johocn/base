@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/johocn/base/internal/protocol"
 )
@@ -180,6 +182,27 @@ func (s *Store) ImportPack(version int64, entries []PackEntry, tombstones []prot
 			}
 		default:
 			return res, fmt.Errorf("store: 条目 %s 的 sqlite_table=%s 不支持入库", e.ItemID, e.SQLiteTable)
+		}
+
+		// 融合治理册 §2.2 轨道 B：条目有 author_id 时，用稳定派生出的 circle_id
+		// 内联 INSERT OR IGNORE 写 groups 与 circle_assignments。
+		// 钩子永不返回 error：写失败只打日志，不破坏导入事务。
+		if e.AuthorID != "" {
+			nowMs := time.Now().UnixMilli()
+			circleID := protocol.SHA256Hex([]byte(e.ItemID + ":circle"))[:16]
+			memberJSON, _ := json.Marshal([]string{e.AuthorID}) // 切片 Marshal 永不失败，忽略 error
+			if _, err := tx.Exec(
+				`INSERT OR IGNORE INTO groups(group_id,creator_id,epoch,roster_rev,encrypted,member_ids_json,key_envelopes,event_id,updated_at,origin) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+				circleID, e.AuthorID, 1, 0, 1, string(memberJSON), "[]", circleID, nowMs, "fusion",
+			); err != nil {
+				log.Printf("store: 融合条目 %s 写 groups 失败: %v", e.ItemID, err)
+			}
+			if _, err := tx.Exec(
+				`INSERT OR IGNORE INTO circle_assignments(item_id,circle_id,origin,created_at) VALUES(?,?,?,?)`,
+				e.ItemID, circleID, "fusion", nowMs,
+			); err != nil {
+				log.Printf("store: 融合条目 %s 写 circle_assignments 失败: %v", e.ItemID, err)
+			}
 		}
 		res.Entries++
 	}
