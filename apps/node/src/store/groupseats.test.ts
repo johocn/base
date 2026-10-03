@@ -13,6 +13,7 @@ import {
   dissolveVoteQuorum,
   eventWatermark,
   governorSeats,
+  groupBodyAction,
   removeQuorum,
   type SeatSnapshot,
 } from "./groupseats";
@@ -36,6 +37,7 @@ const sections = f.sections as {
     decidable: boolean;
     watermark: string;
   }>;
+  group_body_action: Array<{ name: string; body_json: string; action: string }>;
 };
 
 // — Section 1: GovernorSeats + Quorums —
@@ -109,6 +111,18 @@ describe("seats.json → derive_seats", () => {
         rosterEpoch: c.epoch,
       };
       expect(snap).toEqual(want);
+    });
+  }
+});
+
+// — Section 5: GroupBodyAction（黄金向量 seats.json / group_body_action section） —
+describe("seats.json → group_body_action", () => {
+  if (!sections.group_body_action || sections.group_body_action.length === 0) {
+    throw new Error("seats.json 未找到 group_body_action section");
+  }
+  for (const c of sections.group_body_action) {
+    it(c.name, () => {
+      expect(groupBodyAction(c.body_json)).toBe(c.action);
     });
   }
 });

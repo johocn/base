@@ -615,6 +615,68 @@
         "m": 90,
         "dv": 30
       }
+    ],
+    "group_body_action": [
+      {
+        "name": "bad_json",
+        "body_json": "xxx",
+        "action": ""
+      },
+      {
+        "name": "root_null",
+        "body_json": "null",
+        "action": ""
+      },
+      {
+        "name": "root_string",
+        "body_json": "\"string\"",
+        "action": ""
+      },
+      {
+        "name": "root_array",
+        "body_json": "[]",
+        "action": ""
+      },
+      {
+        "name": "empty_object",
+        "body_json": "{}",
+        "action": ""
+      },
+      {
+        "name": "no_action_key",
+        "body_json": "{\"foo\":\"bar\"}",
+        "action": ""
+      },
+      {
+        "name": "action_null",
+        "body_json": "{\"action\":null}",
+        "action": ""
+      },
+      {
+        "name": "action_number",
+        "body_json": "{\"action\":123}",
+        "action": ""
+      },
+      {
+        "name": "action_boolean",
+        "body_json": "{\"action\":true}",
+        "action": ""
+      },
+      {
+        "name": "action_nested_obj",
+        "body_json": "{\"action\":{\"nested\":\"x\"}}",
+        "action": ""
+      },
+      {
+        "name": "dup_key_second_wins",
+        "body_json": "{\"action\":\"first\",\"action\":\"second\"}",
+        "action": "second"
+      },
+      {
+        "name": "action_msg",
+        "body_json": "{\"action\":\"msg\"}",
+        "action": "msg"
+      }
     ]
   },
   "version": 1

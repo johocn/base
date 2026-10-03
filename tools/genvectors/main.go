@@ -451,6 +451,33 @@ func writeSeats(out string) error {
 			Governors: dedupSnap.Governors, Decidable: dedupSnap.Decidable, Watermark: dedupSnap.Watermark},
 	}
 
+	// — Section 5: GroupBodyAction —
+	type groupBodyCase struct {
+		Name     string `json:"name"`
+		BodyJSON string `json:"body_json"`
+		Action   string `json:"action"`
+	}
+	groupBodyInputs := []struct{ name, body string }{
+		{"bad_json", "xxx"},
+		{"root_null", "null"},
+		{"root_string", `"string"`},
+		{"root_array", "[]"},
+		{"empty_object", "{}"},
+		{"no_action_key", `{"foo":"bar"}`},
+		{"action_null", `{"action":null}`},
+		{"action_number", `{"action":123}`},
+		{"action_boolean", `{"action":true}`},
+		{"action_nested_obj", `{"action":{"nested":"x"}}`},
+		{"dup_key_second_wins", `{"action":"first","action":"second"}`},
+		{"action_msg", `{"action":"msg"}`},
+	}
+	groupBodyCases := make([]groupBodyCase, 0, len(groupBodyInputs))
+	for _, in := range groupBodyInputs {
+		groupBodyCases = append(groupBodyCases, groupBodyCase{
+			Name: in.name, BodyJSON: in.body, Action: store.GroupBodyAction(in.body),
+		})
+	}
+
 	doc := map[string]any{
 		"version": 1,
 		"sections": map[string]any{
@@ -458,6 +485,7 @@ func writeSeats(out string) error {
 			"event_watermark":            watermarkCases,
 			"contribution_rank":          rankCases,
 			"derive_seats":               deriveCases,
+			"group_body_action":          groupBodyCases,
 		},
 	}
 	return writeJSON(filepath.Join(out, "seats.json"), doc)

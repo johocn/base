@@ -143,7 +143,7 @@ func DeriveSeats(memberIDs []string, creatorID string, rosterRev, epoch int64, e
 			continue // 按 event_id 去重（册子 §3.3 第 1 条）
 		}
 		seen[e.EventID] = true
-		if groupBodyAction(e.BodyJSON) != "msg" {
+		if GroupBodyAction(e.BodyJSON) != "msg" {
 			continue
 		}
 		ids = append(ids, e.EventID)
@@ -173,8 +173,8 @@ func DeriveSeats(memberIDs []string, creatorID string, rosterRev, epoch int64, e
 	return snap
 }
 
-// groupBodyAction 从事件 body_json 里取 action；解析失败或非 roster/msg 返回空串。
-func groupBodyAction(bodyJSON string) string {
+// GroupBodyAction 从事件 body_json 里取 action；解析失败或非 roster/msg 返回空串。
+func GroupBodyAction(bodyJSON string) string {
 	var b struct {
 		Action string `json:"action"`
 	}
