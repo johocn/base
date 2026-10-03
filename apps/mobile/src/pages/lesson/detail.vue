@@ -4,10 +4,39 @@
     <block v-else>
       <text v-if="!loaded" class="hint">加载中…</text>
       <block v-else>
+        <!-- Discuz 仿效方案 C：面包屑 -->
+        <view v-if="courseTitle" class="breadcrumb">
+          <text class="bc-item">{{ courseTitle }}</text>
+          <text class="bc-sep">›</text>
+          <text class="bc-cur">第 {{ lessonPosition?.cur ?? '?' }} 讲</text>
+        </view>
         <image v-if="coverPath" :src="coverPath" mode="widthFix" class="cover" />
         <text class="title" :class="titleColor ? 'c-' + titleColor : ''">{{ lessonLabel }}</text>
+        <!-- Discuz 仿效方案 C：课时位置序号点 -->
+        <view v-if="lessonPosition && lessonPosition.total > 1" class="lesson-dots">
+          <view
+            v-for="i in lessonPosition.total"
+            :key="i"
+            class="lesson-dot"
+            :class="{ done: i < lessonPosition.cur, cur: i === lessonPosition.cur }"
+          ></view>
+        </view>
+        <!-- Discuz 仿效方案 C：课程进度条 -->
+        <view v-if="lessonPosition" class="course-progress">
+          <text class="cp-label">课程进度 {{ lessonPosition.cur }}/{{ lessonPosition.total }}</text>
+          <view class="cp-track">
+            <view class="cp-fill" :style="`width:${Math.round((lessonPosition.cur / lessonPosition.total) * 100)}%`"></view>
+          </view>
+        </view>
         <view v-if="badge.length > 0" class="chips">
           <text v-for="b in badge" :key="b" class="badge">{{ b }}</text>
+        </view>
+        <!-- Discuz 仿效方案 C：作者栏 -->
+        <view v-if="authorDisplay.name" class="author-bar">
+          <view class="author-avatar" :style="`background:hsl(${authorDisplay.hue} 65% 55%)`">{{ authorDisplay.name.slice(0, 1) }}</view>
+          <view class="author-info">
+            <text class="author-name">{{ authorDisplay.name }}<text v-if="authorDisplay.count > 0" class="author-count">（贡献 {{ authorDisplay.count }} 条）</text></text>
+          </view>
         </view>
         <text v-if="instructor !== ''" class="meta">讲师 {{ instructorDisplay }}<text v-if="instructorPending" class="term-badge">待票选</text></text>
         <text v-if="metaLine !== ''" class="meta">{{ metaLine }}</text>
@@ -38,6 +67,37 @@
             <text class="carrier-title">{{ a.name }}</text>
           </view>
         </block>
+
+        <!-- Discuz 仿效方案 C：讨论入口（跳 comment tabBar 页） -->
+        <view class="discussion-entry" @click="openDiscussion">
+          <text class="discussion-icon">💬</text>
+          <view class="discussion-text">
+            <text class="discussion-title">参与讨论</text>
+            <text class="discussion-sub">在社区里和大家一起聊这讲的内容</text>
+          </view>
+          <text class="discussion-arrow">›</text>
+        </view>
+
+        <!-- Discuz 仿效方案 C：同课程其他讲（相关推荐） -->
+        <block v-if="relatedLessons.length > 0">
+          <text class="group">同课程其他讲</text>
+          <view v-for="ls in relatedLessons" :key="ls.itemId" class="related-item" @click="openLesson(ls.itemId)">
+            <text class="related-no">{{ ls.no > 0 ? `第 ${ls.no} 讲` : '讲' }}</text>
+            <text class="related-title">{{ ls.title }}</text>
+          </view>
+        </block>
+
+        <!-- Discuz 仿效方案 C：上下讲导航 -->
+        <view v-if="prevLesson || nextLesson" class="nav-arrows">
+          <view v-if="prevLesson" class="nav-arrow" @click="openLesson(prevLesson.itemId)">
+            <text class="nav-label">← 上一讲</text>
+            <text class="nav-sub">{{ prevLesson.no > 0 ? `第 ${prevLesson.no} 讲` : '' }} · {{ prevLesson.title }}</text>
+          </view>
+          <view v-if="nextLesson" class="nav-arrow" @click="openLesson(nextLesson.itemId)">
+            <text class="nav-label">下一讲 →</text>
+            <text class="nav-sub">{{ nextLesson.no > 0 ? `第 ${nextLesson.no} 讲` : '' }} · {{ nextLesson.title }}</text>
+          </view>
+        </view>
       </block>
     </block>
   </view>
@@ -49,12 +109,13 @@ import { onLoad } from '@dcloudio/uni-app';
 
 import { fetchBlob } from '../../core/blob';
 import { attrsOf, childrenRowsOf, type AttachmentVM } from '../../core/container-view';
-import { lessonNo } from '../../core/course-tree';
+import { childrenOf, lessonNo } from '../../core/course-tree';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
 import { renderMarkdown } from '../../core/markdown';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
 import { containerFormFromLedger } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
+import { useAuthorBar } from '../../core/useAuthorBar';
 import { bootstrap } from '../../platform';
 
 interface CarrierVM {
@@ -84,6 +145,18 @@ const error = ref('');
 // 图章与标题色（册子 #53 §2.5）：仅正常（包表）分支派生；台账分支保持 F7 裁剪口径，不渲染
 const badge = ref<string[]>([]);
 const titleColor = ref('');
+
+// —— Discuz 仿效 方案 C ——
+const { authorId, authorDisplay, avatarHue, fetchAuthorBar, setAuthorId } = useAuthorBar();
+/** 面包屑：课程标题（courseId → repo.getItem）；空表示没拿到（courseId 缺失或课程不存在） */
+const courseTitle = ref('');
+/** 课时位置：{ cur, total }；courseId 空或算不出 → null（模板不渲染序号点+进度条） */
+const lessonPosition = ref<{ cur: number; total: number } | null>(null);
+/** 上下讲导航：null 表示没拿到 */
+const prevLesson = ref<{ itemId: string; title: string; no: number } | null>(null);
+const nextLesson = ref<{ itemId: string; title: string; no: number } | null>(null);
+/** 同课程其他讲（排除当前）；空数组 → 相关推荐块不渲染 */
+const relatedLessons = ref<{ itemId: string; title: string; no: number }[]>([]);
 
 onLoad(async (query) => {
   const q = (query as Record<string, string> | undefined) ?? {};
@@ -131,12 +204,47 @@ onLoad(async (query) => {
 
     // 「第 N 讲」口径与课程页同源：拿课程清单算出位次（拿不到课程就不显示位次）
     let no = 0;
+    let lessonIds: string[] = [];
     if (courseId.value !== '') {
       try {
-        no = lessonNo(await repo.listSegments(courseId.value), lid);
+        const courseSegs = await repo.listSegments(courseId.value);
+        lessonIds = childrenOf(courseSegs);
+        no = lessonNo(courseSegs, lid);
+        // —— Discuz 仿效：复用同一次 courseSegs 派生所有位置/导航数据（Advisor 提醒避免不一致）——
+        const courseItem = await repo.getItem(courseId.value);
+        courseTitle.value = courseItem?.title ?? '';
+        if (lessonIds.length > 0 && no > 0) {
+          lessonPosition.value = { cur: no, total: lessonIds.length };
+          const curIdx = lessonIds.indexOf(lid);
+          if (curIdx > 0) {
+            const prevId = lessonIds[curIdx - 1]!;
+            const prevItem = await repo.getItem(prevId);
+            prevLesson.value = { itemId: prevId, title: prevItem?.title ?? prevId, no: no - 1 };
+          }
+          if (curIdx >= 0 && curIdx < lessonIds.length - 1) {
+            const nextId = lessonIds[curIdx + 1]!;
+            const nextItem = await repo.getItem(nextId);
+            nextLesson.value = { itemId: nextId, title: nextItem?.title ?? nextId, no: no + 1 };
+          }
+          // 同课程相关推荐：排除当前，取前 5（保持清单位次，不做排序）
+          const others = lessonIds.filter((id) => id !== lid);
+          const related: { itemId: string; title: string; no: number }[] = [];
+          for (const id of others.slice(0, 5)) {
+            const it = await repo.getItem(id);
+            const pos = lessonNo(courseSegs, id);
+            related.push({ itemId: id, title: it?.title ?? id, no: pos || 0 });
+          }
+          relatedLessons.value = related;
+        }
       } catch {
         no = 0;
       }
+    }
+
+    // 作者栏：composable 内部处理全降级链
+    if (row?.authorId && opts.nodeBaseUrl) {
+      setAuthorId(row.authorId);
+      void fetchAuthorBar({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
     }
     const title = row?.title || lid;
     lessonLabel.value = no > 0 ? `第 ${no} 讲 · ${title}` : title;
@@ -269,6 +377,16 @@ function openCarrier(c: CarrierVM) {
   uni.showToast({ title: '暂不支持的类型', icon: 'none' });
 }
 
+/** Discuz 仿效：上下讲/相关推荐点击 → 跳课时详情 */
+function openLesson(itemId: string) {
+  uni.navigateTo({ url: `/pages/lesson/detail?lessonId=${encodeURIComponent(itemId)}&courseId=${encodeURIComponent(courseId.value)}` });
+}
+
+/** Discuz 仿效：讨论入口 → 跳 comment tabBar 页 */
+function openDiscussion() {
+  uni.switchTab({ url: '/pages/comment/comment' });
+}
+
 /** 附件按需取回：下载字节 → 落本地文件 → 交给系统打开 */
 async function openAttachment(a: AttachmentVM) {
   error.value = '';
@@ -346,4 +464,203 @@ async function openAttachment(a: AttachmentVM) {
 .dark .c-purple { color: #B794F4; }
 .dark .c-gray { color: #A0AEC0; }
 .dark .c-mark { background: #5A4A1F; }
+
+/* —— Discuz 仿效方案 C 样式 —— */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px 4px;
+  font-size: 12px;
+  color: #718096;
+}
+.breadcrumb .bc-item { color: #2b6cb0; }
+.breadcrumb .bc-sep { color: #a0aec0; }
+.breadcrumb .bc-cur { color: #2d3748; font-weight: 500; }
+.dark .breadcrumb { color: #a0aec0; }
+.dark .breadcrumb .bc-item { color: #63b3ed; }
+.dark .breadcrumb .bc-cur { color: #e2e8f0; }
+
+/* 课时位置序号点 */
+.lesson-dots {
+  display: flex;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 24px 4px;
+}
+.lesson-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  transition: all .2s;
+}
+.lesson-dot.done { background: #48bb78; }
+.lesson-dot.cur { background: #2b6cb0; width: 16px; border-radius: 3px; }
+.dark .lesson-dot { background: #4a5568; }
+.dark .lesson-dot.done { background: #38a169; }
+.dark .lesson-dot.cur { background: #63b3ed; }
+
+/* 课程进度条 */
+.course-progress {
+  padding: 0 16px 10px;
+}
+.cp-label {
+  font-size: 11px;
+  color: #718096;
+  margin-bottom: 4px;
+  display: block;
+}
+.cp-track {
+  height: 4px;
+  background: #edf2f7;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.cp-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #63b3ed, #2b6cb0);
+  border-radius: 2px;
+  transition: width .3s;
+}
+.dark .cp-label { color: #a0aec0; }
+.dark .cp-track { background: #2d3748; }
+.dark .cp-fill { background: linear-gradient(90deg, #4299e1, #3182ce); }
+
+/* 作者栏 */
+.author-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  margin: 6px 16px 0;
+  background: #f7fafc;
+  border-radius: 8px;
+}
+.author-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.author-info { flex: 1; min-width: 0; }
+.author-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #2d3748;
+}
+.author-count { font-size: 11px; color: #718096; font-weight: 400; }
+.dark .author-bar { background: #1a202c; }
+.dark .author-name { color: #e2e8f0; }
+.dark .author-count { color: #a0aec0; }
+
+/* 讨论入口 */
+.discussion-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin: 14px 16px 0;
+  background: #fffaf0;
+  border-radius: 8px;
+}
+.discussion-icon {
+  font-size: 18px;
+  width: 32px;
+  height: 32px;
+  background: #fbd38d;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.discussion-text { flex: 1; min-width: 0; }
+.discussion-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #b7791f;
+  display: block;
+}
+.discussion-sub {
+  font-size: 11px;
+  color: #975a16;
+  margin-top: 2px;
+  display: block;
+}
+.discussion-arrow {
+  color: #b7791f;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.dark .discussion-entry { background: #2d2518; }
+.dark .discussion-icon { background: #7b5818; }
+.dark .discussion-title { color: #f6ad55; }
+.dark .discussion-sub { color: #e9a94b; }
+.dark .discussion-arrow { color: #f6ad55; }
+
+/* 同课程相关推荐 */
+.related-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #edf2f7;
+}
+.related-no {
+  font-size: 11px;
+  color: #718096;
+  background: #edf2f7;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.related-title {
+  font-size: 13px;
+  color: #2b6cb0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dark .related-item { border-bottom-color: #2d3748; }
+.dark .related-no { background: #2d3748; color: #a0aec0; }
+.dark .related-title { color: #63b3ed; }
+
+/* 上下讲导航 */
+.nav-arrows {
+  display: flex;
+  padding: 14px 16px 20px;
+  gap: 10px;
+}
+.nav-arrow {
+  flex: 1;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nav-label {
+  font-size: 11px;
+  color: #a0aec0;
+}
+.nav-sub {
+  font-size: 12px;
+  color: #2d3748;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dark .nav-arrow { border-color: #4a5568; }
+.dark .nav-label { color: #718096; }
+.dark .nav-sub { color: #e2e8f0; }
 </style>

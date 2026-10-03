@@ -78,9 +78,7 @@ import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../
 import { buildLessonList, type LessonVM } from '../../core/lesson-list';
 import { containerFormFromLedger, ledgerActionsOf, type LedgerActions } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
-import type { ContributorItem } from '../../core/contribution';
-import { roster } from '../../core/contribution';
-import { decodeUtf8 } from '../../core/sync';
+import { useAuthorBar } from '../../core/useAuthorBar';
 import { createProposal, GovernError, listProposals } from '../../core/govern';
 import { bootstrap } from '../../platform';
 import { retrySubmission, SubmitError } from '../../core/submit';
@@ -111,11 +109,7 @@ const actions = ref<LedgerActions>({ edit: false, retry: false, removeLocal: fal
 const error = ref('');
 
 // —— Discuz 仿效：作者栏 + 课程进度 + 课时完成度 ——
-const authorId = ref('');
-/** 贡献前 10 名册，authorId → ContributorItem 映射；空 Map 表示 fetch 失败或未拉 */
-const rosterMap = ref(new Map<string, ContributorItem>());
-/** 单条 profile API 缓存，authorId → 昵称；miss 或失败就不写 */
-const profileNameCache = ref(new Map<string, string>());
+const { authorId, authorDisplay, avatarHue, fetchAuthorBar, setAuthorId } = useAuthorBar();
 /** 课程整体完成度：{done, total}；total=0 不入 Map → 模板不渲染进度条 */
 const completion = ref<{ done: number; total: number } | null>(null);
 /** 每个课时是否完成：lessonId → true；未完成或无数据不入 Map */
@@ -207,15 +201,9 @@ onLoad(async (query) => {
     const path = await repo.findBlobPathByItem(`${course.itemId}/cover`);
     coverPath.value = path ? (path.startsWith('file://') ? path : `file://${path}`) : '';
 
-    // 作者栏：归属缓存 + 贡献名册 + profile API 三级降级（复用 article.vue 逻辑）
-    authorId.value = course.authorId ?? '';
-    if (authorId.value && opts.nodeBaseUrl) {
-      try {
-        const list = await roster({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
-        rosterMap.value = new Map(list.map((c) => [c.id, c]));
-      } catch { /* 静默 */ }
-      void resolveAuthorName(authorId.value, opts);
-    }
+    // 作者栏：composable 内部处理全降级链
+    setAuthorId(course.authorId ?? '');
+    if (course.authorId && opts.nodeBaseUrl) void fetchAuthorBar({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
 
     const rows = childrenRowsOf(segs);
     const links = await repo.listTagLinks();
@@ -295,32 +283,6 @@ const instructorPending = computed(() => {
   const key = termKeyOf(instructor.value);
   return key !== '' && termState(directory.value, 'instructor', key) === 'pending';
 });
-
-/** 昵称三级降级链：名册命中 → profile API 命中 → id[:8] 回退（复用 article.vue 逻辑） */
-const authorDisplay = computed(() => {
-  if (!authorId.value) return { name: '', count: 0, hue: 0 };
-  const hit = rosterMap.value.get(authorId.value);
-  if (hit) return { name: hit.name, count: hit.count, hue: avatarHue(authorId.value) };
-  const pName = profileNameCache.value.get(authorId.value);
-  if (pName) return { name: pName, count: 0, hue: avatarHue(authorId.value) };
-  return { name: authorId.value.slice(0, 8), count: 0, hue: avatarHue(authorId.value) };
-});
-/** authorId → 稳定 HSL 色相（纯本地哈希，零网络） */
-function avatarHue(hex: string): number {
-  let h = 0;
-  for (let i = 0; i < hex.length; i++) h = (h * 31 + hex.charCodeAt(i)) >>> 0;
-  return h % 360;
-}
-/** 第三级降级：roster miss → 单条 profile API 补查；失败静默不阻塞 */
-async function resolveAuthorName(aid: string, opts: { adapters: { http: { get: (u: string) => Promise<{ status: number; body: Uint8Array }> } }; nodeBaseUrl: string }) {
-  if (!aid || rosterMap.value.has(aid) || profileNameCache.value.has(aid)) return;
-  try {
-    const res = await opts.adapters.http.get(`${opts.nodeBaseUrl}/v1/profile/${aid}`);
-    if (res.status !== 200) return;
-    const json = JSON.parse(decodeUtf8(res.body)) as { name?: string };
-    if (json.name) profileNameCache.value.set(aid, json.name);
-  } catch { /* 静默 */ }
-}
 
 /** 单个课时是否完成（课程整体进度的构成单元：叶子载体多数决） */
 function lessonCompleted(leafDone: boolean[]): boolean {

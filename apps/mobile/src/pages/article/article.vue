@@ -77,10 +77,9 @@ import { reportProgress } from '../../core/progress-store';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
 import { renderMarkdown } from '../../core/markdown';
-import { decodeUtf8 } from '../../core/sync';
+import { useAuthorBar } from '../../core/useAuthorBar';
 import type { ArticleRow, TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
-import { roster, type ContributorItem } from '../../core/contribution';
 
 const article = ref<ArticleRow | null>(null);
 const bodyHtml = ref('');
@@ -105,42 +104,8 @@ const untagged = ref<Set<string>>(new Set());
 const governor = ref(false);
 const pendingTag = computed(() => governor.value && untagged.value.has(itemId.value));
 const itemId = ref('');
-/** 条目作者归属缓存（节点验签写入，可能为空） */
-const authorId = ref('');
-/** 贡献前 10 名册，authorId → ContributorItem 映射；空 Map 表示 fetch 失败或未拉 */
-const rosterMap = ref(new Map<string, ContributorItem>());
-/** 单条 profile API 缓存，authorId → 昵称；miss 或失败就不写，computed 回退 id[:8] */
-const profileNameCache = ref(new Map<string, string>());
-/** 昵称三级降级链：名册命中 → profile API 命中 → id[:8] 回退 */
-const authorDisplay = computed(() => {
-  if (!authorId.value) return { name: '', count: 0, hue: 0 };
-  const hit = rosterMap.value.get(authorId.value);
-  if (hit) return { name: hit.name, count: hit.count, hue: avatarHue(authorId.value) };
-  const pName = profileNameCache.value.get(authorId.value);
-  if (pName) return { name: pName, count: 0, hue: avatarHue(authorId.value) };
-  return { name: authorId.value.slice(0, 8), count: 0, hue: avatarHue(authorId.value) };
-});
-/** authorId → 稳定 HSL 色相（纯本地哈希，零网络） */
-function avatarHue(hex: string): number {
-  let h = 0;
-  for (let i = 0; i < hex.length; i++) h = (h * 31 + hex.charCodeAt(i)) >>> 0;
-  return h % 360;
-}
-/**
- * 第三级降级：roster miss → 单条 profile API 补查；失败静默不阻塞。
- * 只在当前 authorId 不在前 10 名册、且未缓存过时触发。
- */
-async function resolveAuthorName(aid: string, opts: { adapters: { http: { get: (u: string) => Promise<{ status: number; body: Uint8Array }> } }; nodeBaseUrl: string }) {
-  if (!aid || rosterMap.value.has(aid) || profileNameCache.value.has(aid)) return;
-  try {
-    const res = await opts.adapters.http.get(`${opts.nodeBaseUrl}/v1/profile/${aid}`);
-    if (res.status !== 200) return;
-    const json = JSON.parse(decodeUtf8(res.body)) as { name?: string };
-    if (json.name) profileNameCache.value.set(aid, json.name);
-  } catch {
-    // 静默：404 / 无网络 → 继续回退 id[:8]
-  }
-}
+// 作者栏（三级降级链 + roster + profile API）抽到共享 composable
+const { authorId, authorDisplay, avatarHue, fetchAuthorBar, setAuthorId } = useAuthorBar();
 // 图章与标题色（册子 #53 §2.5）：文章不产属性行，无载体行时自然为空（设计册登记的事实）
 const badge = ref<string[]>([]);
 const titleColor = ref('');
@@ -161,15 +126,6 @@ onLoad(async (query) => {
   try {
     const { opts, repo } = await bootstrap();
     directory.value = await loadDirectory(repo);
-    // 贡献前 10 名册：独立 try-catch，失败静默（不阻塞正文渲染、不影响任何路径）
-    if (opts.nodeBaseUrl) {
-      try {
-        const list = await roster({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
-        rosterMap.value = new Map(list.map((c) => [c.id, c]));
-      } catch {
-        // 静默：无网络 / 节点未配置时 author-bar 自然降级为 id[:8]
-      }
-    }
     // from=ledger：从「我创建的」区进入 → 正文取台账行，不读包表（册子 #51 §3.3）。
     if (q.from === 'ledger') {
       const sub = await repo.getSubmission(raw);
@@ -205,11 +161,10 @@ onLoad(async (query) => {
     }
     article.value = row;
     itemId.value = row.itemId;
-    // 拿归属缓存：节点验签写入的 authorId（可能为空 → author-bar 自然降级不渲染）
+    // 拿归属缓存 + 贡献名册 + profile API：composable 内部处理全降级链
     const item = await repo.getItem(row.itemId);
-    authorId.value = item?.authorId ?? '';
-    // 第三级降级：roster miss → 单条 profile API 补查（只对当前 authorId 懒加载一次）
-    if (authorId.value && opts.nodeBaseUrl) void resolveAuthorName(authorId.value, opts);
+    setAuthorId(item?.authorId ?? '');
+    if (item?.authorId && opts.nodeBaseUrl) void fetchAuthorBar({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
     bodyHtml.value = renderMarkdown(row.bodyMd);
     const a = attrsOf(await repo.listSegments(raw));
     badge.value = a.badge;
