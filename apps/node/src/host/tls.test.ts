@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createHash, X509Certificate } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTlsCertCommand } from "../cli/tls-cert";
-import { createTlsAdapter, generateSelfSigned } from "./tls";
+import { createTlsAdapter, generateSelfSigned, isTlsOff, needsTlsIdentity } from "./tls";
 
 const BASED_EXE = fileURLToPath(new URL("../../../../based.exe", import.meta.url));
 
@@ -213,5 +213,25 @@ describe("generateSelfSigned：直连落盘", () => {
     generateSelfSigned(paths.certFile, paths.keyFile);
     expect(existsSync(paths.certFile)).toBe(true);
     expect(existsSync(paths.keyFile)).toBe(true);
+  });
+});
+
+describe("isTlsOff / needsTlsIdentity：身份加载判定（计划 #77 G4 五格矩阵）", () => {
+  it("off 判定：大小写与首尾空白等价", () => {
+    expect(isTlsOff(" off ")).toBe(true);
+    expect(isTlsOff("OFF")).toBe(true);
+    expect(isTlsOff("")).toBe(false);
+    expect(isTlsOff("/p/node.crt")).toBe(false);
+  });
+
+  // 矩阵顺序：tls-cert 非 off / off × 有无 -peer-addr × 有无 -peers。
+  it.each([
+    { tls: "/p/node.crt", addr: "", peers: 0, want: true, note: "主监听要 TLS（B-② 修复格）" },
+    { tls: "/p/node.crt", addr: ":8081", peers: 0, want: true, note: "对齐 Go !plaintext" },
+    { tls: "off", addr: ":8081", peers: 0, want: true, note: "对齐 Go plaintext + peer-addr" },
+    { tls: "off", addr: "", peers: 1, want: true, note: "超集格：Go 漏判 -peers（#77 定案 2）" },
+    { tls: "off", addr: "", peers: 0, want: false, note: "唯一不加载格，与 Go 一致" },
+  ])("$note", ({ tls: tlsCert, addr, peers, want }) => {
+    expect(needsTlsIdentity(tlsCert, addr, peers)).toBe(want);
   });
 });

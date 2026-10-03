@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type { CliCommand, ServerAdapters, TlsMaterial } from "@base/core-ts";
 import { VERSION } from "./version";
 import { createHttpServerAdapter } from "./host/http";
-import { createTlsAdapter } from "./host/tls";
+import { createTlsAdapter, isTlsOff, needsTlsIdentity } from "./host/tls";
 import { createSchedulerAdapter } from "./host/scheduler";
 import { createCliHost } from "./host/cli";
 import { createLifecycleAdapter } from "./host/lifecycle";
@@ -38,7 +38,7 @@ function parseAddr(addr: string): { host: string; port: number } {
 function resolveTlsMaterial(tlsCertRaw: string, tlsKeyRaw: string, dataDir: string): TlsMaterial {
   const defCert = join(dataDir, "tls", "node.crt");
   const defKey = join(dataDir, "tls", "node.key");
-  if (tlsCertRaw.trim().toLowerCase() === "off") {
+  if (isTlsOff(tlsCertRaw)) {
     // off = 主监听明文，**不是**本节点没有身份：对端监听仍落回默认证书路径。
     return { certFile: defCert, keyFile: defKey };
   }
@@ -86,12 +86,15 @@ export async function main(): Promise<void> {
       const tlsCert = process.env.BASE_TLS_CERT ?? "";
       const tlsKey = process.env.BASE_TLS_KEY ?? "";
       const fetchMaxBlobs = envIntOr("BASE_FETCH_MAX_BLOBS", 64);
-      // 本节点 TLS 身份：主监听明文（tls-cert=off）时也按默认证书路径加载（出站/对端监听需要）。
-      // **必须先于 startServer**：门户页身份证（配对码/指纹）随 Options 注入，对齐 serve.go:63-76。
-      const info =
-        peerAddr !== "" || peers.length > 0
-          ? await adapters.tls.loadOrCreate(resolveTlsMaterial(tlsCert, tlsKey, dataDir))
-          : undefined;
+      // 本节点 TLS 身份：**必须先于 startServer** 加载——门户页身份证（配对码/指纹）随 Options 注入，
+      // 且 `tls-cert` 非 off 时主监听要拿它起 TLS（对齐 serve.go:61-76；判定见 needsTlsIdentity）。
+      const info = needsTlsIdentity(tlsCert, peerAddr, peers.length)
+        ? await adapters.tls.loadOrCreate(resolveTlsMaterial(tlsCert, tlsKey, dataDir))
+        : undefined;
+      // 主监听 TLS：非 off 时用同一张证书，空白名单 = 不要求对端证书（对齐 serve.go:157-163 的
+      // ServerTLSConfig(info, nil)）；off 时不传，主监听保持明文（线上 base-cache 行为不变）。
+      const mainTls =
+        info === undefined || isTlsOff(tlsCert) ? undefined : adapters.tls.serverConfig(info, []);
       const opts: ServerOptions = {
         ...parseAddr(process.env.BASE_ADDR ?? ":8080"),
         dataDir,
@@ -101,6 +104,7 @@ export async function main(): Promise<void> {
         reviewKey: process.env.BASE_REVIEW_KEY ?? "",
         fingerprintHex: info?.fingerprintHex ?? "",
         pairingCode: info?.pairingCode ?? "",
+        tls: mainTls,
       };
 
       const db = openBootstrapDb(dbPath);

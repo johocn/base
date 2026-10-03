@@ -132,6 +132,24 @@ export function generateSelfSigned(certFile: string, keyFile: string): void {
   writeFileSync(keyFile, pem("EC PRIVATE KEY", keyDer), { mode: 0o600 });
 }
 
+/** `-tls-cert=off` 的语义 = 主监听不加密（**不是**本节点没有身份）；对齐 peerconfig.go:68-71 的判定。 */
+export function isTlsOff(tlsCertRaw: string): boolean {
+  return tlsCertRaw.trim().toLowerCase() === "off";
+}
+
+/**
+ * 是否需要加载本节点 TLS 身份（计划 #77 §2 定案 2，超集语义）：
+ * 主监听要 TLS（`tls-cert` 非 off）**或** 对端监听要身份（`-peer-addr` 非空）**或** 出站要身份（`-peers` 非空）。
+ * 三因子全假才不加载——该格与 Go 一致；第三因子是 Go `serve.go:61-76` 的漏判（与其 `tlsInfo()` 自身文档矛盾），**刻意不复刻**。
+ */
+export function needsTlsIdentity(
+  tlsCertRaw: string,
+  peerAddr: string,
+  peerCount: number,
+): boolean {
+  return !isTlsOff(tlsCertRaw) || peerAddr !== "" || peerCount > 0;
+}
+
 export function createTlsAdapter(): TlsAdapter {
   return {
     async loadOrCreate(info: TlsMaterial): Promise<TlsInfo> {
