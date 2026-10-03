@@ -102,8 +102,7 @@ import {
   SELFCHECK_TARGET,
   type CapabilityFlags,
 } from '../../core/selfcheck';
-import { roster } from '../../core/contribution';
-import { decodeUtf8 } from '../../core/sync';
+import { avatarBg, useActorNames } from '../../core/useActorNames';
 
 /** 列表项 = 节点返回的投影 + 按 payload_cid 取回的正文（取不到则为占位文案）。 */
 interface Row extends CommentItem {
@@ -126,8 +125,8 @@ const tagsByEvent = ref<Record<string, string[]>>({});
 
 /** 楼中楼：扁平投影 → 楼层根（含子回复）纯本地派生，零网络 */
 const tree = computed<CommentTreeNode<Row>[]>(() => buildCommentTree(list.value));
-/** actor → 昵称（名册命中 → profile 补查 → id[:8] 回退）；跨分页累积 */
-const names = ref<Record<string, string>>({});
+/** 昵称三级降级（名册 → profile 补查 → id[:8] 回退）；跨分页累积 */
+const { authorName, loadNames } = useActorNames();
 
 /** 能力标志：启动时只有 cryptoOk 有值，其余 unknown（unknown 不降级） */
 const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
@@ -195,7 +194,7 @@ async function refresh() {
     nextCursor.value = page.nextCursor;
     list.value = await withText(visible(page.items), opts.value);
     await attachTags(list.value);
-    await loadNames(list.value);
+    await loadNames(list.value.map((r) => r.actor), opts.value);
   } catch (e) {
     error.value = e instanceof CommentError ? e.message : (e as Error).message;
     list.value = [];
@@ -213,7 +212,7 @@ async function loadMore() {
     nextCursor.value = page.nextCursor;
     list.value = [...list.value, ...(await withText(visible(page.items), opts.value))];
     await attachTags(list.value);
-    await loadNames(list.value);
+    await loadNames(list.value.map((r) => r.actor), opts.value);
   } catch (e) {
     error.value = e instanceof CommentError ? e.message : (e as Error).message;
   } finally {
@@ -277,47 +276,6 @@ async function send() {
   } finally {
     sending.value = false;
   }
-}
-
-/** 昵称三级降级：名册命中 → profile API 补查 → id[:8]。任一级失败都静默，不挡列表。 */
-async function loadNames(rows: Row[]) {
-  if (!opts.value) return;
-  const o = opts.value;
-  const ids = [...new Set(rows.map((r) => r.actor))].filter((id) => id && !names.value[id]);
-  if (ids.length === 0) return;
-  const map: Record<string, string> = {};
-  try {
-    const list0 = await roster({ adapters: o.adapters, repo: o.repo, nodeBaseUrl: o.nodeBaseUrl });
-    for (const c of list0) if (c.name) map[c.id] = c.name;
-  } catch {
-    /* 静默：无网络 / 节点未配置 → 继续走 profile 与 id[:8] */
-  }
-  await Promise.all(
-    ids.map(async (id) => {
-      if (map[id]) return;
-      try {
-        const res = await o.adapters.http.get(`${o.nodeBaseUrl}/v1/profile/${id}`);
-        if (res.status !== 200) return;
-        const json = JSON.parse(decodeUtf8(res.body)) as { name?: string };
-        if (json.name) map[id] = json.name;
-      } catch {
-        /* 静默：404 / 无网络 → 继续回退 id[:8] */
-      }
-    }),
-  );
-  names.value = { ...names.value, ...map };
-}
-
-/** 昵称：未解析到就退化成 id 前 8 位（不显示空、不显示完整 hex）。 */
-function authorName(actor: string): string {
-  return names.value[actor] || actor.slice(0, 8);
-}
-
-/** 头像底色：同 actor 恒同色（纯本地哈希，零网络）。 */
-function avatarBg(actor: string): string {
-  let h = 0;
-  for (let i = 0; i < actor.length; i++) h = (h * 31 + actor.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360}, 65%, 60%)`;
 }
 
 /** 回复指向：命中楼层根显示「N楼」，命中子回复显示其昵称，都落空则回退成自己。 */

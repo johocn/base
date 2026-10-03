@@ -27,9 +27,14 @@
     <block v-else>
       <text v-if="!error && !loading && feed.length === 0" class="hint">还没有消息</text>
 
-      <view v-for="m in feed" :key="m.eventId" class="msg">
-        <text class="msg-meta">{{ m.mine ? '我' : short(m.actor) }} · {{ rel(m.createdAt) }}</text>
-        <text class="msg-text">{{ m.text ?? '（无法解密）' }}</text>
+      <view v-for="(m, i) in feed" :key="m.eventId" class="cmt-floor">
+        <view class="cmt-head">
+          <text class="cmt-floor-no">{{ i + 1 }}楼</text>
+          <view class="cmt-avatar" :style="{ background: avatarBg(m.actor) }"></view>
+          <text class="cmt-author-name">{{ m.mine ? '我' : authorName(m.actor) }}</text>
+          <text class="cmt-meta">· {{ rel(m.createdAt) }}</text>
+        </view>
+        <text class="cmt-text">{{ m.text ?? '（无法解密）' }}</text>
       </view>
       <text v-if="loading" class="hint">加载中…</text>
       <text v-else-if="!error && feed.length > 0 && nextCursor === null" class="hint">没有更多了</text>
@@ -67,6 +72,7 @@ import {
   postBlockedReason,
   type CapabilityFlags,
 } from '../../core/selfcheck';
+import { avatarBg, useActorNames } from '../../core/useActorNames';
 
 const opts = ref<DmOptions | null>(null);
 const peerId = ref('');
@@ -80,6 +86,9 @@ const loading = ref(false);
 const sending = ref(false);
 const draft = ref('');
 const unconfigured = ref(false);
+
+/** 昵称三级降级（名册 → profile 补查 → id[:8] 回退）；只解析对方，自己恒定显示「我」 */
+const { authorName, loadNames } = useActorNames();
 
 /** 待发区：只显示本会话的行（按 target_id 隔离）。 */
 const pending = ref<CommentOutRow[]>([]);
@@ -130,12 +139,14 @@ function applyFeed(c: DmConversation) {
   moreHint.value = c.nextCursor === null ? '' : '更早的消息本版暂不支持翻页';
 }
 
+/** 楼层化：消息按时间升序（core 已排序），楼号即列表序；昵称/头像走同一降级链，失败静默。 */
 async function refresh() {
   if (unconfigured.value || !opts.value || peerId.value === '') return;
   loading.value = true;
   error.value = '';
   try {
     applyFeed(await fetchConversation(opts.value, peerId.value));
+    await loadNames(feed.value.filter((m) => !m.mine).map((m) => m.actor), opts.value);
   } catch (e) {
     error.value = e instanceof DmError ? e.message : (e as Error).message;
     feed.value = [];
@@ -224,9 +235,13 @@ onReachBottom(() => {
 .po-foot { display: flex; align-items: center; justify-content: space-between; }
 .po-state { color: #888888; font-size: 12px; }
 .po-reason { color: #c05621; font-size: 12px; }
-.msg { padding: 10px 0; border-bottom: 1px solid #eeeeee; }
-.msg-meta { display: block; color: #888888; font-size: 12px; }
-.msg-text { display: block; margin-top: 4px; font-size: 15px; line-height: 1.6; }
+.cmt-floor { padding: 10px 0; border-bottom: 1px solid #eeeeee; }
+.cmt-head { display: flex; align-items: center; }
+.cmt-floor-no { margin-right: 6px; color: #2b6cb0; font-size: 12px; }
+.cmt-avatar { width: 20px; height: 20px; margin-right: 6px; border-radius: 50%; }
+.cmt-author-name { margin-right: 4px; color: #2b6cb0; font-size: 13px; }
+.cmt-meta { display: block; color: #888888; font-size: 12px; }
+.cmt-text { display: block; margin-top: 4px; font-size: 15px; line-height: 1.6; }
 .hint { display: block; margin-top: 8px; color: #888888; font-size: 13px; }
 .error { display: block; color: #c53030; font-size: 13px; }
 .notice { display: block; margin-bottom: 8px; color: #b7791f; font-size: 13px; }

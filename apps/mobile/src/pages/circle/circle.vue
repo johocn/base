@@ -21,8 +21,11 @@
       class="card"
       :url="'/pages/group/group?groupId=' + g.groupId"
     >
-      <text class="t">{{ g.name || '未命名圈子' }}</text>
-      <text class="meta">{{ g.encrypted === 1 ? '封闭' : '开放' }} · 成员 {{ memberCount(g.memberIdsJson) }} · epoch {{ g.epoch }}</text>
+      <view class="card-avatar" :style="{ background: avatarBg(g.groupId) }"></view>
+      <view class="card-body">
+        <text class="t">{{ g.name || '未命名圈子' }}</text>
+        <text class="meta">{{ g.encrypted === 1 ? '封闭' : '开放' }} · 成员 {{ memberCount(g.memberIdsJson) }} · epoch {{ g.epoch }}</text>
+      </view>
     </navigator>
   </view>
 </template>
@@ -40,6 +43,7 @@ import {
   type GroupOptions,
 } from '../../core/group';
 import type { GroupRow } from '../../core/types';
+import { avatarBg } from '../../core/useActorNames';
 import { bootstrap } from '../../platform';
 
 const opts = ref<GroupOptions | null>(null);
@@ -179,7 +183,9 @@ onShow(() => {
 .title { font-size: 20px; font-weight: 600; }
 .act { color: #2b6cb0; font-size: 14px; margin-right: 18px; }
 .acts { display: flex; margin-bottom: 10px; }
-.card { display: block; padding: 14px 0; border-bottom: 1px solid #eeeeee; }
+.card { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #eeeeee; }
+.card-avatar { width: 40px; height: 40px; margin-right: 10px; border-radius: 8px; }
+.card-body { flex: 1; }
 .t { display: block; font-size: 17px; }
 .meta { display: block; color: #888888; font-size: 12px; margin-top: 4px; }
 .empty { display: block; color: #999999; font-size: 13px; padding: 6px 0; line-height: 1.7; }
