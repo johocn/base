@@ -138,6 +138,7 @@ func (s *Server) publicMux() *http.ServeMux {
 
 	// 名册公开读（匿名，治理册 §5.1）：与 catalog / manifest / pack 同级。
 	mux.HandleFunc("GET /v1/contributors", s.handleContributors)
+	mux.HandleFunc("GET /v1/profile/{id}", s.handleProfileGet)
 
 	// 目录公开读（册子 #58 §4.1）：与 contributors / proposal 同类匿名接口，复用治理面 IP 限速。
 	mux.HandleFunc("GET /v1/directory", s.handleDirectoryGet)

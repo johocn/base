@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"sort"
 	"unicode"
@@ -478,4 +479,16 @@ func (s *Store) ProfileNames(ids []string) (map[string]string, error) {
 		out[id] = name
 	}
 	return out, rows.Err()
+}
+
+// GetProfile 单条查询昵称：found=false 表示 profiles 表里没有该 id（调用方应返回 404）。
+func (s *Store) GetProfile(id string) (name string, found bool, err error) {
+	row := s.db.QueryRow(`SELECT name FROM profiles WHERE id=?`, id)
+	if err := row.Scan(&name); err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return name, true, nil
 }

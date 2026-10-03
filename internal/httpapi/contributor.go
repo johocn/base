@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/johocn/base/internal/protocol"
 )
 
 type contributorDTO struct {
@@ -87,4 +89,24 @@ func (s *Server) handleProfilePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": name})
+}
+
+// handleProfileGet 匿名查询单条公开昵称（治理册 §5.1）：与 /v1/contributors 同级的匿名公开读。
+// 空昵称即未登记——诚实返回 404，不泄露任何额外状态。
+func (s *Server) handleProfileGet(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !protocol.IsIdentityID(id) {
+		s.writeError(w, http.StatusBadRequest, "profile_id_invalid")
+		return
+	}
+	name, found, err := s.st.GetProfile(strings.ToLower(id))
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "profile_not_found")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"id": strings.ToLower(id), "name": name})
 }
