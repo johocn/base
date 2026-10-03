@@ -46,8 +46,8 @@ const brushWindowMs = 24 * 60 * 60 * 1000
 // brushMaxPerWindow 是同一 actor 在任意滚动 24h 内最多计入的条数（册子 §3.3 第 3 条）。
 const brushMaxPerWindow = 20
 
-// rankInput 是排序输入的一行。
-type rankInput struct {
+// RankInput 是排序输入的一行（导出以便 genvectors 构造黄金向量）。
+type RankInput struct {
 	EventID   string
 	Actor     string
 	CreatedAt int64
@@ -58,9 +58,9 @@ type rankInput struct {
 //   - 防刷：逐 actor 的发言按 (created_at, event_id) 升序**贪心接受**，保持任意滚动 24h 窗口 ≤ 20；
 //   - 排序键：count 降序，同分按 actor_id 的 hex 字典序**升序**（各节点同解的前提）；
 //   - 返回**全部成员**的名次顺序（零发言的成员也在，排在最后按 id 升序），长度 = len(members)。
-func ContributionRank(events []rankInput, members []string) []string {
+func ContributionRank(events []RankInput, members []string) []string {
 	counts := make(map[string]int, len(members))
-	byActor := make(map[string][]rankInput, len(members))
+	byActor := make(map[string][]RankInput, len(members))
 	memberSet := make(map[string]bool, len(members))
 	for _, m := range members {
 		memberSet[m] = true
@@ -135,7 +135,7 @@ type SeatSnapshot struct {
 // 只读派生、不落表；创建者永久占 1 席，其余 k-1 席按贡献度名次取。
 func DeriveSeats(memberIDs []string, creatorID string, rosterRev, epoch int64, events []Event) SeatSnapshot {
 	k := GovernorSeats(len(memberIDs))
-	msgs := make([]rankInput, 0, len(events))
+	msgs := make([]RankInput, 0, len(events))
 	seen := make(map[string]bool, len(events))
 	ids := make([]string, 0, len(events))
 	for _, e := range events {
@@ -147,7 +147,7 @@ func DeriveSeats(memberIDs []string, creatorID string, rosterRev, epoch int64, e
 			continue
 		}
 		ids = append(ids, e.EventID)
-		msgs = append(msgs, rankInput{EventID: e.EventID, Actor: e.ID, CreatedAt: e.CreatedAt})
+		msgs = append(msgs, RankInput{EventID: e.EventID, Actor: e.ID, CreatedAt: e.CreatedAt})
 	}
 	snap := SeatSnapshot{
 		RosterRev: rosterRev, RosterEpoch: epoch,

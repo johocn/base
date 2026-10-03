@@ -1,0 +1,621 @@
+{
+  "sections": {
+    "contribution_rank": [
+      {
+        "name": "equal_count_tiebreak",
+        "members": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "events": [
+          {
+            "event_id": "e1",
+            "actor": "a",
+            "created_at": 1000
+          },
+          {
+            "event_id": "e2",
+            "actor": "b",
+            "created_at": 1000
+          },
+          {
+            "event_id": "e3",
+            "actor": "d",
+            "created_at": 1000
+          },
+          {
+            "event_id": "e4",
+            "actor": "a",
+            "created_at": 2000
+          },
+          {
+            "event_id": "e5",
+            "actor": "b",
+            "created_at": 2000
+          }
+        ],
+        "ranked": [
+          "a",
+          "b",
+          "d",
+          "c"
+        ]
+      },
+      {
+        "name": "brush_window",
+        "members": [
+          "a",
+          "b"
+        ],
+        "events": [
+          {
+            "event_id": "ba_00",
+            "actor": "a",
+            "created_at": 0
+          },
+          {
+            "event_id": "ba_01",
+            "actor": "a",
+            "created_at": 1000
+          },
+          {
+            "event_id": "ba_02",
+            "actor": "a",
+            "created_at": 2000
+          },
+          {
+            "event_id": "ba_03",
+            "actor": "a",
+            "created_at": 3000
+          },
+          {
+            "event_id": "ba_04",
+            "actor": "a",
+            "created_at": 4000
+          },
+          {
+            "event_id": "ba_05",
+            "actor": "a",
+            "created_at": 5000
+          },
+          {
+            "event_id": "ba_06",
+            "actor": "a",
+            "created_at": 6000
+          },
+          {
+            "event_id": "ba_07",
+            "actor": "a",
+            "created_at": 7000
+          },
+          {
+            "event_id": "ba_08",
+            "actor": "a",
+            "created_at": 8000
+          },
+          {
+            "event_id": "ba_09",
+            "actor": "a",
+            "created_at": 9000
+          },
+          {
+            "event_id": "ba_10",
+            "actor": "a",
+            "created_at": 10000
+          },
+          {
+            "event_id": "ba_11",
+            "actor": "a",
+            "created_at": 11000
+          },
+          {
+            "event_id": "ba_12",
+            "actor": "a",
+            "created_at": 12000
+          },
+          {
+            "event_id": "ba_13",
+            "actor": "a",
+            "created_at": 13000
+          },
+          {
+            "event_id": "ba_14",
+            "actor": "a",
+            "created_at": 14000
+          },
+          {
+            "event_id": "ba_15",
+            "actor": "a",
+            "created_at": 15000
+          },
+          {
+            "event_id": "ba_16",
+            "actor": "a",
+            "created_at": 16000
+          },
+          {
+            "event_id": "ba_17",
+            "actor": "a",
+            "created_at": 17000
+          },
+          {
+            "event_id": "ba_18",
+            "actor": "a",
+            "created_at": 18000
+          },
+          {
+            "event_id": "ba_19",
+            "actor": "a",
+            "created_at": 19000
+          },
+          {
+            "event_id": "ba_20",
+            "actor": "a",
+            "created_at": 20000
+          },
+          {
+            "event_id": "ba_21",
+            "actor": "a",
+            "created_at": 21000
+          },
+          {
+            "event_id": "ba_22",
+            "actor": "a",
+            "created_at": 22000
+          },
+          {
+            "event_id": "ba_23",
+            "actor": "a",
+            "created_at": 23000
+          },
+          {
+            "event_id": "ba_24",
+            "actor": "a",
+            "created_at": 24000
+          },
+          {
+            "event_id": "bb_00",
+            "actor": "b",
+            "created_at": 500
+          },
+          {
+            "event_id": "bb_01",
+            "actor": "b",
+            "created_at": 1500
+          },
+          {
+            "event_id": "bb_02",
+            "actor": "b",
+            "created_at": 2500
+          },
+          {
+            "event_id": "bb_03",
+            "actor": "b",
+            "created_at": 3500
+          },
+          {
+            "event_id": "bb_04",
+            "actor": "b",
+            "created_at": 4500
+          }
+        ],
+        "ranked": [
+          "a",
+          "b"
+        ]
+      },
+      {
+        "name": "removed_member_filter",
+        "members": [
+          "a",
+          "b"
+        ],
+        "events": [
+          {
+            "event_id": "r1",
+            "actor": "a",
+            "created_at": 1
+          },
+          {
+            "event_id": "r2",
+            "actor": "b",
+            "created_at": 1
+          },
+          {
+            "event_id": "r3",
+            "actor": "c",
+            "created_at": 1
+          }
+        ],
+        "ranked": [
+          "a",
+          "b"
+        ]
+      },
+      {
+        "name": "all_zero_msgs",
+        "members": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "events": [],
+        "ranked": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ]
+      }
+    ],
+    "derive_seats": [
+      {
+        "name": "decidable_k1",
+        "members": [
+          "a",
+          "b",
+          "c"
+        ],
+        "creator": "a",
+        "roster_rev": 1,
+        "epoch": 1,
+        "events": [
+          {
+            "event_id": "dk1_a",
+            "id": "a",
+            "created_at": 1000,
+            "body_json": "{\"action\":\"msg\"}"
+          },
+          {
+            "event_id": "dk1_b",
+            "id": "b",
+            "created_at": 2000,
+            "body_json": "{\"action\":\"msg\"}"
+          }
+        ],
+        "seats": 1,
+        "ranked": [
+          "a",
+          "b",
+          "c"
+        ],
+        "governors": [
+          "a"
+        ],
+        "decidable": true,
+        "watermark": "8a9acf2caaa88f70"
+      },
+      {
+        "name": "decidable_k3",
+        "members": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e",
+          "f",
+          "g",
+          "h",
+          "i",
+          "j",
+          "k",
+          "l",
+          "m",
+          "n",
+          "o"
+        ],
+        "creator": "a",
+        "roster_rev": 1,
+        "epoch": 1,
+        "events": [
+          {
+            "event_id": "dk3_b1",
+            "id": "b",
+            "created_at": 1000,
+            "body_json": "{\"action\":\"msg\"}"
+          },
+          {
+            "event_id": "dk3_b2",
+            "id": "b",
+            "created_at": 2000,
+            "body_json": "{\"action\":\"msg\"}"
+          },
+          {
+            "event_id": "dk3_b3",
+            "id": "b",
+            "created_at": 3000,
+            "body_json": "{\"action\":\"msg\"}"
+          },
+          {
+            "event_id": "dk3_c1",
+            "id": "c",
+            "created_at": 1000,
+            "body_json": "{\"action\":\"msg\"}"
+          },
+          {
+            "event_id": "dk3_c2",
+            "id": "c",
+            "created_at": 2000,
+            "body_json": "{\"action\":\"msg\"}"
+          },
+          {
+            "event_id": "dk3_d1",
+            "id": "d",
+            "created_at": 1000,
+            "body_json": "{\"action\":\"msg\"}"
+          },
+          {
+            "event_id": "dk3_a1",
+            "id": "a",
+            "created_at": 1000,
+            "body_json": "{\"action\":\"msg\"}"
+          }
+        ],
+        "seats": 3,
+        "ranked": [
+          "b",
+          "c",
+          "a",
+          "d",
+          "e",
+          "f",
+          "g",
+          "h",
+          "i",
+          "j",
+          "k",
+          "l",
+          "m",
+          "n",
+          "o"
+        ],
+        "governors": [
+          "a",
+          "b",
+          "c"
+        ],
+        "decidable": true,
+        "watermark": "577ec810c9f922ca"
+      },
+      {
+        "name": "undecidable_empty_msgs_k3",
+        "members": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e",
+          "f",
+          "g",
+          "h",
+          "i",
+          "j",
+          "k",
+          "l",
+          "m",
+          "n",
+          "o"
+        ],
+        "creator": "a",
+        "roster_rev": 1,
+        "epoch": 1,
+        "events": [],
+        "seats": 3,
+        "ranked": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e",
+          "f",
+          "g",
+          "h",
+          "i",
+          "j",
+          "k",
+          "l",
+          "m",
+          "n",
+          "o"
+        ],
+        "governors": [
+          "a",
+          "b",
+          "c"
+        ],
+        "decidable": false,
+        "watermark": "e3b0c44298fc1c14"
+      },
+      {
+        "name": "k1_no_ranking_needed",
+        "members": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e"
+        ],
+        "creator": "a",
+        "roster_rev": 1,
+        "epoch": 1,
+        "events": [],
+        "seats": 1,
+        "ranked": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e"
+        ],
+        "governors": [
+          "a"
+        ],
+        "decidable": true,
+        "watermark": "e3b0c44298fc1c14"
+      },
+      {
+        "name": "event_dedup_by_event_id",
+        "members": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "creator": "a",
+        "roster_rev": 1,
+        "epoch": 1,
+        "events": [
+          {
+            "event_id": "dup1",
+            "id": "a",
+            "created_at": 1000,
+            "body_json": "{\"action\":\"msg\"}"
+          },
+          {
+            "event_id": "dup1",
+            "id": "a",
+            "created_at": 2000,
+            "body_json": "{\"action\":\"msg\"}"
+          },
+          {
+            "event_id": "nomsg1",
+            "id": "b",
+            "created_at": 1000,
+            "body_json": "{\"action\":\"roster\"}"
+          },
+          {
+            "event_id": "msg2",
+            "id": "b",
+            "created_at": 2000,
+            "body_json": "{\"action\":\"msg\"}"
+          }
+        ],
+        "seats": 1,
+        "ranked": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "governors": [
+          "a"
+        ],
+        "decidable": true,
+        "watermark": "498f20bf032337f0"
+      }
+    ],
+    "event_watermark": [
+      {
+        "name": "watermark_empty",
+        "ids": [],
+        "watermark": "e3b0c44298fc1c14"
+      },
+      {
+        "name": "watermark_single",
+        "ids": [
+          "abc"
+        ],
+        "watermark": "ba7816bf8f01cfea"
+      },
+      {
+        "name": "watermark_reordered",
+        "ids": [
+          "c",
+          "a",
+          "b"
+        ],
+        "watermark": "ba7816bf8f01cfea"
+      },
+      {
+        "name": "watermark_dup_removed",
+        "ids": [
+          "a",
+          "a",
+          "b"
+        ],
+        "watermark": "38760eabb666e8e6"
+      }
+    ],
+    "governor_seats_and_quorums": [
+      {
+        "name": "m1_k1",
+        "m": 1,
+        "seats": 1
+      },
+      {
+        "name": "m10_k1",
+        "m": 10,
+        "seats": 1
+      },
+      {
+        "name": "m11_k3",
+        "m": 11,
+        "seats": 3
+      },
+      {
+        "name": "m30_k5",
+        "m": 30,
+        "seats": 4
+      },
+      {
+        "name": "m100_k10_cap",
+        "m": 100,
+        "seats": 10
+      },
+      {
+        "name": "m101_k10_cap",
+        "m": 101,
+        "seats": 10
+      },
+      {
+        "name": "quorum_remove_k1",
+        "k": 1,
+        "remove": 1
+      },
+      {
+        "name": "quorum_remove_k3",
+        "k": 3,
+        "remove": 2
+      },
+      {
+        "name": "quorum_remove_k10",
+        "k": 10,
+        "remove": 7
+      },
+      {
+        "name": "quorum_dissolve_proposer_k1",
+        "k": 1,
+        "dp": 1
+      },
+      {
+        "name": "quorum_dissolve_proposer_k2",
+        "k": 2,
+        "dp": 2
+      },
+      {
+        "name": "quorum_dissolve_proposer_k10",
+        "k": 10,
+        "dp": 2
+      },
+      {
+        "name": "quorum_dissolve_vote_m1",
+        "m": 1,
+        "dv": 1
+      },
+      {
+        "name": "quorum_dissolve_vote_m30",
+        "m": 30,
+        "dv": 11
+      },
+      {
+        "name": "quorum_dissolve_vote_m90",
+        "m": 90,
+        "dv": 30
+      }
+    ]
+  },
+  "version": 1
+}

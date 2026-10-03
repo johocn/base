@@ -39,6 +39,9 @@ func main() {
 	if err := writeRelease(*out); err != nil {
 		fail(err)
 	}
+	if err := writeSeats(*out); err != nil {
+		fail(err)
+	}
 }
 
 func writeMerkle(out string) error {
@@ -265,6 +268,199 @@ func writeRelease(out string) error {
 			"doc":           doc,
 		}},
 	})
+}
+
+// writeSeats 产出席位派生黄金向量：GovernorSeats / Quorums / EventWatermark / ContributionRank / DeriveSeats。
+func writeSeats(out string) error {
+	type govCase struct {
+		Name   string `json:"name"`
+		M      int    `json:"m,omitempty"`
+		K      int    `json:"k,omitempty"`
+		Remove int    `json:"remove,omitempty"`
+		DP     int    `json:"dp,omitempty"`
+		DV     int    `json:"dv,omitempty"`
+		Seats  int    `json:"seats,omitempty"`
+	}
+	type watermarkCase struct {
+		Name      string   `json:"name"`
+		IDs       []string `json:"ids"`
+		Watermark string   `json:"watermark"`
+	}
+	type rankEv struct {
+		EventID   string `json:"event_id"`
+		Actor     string `json:"actor"`
+		CreatedAt int64  `json:"created_at"`
+	}
+	type rankCase struct {
+		Name    string   `json:"name"`
+		Members []string `json:"members"`
+		Events  []rankEv `json:"events"`
+		Ranked  []string `json:"ranked"`
+	}
+	type deriveEv struct {
+		EventID   string `json:"event_id"`
+		ID        string `json:"id"`
+		CreatedAt int64  `json:"created_at"`
+		BodyJSON  string `json:"body_json"`
+	}
+	type deriveCase struct {
+		Name      string     `json:"name"`
+		Members   []string   `json:"members"`
+		Creator   string     `json:"creator"`
+		RosterRev int64      `json:"roster_rev"`
+		Epoch     int64      `json:"epoch"`
+		Events    []deriveEv `json:"events"`
+		Seats     int        `json:"seats"`
+		Ranked    []string   `json:"ranked"`
+		Governors []string   `json:"governors"`
+		Decidable bool       `json:"decidable"`
+		Watermark string     `json:"watermark"`
+	}
+
+	toRankEvs := func(in []store.RankInput) []rankEv {
+		out := make([]rankEv, len(in))
+		for i, e := range in {
+			out[i] = rankEv{EventID: e.EventID, Actor: e.Actor, CreatedAt: e.CreatedAt}
+		}
+		return out
+	}
+	toDeriveEvs := func(in []store.Event) []deriveEv {
+		out := make([]deriveEv, len(in))
+		for i, e := range in {
+			out[i] = deriveEv{EventID: e.EventID, ID: e.ID, CreatedAt: e.CreatedAt, BodyJSON: e.BodyJSON}
+		}
+		return out
+	}
+
+	// — Section 1: GovernorSeats + Quorums —
+	govCases := []govCase{
+		{Name: "m1_k1", M: 1, Seats: store.GovernorSeats(1)},
+		{Name: "m10_k1", M: 10, Seats: store.GovernorSeats(10)},
+		{Name: "m11_k3", M: 11, Seats: store.GovernorSeats(11)},
+		{Name: "m30_k5", M: 30, Seats: store.GovernorSeats(30)},
+		{Name: "m100_k10_cap", M: 100, Seats: store.GovernorSeats(100)},
+		{Name: "m101_k10_cap", M: 101, Seats: store.GovernorSeats(101)},
+		{Name: "quorum_remove_k1", K: 1, Remove: store.RemoveQuorum(1)},
+		{Name: "quorum_remove_k3", K: 3, Remove: store.RemoveQuorum(3)},
+		{Name: "quorum_remove_k10", K: 10, Remove: store.RemoveQuorum(10)},
+		{Name: "quorum_dissolve_proposer_k1", K: 1, DP: store.DissolveProposerQuorum(1)},
+		{Name: "quorum_dissolve_proposer_k2", K: 2, DP: store.DissolveProposerQuorum(2)},
+		{Name: "quorum_dissolve_proposer_k10", K: 10, DP: store.DissolveProposerQuorum(10)},
+		{Name: "quorum_dissolve_vote_m1", M: 1, DV: store.DissolveVoteQuorum(1)},
+		{Name: "quorum_dissolve_vote_m30", M: 30, DV: store.DissolveVoteQuorum(30)},
+		{Name: "quorum_dissolve_vote_m90", M: 90, DV: store.DissolveVoteQuorum(90)},
+	}
+
+	// — Section 2: EventWatermark —
+	watermarkCases := []watermarkCase{
+		{Name: "watermark_empty", IDs: []string{}, Watermark: store.EventWatermark(nil)},
+		{Name: "watermark_single", IDs: []string{"abc"}, Watermark: store.EventWatermark([]string{"abc"})},
+		{Name: "watermark_reordered", IDs: []string{"c", "a", "b"}, Watermark: store.EventWatermark([]string{"c", "a", "b"})},
+		{Name: "watermark_dup_removed", IDs: []string{"a", "a", "b"}, Watermark: store.EventWatermark([]string{"a", "a", "b"})},
+	}
+
+	// — Section 3: ContributionRank —
+	eqMembers := []string{"a", "b", "c", "d"}
+	eqEvents := []store.RankInput{
+		{EventID: "e1", Actor: "a", CreatedAt: 1_000},
+		{EventID: "e2", Actor: "b", CreatedAt: 1_000},
+		{EventID: "e3", Actor: "d", CreatedAt: 1_000},
+		{EventID: "e4", Actor: "a", CreatedAt: 2_000},
+		{EventID: "e5", Actor: "b", CreatedAt: 2_000},
+	}
+
+	brushMembers := []string{"a", "b"}
+	brushEvents := make([]store.RankInput, 0, 30)
+	for i := 0; i < 25; i++ {
+		brushEvents = append(brushEvents, store.RankInput{
+			EventID: fmt.Sprintf("ba_%02d", i), Actor: "a", CreatedAt: int64(i) * 1000,
+		})
+	}
+	for i := 0; i < 5; i++ {
+		brushEvents = append(brushEvents, store.RankInput{
+			EventID: fmt.Sprintf("bb_%02d", i), Actor: "b", CreatedAt: int64(i)*1000 + 500,
+		})
+	}
+
+	rmMembers := []string{"a", "b"}
+	rmEvents := []store.RankInput{
+		{EventID: "r1", Actor: "a", CreatedAt: 1},
+		{EventID: "r2", Actor: "b", CreatedAt: 1},
+		{EventID: "r3", Actor: "c", CreatedAt: 1},
+	}
+
+	zeroMembers := []string{"a", "b", "c", "d"}
+
+	rankCases := []rankCase{
+		{Name: "equal_count_tiebreak", Members: eqMembers, Events: toRankEvs(eqEvents), Ranked: store.ContributionRank(eqEvents, eqMembers)},
+		{Name: "brush_window", Members: brushMembers, Events: toRankEvs(brushEvents), Ranked: store.ContributionRank(brushEvents, brushMembers)},
+		{Name: "removed_member_filter", Members: rmMembers, Events: toRankEvs(rmEvents), Ranked: store.ContributionRank(rmEvents, rmMembers)},
+		{Name: "all_zero_msgs", Members: zeroMembers, Events: toRankEvs(nil), Ranked: store.ContributionRank(nil, zeroMembers)},
+	}
+
+	// — Section 4: DeriveSeats —
+	members3 := []string{"a", "b", "c"}
+	decK1Events := []store.Event{
+		{EventID: "dk1_a", ID: "a", CreatedAt: 1000, BodyJSON: `{"action":"msg"}`},
+		{EventID: "dk1_b", ID: "b", CreatedAt: 2000, BodyJSON: `{"action":"msg"}`},
+	}
+	decK1Snap := store.DeriveSeats(members3, "a", 1, 1, decK1Events)
+
+	members15 := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o"}
+	decK3Events := []store.Event{
+		{EventID: "dk3_b1", ID: "b", CreatedAt: 1000, BodyJSON: `{"action":"msg"}`},
+		{EventID: "dk3_b2", ID: "b", CreatedAt: 2000, BodyJSON: `{"action":"msg"}`},
+		{EventID: "dk3_b3", ID: "b", CreatedAt: 3000, BodyJSON: `{"action":"msg"}`},
+		{EventID: "dk3_c1", ID: "c", CreatedAt: 1000, BodyJSON: `{"action":"msg"}`},
+		{EventID: "dk3_c2", ID: "c", CreatedAt: 2000, BodyJSON: `{"action":"msg"}`},
+		{EventID: "dk3_d1", ID: "d", CreatedAt: 1000, BodyJSON: `{"action":"msg"}`},
+		{EventID: "dk3_a1", ID: "a", CreatedAt: 1000, BodyJSON: `{"action":"msg"}`},
+	}
+	decK3Snap := store.DeriveSeats(members15, "a", 1, 1, decK3Events)
+
+	undecEvents := []store.Event{}
+	undecSnap := store.DeriveSeats(members15, "a", 1, 1, undecEvents)
+
+	members5 := []string{"a", "b", "c", "d", "e"}
+	k1NoRankSnap := store.DeriveSeats(members5, "a", 1, 1, []store.Event{})
+
+	dedupEvents := []store.Event{
+		{EventID: "dup1", ID: "a", CreatedAt: 1000, BodyJSON: `{"action":"msg"}`},
+		{EventID: "dup1", ID: "a", CreatedAt: 2000, BodyJSON: `{"action":"msg"}`},
+		{EventID: "nomsg1", ID: "b", CreatedAt: 1000, BodyJSON: `{"action":"roster"}`},
+		{EventID: "msg2", ID: "b", CreatedAt: 2000, BodyJSON: `{"action":"msg"}`},
+	}
+	members4 := []string{"a", "b", "c", "d"}
+	dedupSnap := store.DeriveSeats(members4, "a", 1, 1, dedupEvents)
+
+	deriveCases := []deriveCase{
+		{Name: "decidable_k1", Members: members3, Creator: "a", RosterRev: 1, Epoch: 1,
+			Events: toDeriveEvs(decK1Events), Seats: decK1Snap.SeatCount, Ranked: decK1Snap.Ranked,
+			Governors: decK1Snap.Governors, Decidable: decK1Snap.Decidable, Watermark: decK1Snap.Watermark},
+		{Name: "decidable_k3", Members: members15, Creator: "a", RosterRev: 1, Epoch: 1,
+			Events: toDeriveEvs(decK3Events), Seats: decK3Snap.SeatCount, Ranked: decK3Snap.Ranked,
+			Governors: decK3Snap.Governors, Decidable: decK3Snap.Decidable, Watermark: decK3Snap.Watermark},
+		{Name: "undecidable_empty_msgs_k3", Members: members15, Creator: "a", RosterRev: 1, Epoch: 1,
+			Events: toDeriveEvs(undecEvents), Seats: undecSnap.SeatCount, Ranked: undecSnap.Ranked,
+			Governors: undecSnap.Governors, Decidable: undecSnap.Decidable, Watermark: undecSnap.Watermark},
+		{Name: "k1_no_ranking_needed", Members: members5, Creator: "a", RosterRev: 1, Epoch: 1,
+			Events: toDeriveEvs(nil), Seats: k1NoRankSnap.SeatCount, Ranked: k1NoRankSnap.Ranked,
+			Governors: k1NoRankSnap.Governors, Decidable: k1NoRankSnap.Decidable, Watermark: k1NoRankSnap.Watermark},
+		{Name: "event_dedup_by_event_id", Members: members4, Creator: "a", RosterRev: 1, Epoch: 1,
+			Events: toDeriveEvs(dedupEvents), Seats: dedupSnap.SeatCount, Ranked: dedupSnap.Ranked,
+			Governors: dedupSnap.Governors, Decidable: dedupSnap.Decidable, Watermark: dedupSnap.Watermark},
+	}
+
+	doc := map[string]any{
+		"version": 1,
+		"sections": map[string]any{
+			"governor_seats_and_quorums": govCases,
+			"event_watermark":            watermarkCases,
+			"contribution_rank":          rankCases,
+			"derive_seats":               deriveCases,
+		},
+	}
+	return writeJSON(filepath.Join(out, "seats.json"), doc)
 }
 
 func writeJSON(path string, doc any) error {

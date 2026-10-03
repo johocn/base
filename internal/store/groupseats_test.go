@@ -44,10 +44,10 @@ func TestQuorums(t *testing.T) {
 }
 
 // rankInputs 把 Event 摊成 ContributionRank 的输入行。
-func rankInputs(events []Event) []rankInput {
-	out := make([]rankInput, 0, len(events))
+func rankInputs(events []Event) []RankInput {
+	out := make([]RankInput, 0, len(events))
 	for _, e := range events {
-		out = append(out, rankInput{EventID: e.EventID, Actor: e.ID, CreatedAt: e.CreatedAt})
+		out = append(out, RankInput{EventID: e.EventID, Actor: e.ID, CreatedAt: e.CreatedAt})
 	}
 	return out
 }
