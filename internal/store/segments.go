@@ -145,3 +145,97 @@ func nextContentVersionExec(e sqlExec) (int64, error) {
 	}
 	return cur + 1, nil
 }
+
+// CourseLesson 是 course 的一条课时（从 segments 表反向读出的子项 item_id + kind）。
+// LessonChild 是 lesson 的一个子项（article/video/quiz 的 item_id + kind）。
+type LessonChild struct {
+	ChildItemID string
+	Kind        string // article | video | quiz
+}
+
+// ListCourseLessons 批量反查 course → 课时 item_id 列表。照 ListArticles 体例；ids 为空返回空 map。
+// 查 segments.item_id=course AND seq>=1 AND kind='lesson'，text 列是课时的 item_id。
+func (s *Store) ListCourseLessons(courseIDs []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	if len(courseIDs) == 0 {
+		return out, nil
+	}
+	q := `SELECT item_id,text FROM segments WHERE item_id IN (` + placeholders(len(courseIDs)) + `)
+		AND seq>=1 AND kind='lesson' ORDER BY item_id ASC, seq ASC`
+	args := make([]any, len(courseIDs))
+	for i, id := range courseIDs {
+		args[i] = id
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var courseID, lessonID string
+		if err := rows.Scan(&courseID, &lessonID); err != nil {
+			return nil, err
+		}
+		out[courseID] = append(out[courseID], lessonID)
+	}
+	return out, rows.Err()
+}
+
+// ListLessonChildren 批量反查 lesson → 子项（article/video/quiz）列表。
+// 只保留 kind ∈ {article, video, quiz} 的 segments 行；ids 为空返回空 map。
+func (s *Store) ListLessonChildren(lessonIDs []string) (map[string][]LessonChild, error) {
+	out := map[string][]LessonChild{}
+	if len(lessonIDs) == 0 {
+		return out, nil
+	}
+	q := `SELECT item_id,kind,text FROM segments WHERE item_id IN (` + placeholders(len(lessonIDs)) + `)
+		AND seq>=1 AND kind IN ('article','video','quiz') ORDER BY item_id ASC, seq ASC`
+	args := make([]any, len(lessonIDs))
+	for i, id := range lessonIDs {
+		args[i] = id
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var lessonID, kind, text string
+		if err := rows.Scan(&lessonID, &kind, &text); err != nil {
+			return nil, err
+		}
+		out[lessonID] = append(out[lessonID], LessonChild{ChildItemID: text, Kind: kind})
+	}
+	return out, rows.Err()
+}
+
+// ListLessonCourse 批量反查 lesson → 父 course（item_id）；lesson 无归属时值为空串。
+// 查 segments.text=lessonItemID AND kind='lesson' AND seq>=1，父 course 在 segments.item_id 列。
+func (s *Store) ListLessonCourse(lessonIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(lessonIDs) == 0 {
+		return out, nil
+	}
+	q := `SELECT item_id,text FROM segments WHERE text IN (` + placeholders(len(lessonIDs)) + `)
+		AND kind='lesson' AND seq>=1`
+	args := make([]any, len(lessonIDs))
+	for i, id := range lessonIDs {
+		args[i] = id
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var courseID, lessonID string
+		if err := rows.Scan(&courseID, &lessonID); err != nil {
+			return nil, err
+		}
+		// 一个 lesson 理论上只归属一个 course；如多行，保留任意一条即可（用遇到的第一条）。
+		if _, ok := out[lessonID]; !ok {
+			out[lessonID] = courseID
+		}
+	}
+	return out, rows.Err()
+}

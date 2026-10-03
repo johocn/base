@@ -5,10 +5,12 @@ import { sha256Hex, utf8 } from "@base/protocol-ts";
 import type { Db } from "../db";
 import { ENC_PREFIX, decText } from "../host/aesgcm";
 
-// —— 质量门槛与名册截断（治理册 §4.3/§4.4，contributor.go:10-16） ——
+// —— 质量门槛与名册截断（治理册 §4.3/§4.4，contributor.go:10-20） ——
 export const ARTICLE_MIN_RUNES = 200;
 export const VIDEO_MIN_SECONDS = 60;
 export const QUIZ_MIN_QUESTIONS = 3;
+export const LESSON_MIN_ITEMS = 1;
+export const COURSE_MIN_LESSONS = 3;
 export const ROSTER_TOP_N = 10;
 
 // —— 治理动作 / 状态 / 门槛（govern.go:14-39） ——
@@ -143,13 +145,15 @@ export interface Contributor {
 interface Candidate {
   itemId: string;
   authorId: string;
-  type: string; // article | video | quiz（其余载体不计贡献）
+  type: string; // article | video | quiz | lesson | course
   bodyMd: string; // type == article
   durationSeconds: number; // type == video
   questionCount: number; // type == quiz
+  childPassedCount: number; // type == lesson：达标子项数
+  childPassedLessons: number; // type == course：达标课时数
 }
 
-/** meetsQualityGate（contributor.go:35-48）。 */
+/** meetsQualityGate（contributor.go:35-62）。 */
 function meetsQualityGate(c: Candidate): boolean {
   switch (c.type) {
     case "article":
@@ -158,6 +162,10 @@ function meetsQualityGate(c: Candidate): boolean {
       return c.durationSeconds >= VIDEO_MIN_SECONDS;
     case "quiz":
       return c.questionCount >= QUIZ_MIN_QUESTIONS;
+    case "lesson":
+      return c.childPassedCount >= LESSON_MIN_ITEMS;
+    case "course":
+      return c.childPassedLessons >= COURSE_MIN_LESSONS;
     default:
       return false;
   }
@@ -191,66 +199,6 @@ function decArticleBody(storeKey: Uint8Array | null, stored: string, itemId: str
 }
 
 /** 把候选条目按载体系补齐度量（ContributorRoster / restoredRosterAuthors 共用的那段）。 */
-function fillCandidateMetrics(
-  db: Db,
-  storeKey: Uint8Array | null,
-  cands: Candidate[],
-  index: Map<string, number>,
-): void {
-  const articleIds: string[] = [];
-  const videoIds: string[] = [];
-  const quizIds: string[] = [];
-  for (const c of cands) {
-    if (c.type === "article") articleIds.push(c.itemId);
-    else if (c.type === "video") videoIds.push(c.itemId);
-    else if (c.type === "quiz") quizIds.push(c.itemId);
-  }
-
-  // 注意：ListArticles / ListQuizzes / ListMediaDurations 的「ids 为空 = 全部」语义，
-  // 在无该类载体时必须整个跳过（contributor.go:120-122）。
-  if (articleIds.length > 0) {
-    const rows = db.select(
-      `SELECT item_id,body_md FROM articles WHERE item_id IN (${placeholders(articleIds.length)})`,
-      articleIds,
-    );
-    for (const r of rows) {
-      const itemId = toStr(r.item_id);
-      const i = index.get(itemId);
-      if (i !== undefined) cands[i].bodyMd = decArticleBody(storeKey, toStr(r.body_md), itemId);
-    }
-  }
-  if (quizIds.length > 0) {
-    const rows = db.select(
-      `SELECT item_id,question_json FROM quizzes WHERE item_id IN (${placeholders(quizIds.length)})`,
-      quizIds,
-    );
-    for (const r of rows) {
-      const i = index.get(toStr(r.item_id));
-      if (i === undefined) continue;
-      let count = 0;
-      // 题组 JSON 不可解析即计 0 题 → 未达门槛 → 跳过，不中断整张名册（contributor.go:146-149）。
-      try {
-        const doc = JSON.parse(toStr(r.question_json)) as { questions?: unknown };
-        if (doc !== null && typeof doc === "object" && Array.isArray(doc.questions)) {
-          count = doc.questions.length;
-        }
-      } catch {
-        count = 0;
-      }
-      cands[i].questionCount = count;
-    }
-  }
-  if (videoIds.length > 0) {
-    const rows = db.select(
-      `SELECT item_id,duration FROM media_meta WHERE item_id IN (${placeholders(videoIds.length)})`,
-      videoIds,
-    );
-    for (const r of rows) {
-      const i = index.get(toStr(r.item_id));
-      if (i !== undefined) cands[i].durationSeconds = Number(r.duration ?? 0);
-    }
-  }
-}
 
 function gatherRosterCandidates(rows: Record<string, unknown>[]): {
   cands: Candidate[];
@@ -266,6 +214,8 @@ function gatherRosterCandidates(rows: Record<string, unknown>[]): {
       bodyMd: "",
       durationSeconds: 0,
       questionCount: 0,
+      childPassedCount: 0,
+      childPassedLessons: 0,
     };
     index.set(c.itemId, cands.length);
     cands.push(c);
@@ -273,14 +223,295 @@ function gatherRosterCandidates(rows: Record<string, unknown>[]): {
   return { cands, index };
 }
 
-/** ContributorRoster（contributor.go:88-164）：只看 state='active' AND author_id<>''。 */
+/** ContributorRoster（contributor.go:102-229）：只看 state='active' AND author_id<>''。
+ * T5 扩展：新增 course / lesson 两类贡献载体，按「合并计 1」规则折叠父子。 */
 export function contributorRoster(db: Db, storeKey: Uint8Array | null): Contributor[] {
   const rows = db.select(
     `SELECT item_id,author_id,type FROM items WHERE state='active' AND author_id<>'' ORDER BY item_id ASC`,
   );
   const { cands, index } = gatherRosterCandidates(rows);
-  fillCandidateMetrics(db, storeKey, cands, index);
-  return deriveRoster(cands);
+
+  const courseIds: string[] = [];
+  const lessonIds: string[] = [];
+  const articleIds: string[] = [];
+  const videoIds: string[] = [];
+  const quizIds: string[] = [];
+  for (const c of cands) {
+    if (c.type === "course") courseIds.push(c.itemId);
+    else if (c.type === "lesson") lessonIds.push(c.itemId);
+    else if (c.type === "article") articleIds.push(c.itemId);
+    else if (c.type === "video") videoIds.push(c.itemId);
+    else if (c.type === "quiz") quizIds.push(c.itemId);
+  }
+
+  fillCandidateMetrics(db, storeKey, cands, index, articleIds, videoIds, quizIds);
+
+  // T5：course / lesson 按合并计 1 规则装配候选度量。
+  if (courseIds.length > 0 || lessonIds.length > 0) {
+    computeContainerPassedTs(db, cands, index, courseIds, lessonIds);
+  }
+
+  // accumulateCounts + 合并计 1：article/video/quiz 直接计；lesson 父 course 达标则跳过；course 达标计 1。
+  const counts = accumulateCountsTs(db, cands);
+  const out: Contributor[] = [];
+  for (const [id, n] of counts) out.push({ id, count: n });
+  out.sort((a, b) => (a.count !== b.count ? b.count - a.count : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return out.length > ROSTER_TOP_N ? out.slice(0, ROSTER_TOP_N) : out;
+}
+
+/** fillCandidateMetrics（contributor.go:134-183）：article/video/quiz 度量补齐。
+ * TS 版提供两种签名：显式传 ids（性能更佳），不传时内部从 cands 分类型扫描（兼容 restoredRosterAuthors）。 */
+function fillCandidateMetrics(
+  db: Db,
+  storeKey: Uint8Array | null,
+  cands: Candidate[],
+  index: Map<string, number>,
+  articleIds?: string[],
+  videoIds?: string[],
+  quizIds?: string[],
+): void {
+  const aIds = articleIds ?? cands.filter((c) => c.type === "article").map((c) => c.itemId);
+  const vIds = videoIds ?? cands.filter((c) => c.type === "video").map((c) => c.itemId);
+  const qIds = quizIds ?? cands.filter((c) => c.type === "quiz").map((c) => c.itemId);
+
+  if (aIds.length > 0) {
+    const rows = db.select(
+      `SELECT item_id,body_md FROM articles WHERE item_id IN (${placeholders(aIds.length)})`,
+      aIds,
+    );
+    for (const r of rows) {
+      const itemId = toStr(r.item_id);
+      const i = index.get(itemId);
+      if (i !== undefined) cands[i].bodyMd = decArticleBody(storeKey, toStr(r.body_md), itemId);
+    }
+  }
+  if (qIds.length > 0) {
+    const rows = db.select(
+      `SELECT item_id,question_json FROM quizzes WHERE item_id IN (${placeholders(qIds.length)})`,
+      qIds,
+    );
+    for (const r of rows) {
+      const i = index.get(toStr(r.item_id));
+      if (i === undefined) continue;
+      let count = 0;
+      try {
+        const doc = JSON.parse(toStr(r.question_json)) as { questions?: unknown };
+        if (doc !== null && typeof doc === "object" && Array.isArray(doc.questions)) {
+          count = doc.questions.length;
+        }
+      } catch {
+        count = 0;
+      }
+      cands[i].questionCount = count;
+    }
+  }
+  if (vIds.length > 0) {
+    const rows = db.select(
+      `SELECT item_id,duration FROM media_meta WHERE item_id IN (${placeholders(vIds.length)})`,
+      vIds,
+    );
+    for (const r of rows) {
+      const i = index.get(toStr(r.item_id));
+      if (i !== undefined) cands[i].durationSeconds = Number(r.duration ?? 0);
+    }
+  }
+}
+
+/** computeContainerPassed（contributor.go:286-441）：反查 segments 批量计算 lesson→达标布尔 / course→达标布尔；回写到 Candidate。 */
+function computeContainerPassedTs(
+  db: Db,
+  cands: Candidate[],
+  index: Map<string, number>,
+  courseIds: string[],
+  lessonIds: string[],
+): void {
+  // courseLessons：course → lessonIDs[]（segments.item_id=course AND kind='lesson'）
+  const courseLessons = new Map<string, string[]>();
+  if (courseIds.length > 0) {
+    const rows = db.select(
+      `SELECT item_id,text FROM segments WHERE item_id IN (${placeholders(courseIds.length)}) AND seq>=1 AND kind='lesson' ORDER BY item_id ASC, seq ASC`,
+      courseIds,
+    );
+    for (const r of rows) {
+      const cid = toStr(r.item_id);
+      const lid = toStr(r.text);
+      const arr = courseLessons.get(cid) ?? [];
+      arr.push(lid);
+      courseLessons.set(cid, arr);
+    }
+  }
+
+  // lessonChildren：lesson → [{kind, childId}]
+  const lessonChildren = new Map<string, { kind: string; childId: string }[]>();
+  if (lessonIds.length > 0) {
+    const rows = db.select(
+      `SELECT item_id,kind,text FROM segments WHERE item_id IN (${placeholders(lessonIds.length)}) AND seq>=1 AND kind IN ('article','video','quiz') ORDER BY item_id ASC, seq ASC`,
+      lessonIds,
+    );
+    for (const r of rows) {
+      const lid = toStr(r.item_id);
+      const kind = toStr(r.kind);
+      const cid = toStr(r.text);
+      const arr = lessonChildren.get(lid) ?? [];
+      arr.push({ kind, childId: cid });
+      lessonChildren.set(lid, arr);
+    }
+  }
+
+  // 收集所有子项 item_id 批量查 type。
+  const childIDs = new Set<string>();
+  for (const children of lessonChildren.values()) {
+    for (const ch of children) childIDs.add(ch.childId);
+  }
+  const childType = new Map<string, string>();
+  const childList = [...childIDs];
+  if (childList.length > 0) {
+    const rows = db.select(
+      `SELECT item_id,type FROM items WHERE item_id IN (${placeholders(childList.length)})`,
+      childList,
+    );
+    for (const r of rows) childType.set(toStr(r.item_id), toStr(r.type));
+  }
+
+  // 批量查子项 article body / quiz question_json / video duration。
+  const articleBatch: string[] = [];
+  const videoBatch: string[] = [];
+  const quizBatch: string[] = [];
+  for (const id of childList) {
+    const t = childType.get(id);
+    if (t === "article") articleBatch.push(id);
+    else if (t === "video") videoBatch.push(id);
+    else if (t === "quiz") quizBatch.push(id);
+  }
+  const articleBody = new Map<string, string>();
+  if (articleBatch.length > 0) {
+    const rows = db.select(
+      `SELECT item_id,body_md FROM articles WHERE item_id IN (${placeholders(articleBatch.length)})`,
+      articleBatch,
+    );
+    for (const r of rows) articleBody.set(toStr(r.item_id), toStr(r.body_md));
+  }
+  const quizCount = new Map<string, number>();
+  if (quizBatch.length > 0) {
+    const rows = db.select(
+      `SELECT item_id,question_json FROM quizzes WHERE item_id IN (${placeholders(quizBatch.length)})`,
+      quizBatch,
+    );
+    for (const r of rows) {
+      let count = 0;
+      try {
+        const doc = JSON.parse(toStr(r.question_json)) as { questions?: unknown };
+        if (doc !== null && typeof doc === "object" && Array.isArray(doc.questions)) {
+          count = doc.questions.length;
+        }
+      } catch {
+        count = 0;
+      }
+      quizCount.set(toStr(r.item_id), count);
+    }
+  }
+  const videoDur = new Map<string, number>();
+  if (videoBatch.length > 0) {
+    const rows = db.select(
+      `SELECT item_id,duration FROM media_meta WHERE item_id IN (${placeholders(videoBatch.length)})`,
+      videoBatch,
+    );
+    for (const r of rows) videoDur.set(toStr(r.item_id), Number(r.duration ?? 0));
+  }
+
+  // 判定每个子项是否达标。
+  const childPassed = new Map<string, boolean>();
+  for (const id of childList) {
+    const t = childType.get(id);
+    let passed = false;
+    if (t === "article") {
+      passed = countNonSpaceRunes(articleBody.get(id) ?? "") >= ARTICLE_MIN_RUNES;
+    } else if (t === "video") {
+      passed = (videoDur.get(id) ?? 0) >= VIDEO_MIN_SECONDS;
+    } else if (t === "quiz") {
+      passed = (quizCount.get(id) ?? 0) >= QUIZ_MIN_QUESTIONS;
+    }
+    childPassed.set(id, passed);
+  }
+
+  // 判定每个 lesson 达标并回写。
+  const lessonPassedCount = new Map<string, number>();
+  const lessonPassed = new Map<string, boolean>();
+  for (const [lessonId, children] of lessonChildren) {
+    let n = 0;
+    for (const ch of children) {
+      if (childPassed.get(ch.childId)) n++;
+    }
+    lessonPassedCount.set(lessonId, n);
+    if (n >= LESSON_MIN_ITEMS) lessonPassed.set(lessonId, true);
+  }
+  for (const c of cands) {
+    if (c.type === "lesson") c.childPassedCount = lessonPassedCount.get(c.itemId) ?? 0;
+  }
+
+  // 判定每个 course 达标并回写。
+  for (const [courseId, lessons] of courseLessons) {
+    let n = 0;
+    for (const l of lessons) {
+      if (lessonPassed.get(l)) n++;
+    }
+    const i = index.get(courseId);
+    if (i !== undefined && cands[i].type === "course") cands[i].childPassedLessons = n;
+  }
+}
+
+/** accumulateCounts（contributor.go:236-282）：合并计 1 → author→count。 */
+function accumulateCountsTs(db: Db, cands: Candidate[]): Map<string, number> {
+  const coursePassed = new Map<string, boolean>();
+  for (const c of cands) {
+    if (c.type === "course") coursePassed.set(c.itemId, meetsQualityGate(c));
+  }
+
+  const allLessonIds: string[] = [];
+  const lessonPassed = new Map<string, boolean>();
+  for (const c of cands) {
+    if (c.type === "lesson") {
+      allLessonIds.push(c.itemId);
+      lessonPassed.set(c.itemId, meetsQualityGate(c));
+    }
+  }
+
+  // lesson→父 course（segments.text=lesson AND kind='lesson' → item_id=父 course）。
+  const lessonCourse = new Map<string, string>();
+  if (allLessonIds.length > 0) {
+    const rows = db.select(
+      `SELECT item_id,text FROM segments WHERE text IN (${placeholders(allLessonIds.length)}) AND kind='lesson' AND seq>=1`,
+      allLessonIds,
+    );
+    for (const r of rows) {
+      const cid = toStr(r.item_id);
+      const lid = toStr(r.text);
+      if (!lessonCourse.has(lid)) lessonCourse.set(lid, cid);
+    }
+  }
+
+  const counts = new Map<string, number>();
+  const bump = (id: string) => counts.set(id, (counts.get(id) ?? 0) + 1);
+  for (const c of cands) {
+    if (c.authorId === "") continue;
+    switch (c.type) {
+      case "article":
+      case "video":
+      case "quiz":
+        if (meetsQualityGate(c)) bump(c.authorId);
+        break;
+      case "lesson": {
+        const parent = lessonCourse.get(c.itemId);
+        if (parent && coursePassed.get(parent)) break; // 父 course 达标 → 跳过
+        if (meetsQualityGate(c)) bump(c.authorId);
+        break;
+      }
+      case "course":
+        if (meetsQualityGate(c)) bump(c.authorId);
+        break;
+    }
+  }
+  return counts;
 }
 
 /** restoredRosterAuthors（govern.go:179-258）：水位之后才退役且当前仍达门槛的作者集合。 */
