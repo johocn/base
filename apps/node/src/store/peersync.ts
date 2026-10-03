@@ -261,7 +261,7 @@ export function verifyBlobs(
  */
 export function eventBlobIndex(db: HostDb): Record<string, BlobRef> {
   const rows = db.all(`SELECT type,event_id,payload_cid FROM events
-\t\tWHERE type IN ('comment.v1','group.v1','dm.v1') AND payload_cid IS NOT NULL AND payload_cid<>''`);
+		WHERE type IN ('comment.v1','group.v1','dm.v1','circle.v1') AND payload_cid IS NOT NULL AND payload_cid<>''`);
   const out: Record<string, BlobRef> = {};
   for (const r of rows) {
     const typ = toStr(r.type);
@@ -271,6 +271,7 @@ export function eventBlobIndex(db: HostDb): Record<string, BlobRef> {
     let prefix = "comment:";
     if (typ === "group.v1") prefix = "group:";
     else if (typ === "dm.v1") prefix = "dm:";
+    else if (typ === "circle.v1") prefix = "circle:";
     out[cid] = { blobId: cid, seq: 0, size: 0, itemId: prefix + eventId };
   }
   return out;

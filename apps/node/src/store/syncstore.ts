@@ -28,6 +28,7 @@ import {
   type GovernVoteEvent,
 } from "./governProjection";
 import { contributorRoster as contributorRosterOf, type Contributor } from "../routes/derived";
+import { putCircleAssignment as putCircleAssignmentOf } from "./circle";
 import {
   contentVersion,
   countBlobsWithoutReplica,
@@ -123,6 +124,7 @@ export interface SyncStore {
   projectGovernVote(e: GovernVoteEvent): void;
   settleGovernProposal(proposalId: number, roster: Set<string>, rosterReady: boolean): void;
   contributorRoster(): Contributor[];
+  putCircleAssignment(itemID: string, circleID: string, origin: string, createdAt: number): void;
   listRevokedPayloads(): Set<string>;
   replicaPeers(blobId: string): string[];
   deleteBlob(blobId: string): void;
@@ -241,6 +243,10 @@ class SyncStoreImpl implements SyncStore {
 
   contributorRoster(): Contributor[] {
     return contributorRosterOf(hostDbAsDb(this.db), this.storeKey);
+  }
+
+  putCircleAssignment(itemID: string, circleID: string, origin: string, createdAt: number): void {
+    putCircleAssignmentOf(hostDbAsDb(this.db), itemID, circleID, origin, createdAt);
   }
 
   listRevokedPayloads(): Set<string> {

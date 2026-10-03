@@ -65,7 +65,7 @@ func (s *Store) ListComments(targetID string, cursorTS int64, cursorID string, l
 // 少了归属，缓存节点永远拉不下来、scrub 还会把块当孤儿删掉（册子 §4.4）。
 func (s *Store) EventBlobIndex() (map[string]BlobRef, error) {
 	rows, err := s.db.Query(`SELECT type,event_id,payload_cid FROM events
-		WHERE type IN ('comment.v1','group.v1','dm.v1') AND payload_cid IS NOT NULL AND payload_cid<>''`)
+		WHERE type IN ('comment.v1','group.v1','dm.v1','circle.v1') AND payload_cid IS NOT NULL AND payload_cid<>''`)
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +85,8 @@ func (s *Store) EventBlobIndex() (map[string]BlobRef, error) {
 			prefix = "group:"
 		case "dm.v1":
 			prefix = "dm:"
+		case "circle.v1":
+			prefix = "circle:"
 		}
 		out[cid] = BlobRef{BlobID: cid, ItemID: prefix + eventID}
 	}

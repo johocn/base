@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -523,5 +524,83 @@ func TestSyncEventsProgressProjectionConverges(t *testing.T) {
 	days, _ := dst.CheckinDaysOf(actor)
 	if !reflect.DeepEqual(days, wantDays) {
 		t.Fatalf("第二轮后 checkin_days 变了: %+v", days)
+	}
+}
+
+// T3 验收：对端 circle.v1 assign 事件到达后，本地 circle_assignments 有行。
+// 用 applySyncedCircleEvent 直接调——这是对端事件经反熵落地后的投影入口。
+func TestApplySyncedCircleEventAssignWritesCircleAssignments(t *testing.T) {
+	st := openTemp(t)
+	circleID := "00000000000000ff"
+	itemID := "article/ai1"
+
+	// action=assign 的合法事件：写 circle_assignments 一行。
+	body := fmt.Sprintf(`{"action":"assign","item_id":%q,"circle_id":%q,"content_hash":"ab"}`, itemID, circleID)
+	written, err := applySyncedCircleEvent(st, eventSyncItem{
+		EventID: eventIDHex(1), ID: "actor", Type: "circle.v1", BodyJSON: body, CreatedAt: 123,
+	})
+	if err != nil || !written {
+		t.Fatalf("written=%v err=%v", written, err)
+	}
+
+	// 直接查 circle_assignments 表验证行已写入（db 是私有字段，用 sql.Open 从 DataDir 读）。
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(st.DataDir(), "base.db"))+"?mode=ro")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	var gotItem, gotCircle, gotOrigin string
+	var gotCreatedAt int64
+	err = db.QueryRow(`SELECT item_id,circle_id,origin,created_at FROM circle_assignments WHERE item_id=?`, itemID).
+		Scan(&gotItem, &gotCircle, &gotOrigin, &gotCreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("circle_assignments 应写入一行，实际未找到")
+	}
+	if err != nil {
+		t.Fatalf("query circle_assignments: %v", err)
+	}
+	if gotItem != itemID || gotCircle != circleID || gotOrigin != "fusion" || gotCreatedAt != 123 {
+		t.Fatalf("circle_assignments 行不符: item=%s circle=%s origin=%s createdAt=%d", gotItem, gotCircle, gotOrigin, gotCreatedAt)
+	}
+
+	// 幂等：同事件重放不报错、不多写（INSERT OR IGNORE）。
+	if _, err2 := applySyncedCircleEvent(st, eventSyncItem{
+		EventID: eventIDHex(1), ID: "actor", Type: "circle.v1", BodyJSON: body, CreatedAt: 999,
+	}); err2 != nil {
+		t.Fatalf("重放应无错: %v", err2)
+	}
+	// Go 的 INSERT OR IGNORE 即使行已存在也返回 written=true（RowsAffected==0 但我们不判 RowsAffected）。
+	// 关键是 createdAt 应保留首次值 123，而非后来的 999。
+	err = db.QueryRow(`SELECT created_at FROM circle_assignments WHERE item_id=?`, itemID).Scan(&gotCreatedAt)
+	if err != nil {
+		t.Fatalf("requery: %v", err)
+	}
+	if gotCreatedAt != 123 {
+		t.Fatalf("幂等重放后 created_at 应保留首次值 123，实得 %d", gotCreatedAt)
+	}
+
+	// action=form：不投影（留 T4）——不应产生新行。
+	formBody := fmt.Sprintf(`{"action":"form","item_id":%q,"circle_id":%q,"origin":"user"}`, itemID, "00000000000000fe")
+	written3, err3 := applySyncedCircleEvent(st, eventSyncItem{
+		EventID: eventIDHex(2), ID: "actor", Type: "circle.v1", BodyJSON: formBody, CreatedAt: 456,
+	})
+	if err3 != nil || written3 {
+		t.Fatalf("form 应静默忽略 written=%v err=%v", written3, err3)
+	}
+	var count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM circle_assignments`).Scan(&count)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("form 不应投影，circle_assignments 应仍 1 行，实得 %d", count)
+	}
+
+	// 非 circle.v1 type：直接返回。
+	written4, err4 := applySyncedCircleEvent(st, eventSyncItem{
+		EventID: eventIDHex(3), ID: "actor", Type: "comment.v1", BodyJSON: `{}`, CreatedAt: 0,
+	})
+	if err4 != nil || written4 {
+		t.Fatalf("非 circle.v1 应静默返回 written=%v err=%v", written4, err4)
 	}
 }

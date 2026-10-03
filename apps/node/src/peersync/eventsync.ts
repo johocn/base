@@ -215,6 +215,9 @@ async function pullEvents(
       } catch (err) {
         console.warn(`peersync: govern.v1 投影失败（事件行已落，读接口可从事件重算）: ${String(err)}`);
       }
+      // circle.v1 assign 投影（融合治理册 §2.2 的轨道 A）：写 circle_assignments 一行。
+      // form 投影留 T4——对端事件 body 不带 creator_id，本地 items 可能还没。
+      applySyncedCircleEvent(st, it);
       total++;
     }
     if (items.length === 0) return total; // 空页：本 kind 已拉完
@@ -424,6 +427,11 @@ export function parseEventProjection(typ: string, bodyJSON: string): EventProjec
       if (!itemId.ok || itemId.value === "") return ZERO_PROJECTION;
       return { targetId: itemId.value, payloadCid: "", replyTo: "" };
     }
+    case "circle.v1": {
+      // circle.v1 body 是 {action,item_id,circle_id,origin?,content_hash?}，
+      // 不带 target_id / payload_cid / reply_to——三列全空（融合治理册 §2.2）。
+      return ZERO_PROJECTION;
+    }
     default:
       return ZERO_PROJECTION;
   }
@@ -621,4 +629,28 @@ export function deriveGovernRoster(st: SyncStore): { roster: Set<string>; ok: bo
     console.warn(`peersync: 治理名册派生失败，按空名册降级（settle 停在 pending）: ${String(err)}`);
     return { roster: new Set(), ok: false };
   }
+}
+
+/**
+ * applySyncedCircleEvent（eventsync.go:452-477）：把对端来的 circle.v1 事件投影进本地
+ * circle_assignments（融合治理册 §2.2）。只处理 action=assign；form 投影留 T4
+ * （对端事件 body 不带 creator_id，本地 items 可能还没）。
+ * 与 group / progress 同强度：投影失败**阻断整页**（真错误抛异常）。
+ */
+export function applySyncedCircleEvent(st: SyncStore, it: EventSyncItem): void {
+  if (it.type !== "circle.v1") return;
+  const g = goObj(it.bodyJson);
+  if (!g.ok) return;
+  const action = goStr(g.obj, "action");
+  const itemId = goStr(g.obj, "item_id");
+  const circleId = goStr(g.obj, "circle_id");
+  const origin = goStr(g.obj, "origin");
+  // Go 逐字段 Unmarshal，任一字段类型错误都使整体失败 → 落行但不投影。
+  for (const f of [action, itemId, circleId, origin]) {
+    if (!f.ok) return;
+  }
+  // assign 必带 item_id + circle_id。缺省 origin="fusion"（与 httpapi.parseCircleBody 同口径）。
+  if (action.value !== "assign" || itemId.value === "" || circleId.value === "") return;
+  const o = origin.value === "" ? "fusion" : origin.value;
+  st.putCircleAssignment(itemId.value, circleId.value, o, it.createdAt);
 }

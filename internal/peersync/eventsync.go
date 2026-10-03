@@ -120,6 +120,11 @@ func (c Config) pullEvents(ctx context.Context, st *store.Store, hc *http.Client
 			if _, err := applySyncedGovernEvent(st, it, govRoster, govRosterOK); err != nil {
 				log.Printf("peersync: govern.v1 投影失败（事件行已落，读接口可从事件重算）: %v", err)
 			}
+			// circle.v1 assign 投影（融合治理册 §2.2 的轨道 A）：写 circle_assignments 一行。
+			// form 投影留 T4——对端事件 body 不带 creator_id，本地 items 可能还没。
+			if _, err := applySyncedCircleEvent(st, it); err != nil {
+				return total, err
+			}
 			total++
 		}
 		if len(out.Items) == 0 {
@@ -258,6 +263,10 @@ func parseEventProjection(typ, bodyJSON string) commentProjection {
 			return commentProjection{}
 		}
 		return commentProjection{TargetID: m.ItemID}
+	case "circle.v1":
+		// circle.v1 的减化 body 是 {action,item_id,circle_id,origin?,content_hash?}，
+		// 不带 target_id / payload_cid / reply_to——三列全空（融合治理册 §2.2）。
+		return commentProjection{}
 	default:
 		return commentProjection{}
 	}
@@ -433,4 +442,36 @@ func deriveGovernRoster(st *store.Store) (map[string]bool, bool) {
 		set[c.ID] = true
 	}
 	return set, true
+}
+
+// applySyncedCircleEvent 把对端来的 circle.v1 事件投影进本地 circle_assignments（融合治理册 §2.2）。
+// 只处理 action=assign——写一行 circle_assignments。
+// form 投影留 T4：对端事件 body 不带 creator_id，本地 items 可能还没；
+// T4 在「主动发 form 事件时同步写 groups」或补 creator_id 字段后再启。
+// 投影失败**阻断整页反熵**（与 group / progress 同强度：纯本地 SQL 双写，失败即真异常）。
+func applySyncedCircleEvent(st *store.Store, it eventSyncItem) (bool, error) {
+	if it.Type != "circle.v1" {
+		return false, nil
+	}
+	var m struct {
+		Action   string `json:"action"`
+		ItemID   string `json:"item_id"`
+		CircleID string `json:"circle_id"`
+		Origin   string `json:"origin"`
+	}
+	if err := json.Unmarshal([]byte(it.BodyJSON), &m); err != nil {
+		return false, nil
+	}
+	// assign 必带 item_id + circle_id。缺省 origin="fusion"（与 httpapi.parseCircleBody 同口径）。
+	if m.Action != "assign" || m.ItemID == "" || m.CircleID == "" {
+		return false, nil
+	}
+	origin := m.Origin
+	if origin == "" {
+		origin = "fusion"
+	}
+	if err := st.PutCircleAssignment(m.ItemID, m.CircleID, origin, it.CreatedAt); err != nil {
+		return false, err
+	}
+	return true, nil
 }
