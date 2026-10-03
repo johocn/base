@@ -2,7 +2,7 @@
 
 - 日期：2026-10-03
 - 上游：总纲 `#69`（§0.13 迁移节奏 = 并行双跑 → 行为等价后 Go 节点退役）；路线计划 `#70`（§1 P5 行、§6 六条等价判据、§8 风险）；P4 设计册 `#74`（**2026-10-03 已定稿，P5 开工闸门已解除**）；P3 各批 = 计划 `#75`（批 A–G 已全收口，判据 2–7 均已各自对拍过）
-- 状态：**执行中**（P5-1 / P5-2 / P5-3 / P5-4 已收口；P5-5 起待执行，**含 1 项待定案**：门户模板路径 vs 产物布局）
+- 状态：**执行中**（P5-1 ~ P5-4 已收口，P5-4 遗留项已定案并落地；P5-5 起待执行）
 - 性质：任务级计划，**不承载契约**。契约一律回册子。
 
 ## 0. 一句话
@@ -75,6 +75,10 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 
 - 把 §6 六条判据 + 批 F 判据 7 的定案证据**逐条**列出（判据 → 由哪个 Task 的哪份证据、过/不过）；**任一不过即阻塞**，不得「先退役再补」。
 - 全过后执行定案 4：systemd `ExecStart` 从 `based` 切到 `node dist/based-node.mjs`；打 **git tag 标记最后可运行 Go 节点**；`internal/` / `cmd/` / `web/` 与 `based-linux-amd64` **一律不删**。
+- **切换时序（P5-4 实测补充，勿颠倒）**：**先停 Go 单元**（让 WAL 干净收敛、`-wal`/`-shm` 消失）→ **再起 Node 单元**。
+  Node 驱动没有 `xShmMap`，对 WAL 库（即使只读）直接打不开；`normalizeJournalMode`（`apps/node/src/host/sqlite.ts:34`）只在
+  **主库是 WAL 头且无 `-wal`/`-shm` 兄弟文件**时把头 `(2,2)` → `(1,1)` 完成一次性迁移。若 Go 未正常停止（留有 WAL 兄弟文件），Node 会**拒绝打开并报错**——这是**期望行为**，不要绕过。
+- 单元环境变量照 §8「部署前置清单」配齐（含 `BASE_WEB_DIR`、密钥来源）；切换后探活 `/healthz`、`/v1/catalog`、`/`、`/v1/manifest/{pack_id}` 逐条复核。
 - 客户端侧**零改动**：APK、落地页、`/v1/release` 指向全部不动；切换后线上探活（`/v1/catalog` / `/` / `/v1/manifest/{pack_id}`）逐条复核。
 - **回退路径**：`ExecStart` 切回 `based` 即可，回退成本 = 一次 restart（这正是定案 4 选「保留代码」的理由）。
 
@@ -118,7 +122,7 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 | 5 | 双跑实例占资源 / 端口冲突 / 单元名撞车 | 独立端口 + 独立目录 + 独立单元名 + **一次性运行结束即清理** |
 | 6 | 退役后才发现某判据不过 | 定案 4「保留代码、停止部署」本身就是回退路径；`ExecStart` 切回 `based` 一次 restart 即恢复 |
 | 7 | （P5-4 实测新发现）线上服务器无 Node 运行时 | **已解**：官方 `node-v20.20.2-linux-x64.tar.xz` 解到隔离目录 `/opt/base-node`（不动系统目录、不装包管理器；卸载 = `rm -rf`） |
-| 8 | （P5-4 实测新发现）门户模板路径 `TPL_DIR` 按**源码层级**算，产物落到 `apps/node/dist` 后少一层 → 门户三页 500 | **P5-5 待定案**：① 部署布局对齐（不改代码，路径须满足「产物目录下 4 层 = 含 `web/` 的根」）／ ② Node 侧加 `BASE_WEB_DIR` 环境变量覆盖（改 `portal.ts` 一行，需重跑 G2/G3）。**未定案前不得执行退役** |
+| 8 | （P5-4 实测新发现）门户模板路径 `TPL_DIR` 按**源码层级**算，产物落到 `apps/node/dist` 后少一层 → 门户三页 500 | **已定案并落地（方案 ②）**：`portal.ts` 增 `BASE_WEB_DIR` 环境变量覆盖，缺省回退原相对路径（源码模式行为不变）。G2（`@base/node` 0 错）/ G3（node 550 + core-ts 412 + protocol-ts 156 全绿）已复跑，重打包后线上复验 0 分歧 |
 
 ## 7. 不做
 
@@ -232,10 +236,13 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
   | 公开读 JSON 面（healthz/release/pubkey/catalog×4/directory×3/contributors/manifest×3/pack/identity/blob/unknown-route） | 19 | **MATCH**（status + 应用头排序后 + body 字节全等） |
   | 门户 HTML 页（`/`、`/governance`、`/a/{item}`） | 3 | 应用头 MATCH；body 归一化（剔除节点私有身份行）后 **MATCH**，页脚 issuer 逐字相同 |
 
-- **P5-1 未覆盖缺口（本 Task 暴露，须 P5-5 定案）**：门户模板 `TPL_DIR = new URL("../../../../web/templates/", import.meta.url)`
+- **P5-1 未覆盖缺口（本 Task 暴露 → 已定案修复）**：门户模板 `TPL_DIR = new URL("../../../../web/templates/", import.meta.url)`
   按**源码层级**（`apps/node/src/routes/`）计算；打包到 `apps/node/dist/based-node.mjs` 后**少一层** ⇒ 解析成 `/web/templates/base.html` ⇒ 门户三页 **500**。
   P5-1 探针只验了 `version`/`/healthz`/`/v1/catalog`，未覆盖门户页，故当时未暴露。
-  本次以**布局对齐**取证（产物放到「下 4 层即含 `web/` 的根」处 + 补齐 `web/templates/`）⇒ 门户三页回到 200 且逐字节一致。**代码未改**。
+  - 取证一（不改代码）：布局对齐（产物放到「下 4 层即含 `web/` 的根」）⇒ 门户三页回 200 且归一化后逐字节一致；
+  - **定案（方案 ②，已落地）**：`apps/node/src/routes/portal.ts` 增 `BASE_WEB_DIR` 环境变量覆盖，**缺省回退原相对路径**（源码/测试模式行为不变）。
+    复跑 G2（`@base/node` 0 错；`apps/mobile` 2 个既有错与本改无关）+ G3（node 550 / core-ts 412 / protocol-ts 156 全绿）→ 重新 esbuild 打包 →
+    线上以 `BASE_WEB_DIR=/opt/base-node/web/templates`、产物置于**常规路径**（不再依赖布局 hack）复验：**22 条 0 分歧**（19 直接 MATCH + 3 门户页归一化后 MATCH）。
 - **两个部署前置（本次实测）**：
   1. **store 密钥**：密钥是 **data 目录的兄弟文件** `<data>.key`（`serve.ts:99` → `loadStoreKey(dataDir)`）。
      影子初始缺失 ⇒ Node **自造了一把新钥**，解不开生产密文 ⇒ `/v1/contributors` 与门户页 **500**（`aes/gcm: invalid ghash tag`）。
@@ -250,5 +257,11 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 - **清理**：单元已停且消失（瞬态 + `--collect`）、`/opt/base-node-shadow` 已 `rm -rf`、端口 8090 已释放；
   **保留** `/opt/base-node`（运行时，167 MB，供 P5-5 退役使用）。
 - **工装**（`.tmp/g4/`，不入版本控制）：`p54_snapshot.sh`（快照）、`p54_compare.sh`（22 条逐条对拍）、`p54_compare_html.sh`（门户页归一化对拍）。
+- **部署前置清单（P5-5 退役单元直接照用，本次已实测有效）**：
+  - 运行时：`/opt/base-node/bin/node`（v20.20.2，隔离目录，已就位）。
+  - 产物：`apps/node/dist/based-node.mjs`（**路径无层级要求**，靠 env 定位模板）；Node 包内 `node_modules/node-sqlite3-wasm/`（含 `.wasm`）随产物部署。
+  - 模板：`web/templates/` 随产物部署，`BASE_WEB_DIR` 指向它（绝对路径）。
+  - 环境变量：`BASE_DATA` / `BASE_DB` / `BASE_ADDR` / `BASE_ISSUER` / `BASE_TLS_CERT`（`off` 或证书路径）/ `BASE_STORE_KEY_FILE` 或 `<data>.key`（**密钥必须与所接管的库匹配，否则密文解不开**）。
+  - 只读影子额外约束：不配 `BASE_PEERS` / `BASE_PEER_ADDR`（正因如此影子不加载 TLS 身份、门户页身份行为空，属**预期**差异）。
 
 ### Task P5-5 ~ P5-6
