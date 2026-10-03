@@ -44,6 +44,13 @@
         class="body"
         :style="`font-size:${READER_FONT_SIZE[fontScale]}px`"
       />
+      <block v-if="relatedArticles.length > 0">
+        <text class="group">相关帖</text>
+        <view v-for="ra in relatedArticles" :key="ra.itemId" class="related-item" @click="openArticle(ra.itemId)">
+          <text class="related-title">{{ ra.title }}</text>
+          <text class="related-meta">{{ ra.sharedTags }} 个共同标签</text>
+        </view>
+      </block>
     </block>
   </view>
 </template>
@@ -88,6 +95,8 @@ interface SiblingQuiz {
   title: string;
 }
 const siblingQuizzes = ref<SiblingQuiz[]>([]);
+/** 相关帖推荐：同 tag 下 sibling 文章（本地派生、零节点请求）；按 tag 交集数降序 top 5 */
+const relatedArticles = ref<{ itemId: string; title: string; sharedTags: number }[]>([]);
 const articleTags = ref<TagLinkRow[]>([]);
 /** 目录快照（三态判定用）：进入页面时读本地缓存，模板只读 */
 const directory = ref<DirectorySnapshot>({ version: 0, approved: new Map(), pending: new Map() });
@@ -227,6 +236,24 @@ onLoad(async (query) => {
     untagged.value = new Set(untaggedTargets(all, links));
     tagTitles.value = Object.fromEntries(all.filter((i) => i.type === 'tag').map((i) => [i.itemId, i.title || i.itemId]));
     articleTags.value = tagsOf(links, row.itemId);
+    // 相关帖：同 tag 下 sibling 文章。零额外查询——复用上面已拉的 links + all。
+    // 聚合：每个 sibling article 命中的 tag 数 → 按命中降序 → top 5。
+    const myTagIds = new Set(articleTags.value.map((t) => t.tagId));
+    const allArticles = new Map(all.filter((i) => i.type === 'article' && i.state !== 'removed').map((i) => [i.itemId, i]));
+    const score = new Map<string, number>();
+    for (const l of links) {
+      if (l.targetId === row.itemId || !myTagIds.has(l.tagId)) continue;
+      const existing = score.get(l.targetId) ?? 0;
+      score.set(l.targetId, existing + 1);
+    }
+    const ranked = [...score.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([tid, sharedTags]) => {
+        const it = allArticles.get(tid);
+        return { itemId: tid, title: it?.title ?? tid, sharedTags };
+      });
+    relatedArticles.value = ranked;
     governor.value = await canGovern({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
     // 进入即标记已读；readAtNext 保证只写首次
     await repo.markRead(row.itemId, new Date().toISOString());
@@ -346,6 +373,9 @@ function openComments() {
 function openQuiz(itemId: string) {
   uni.navigateTo({ url: `/pages/quiz/quiz?itemId=${encodeURIComponent(itemId)}` });
 }
+function openArticle(itemId: string) {
+  uni.navigateTo({ url: `/pages/article/article?itemId=${encodeURIComponent(itemId)}` });
+}
 
 /**
  * 「治理」恒显：本地 `items` 表没有 `author_id`，判不出「这条是不是我写的」，
@@ -443,6 +473,10 @@ function decodedId(raw: string): string {
 .group { display: block; margin: 16px 0 6px; color: #888888; font-size: 13px; }
 .quiz-item { padding: 10px 0; border-bottom: 1px solid #f2f2f2; }
 .quiz-title { color: #2b6cb0; font-size: 15px; }
+/* 相关帖：同 quiz-item 风格，底部 meta 显示共同 tag 数 */
+.related-item { padding: 10px 0; border-bottom: 1px solid #f2f2f2; display: flex; flex-direction: column; gap: 2px; }
+.related-title { color: #2b6cb0; font-size: 15px; }
+.related-meta { color: #a0aec0; font-size: 12px; }
 .tags { display: flex; flex-wrap: wrap; align-items: center; margin: 0 0 10px; }
 .tag { padding: 2px 8px; margin: 0 8px 6px 0; background: #ebf8ff; color: #2b6cb0; border-radius: 10px; font-size: 12px; }
 .tag-pending { padding: 2px 8px; margin: 0 8px 6px 0; background: #fffaf0; color: #b7791f; border-radius: 10px; font-size: 12px; }
