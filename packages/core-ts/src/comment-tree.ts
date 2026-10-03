@@ -1,14 +1,14 @@
 import type { CommentItem } from './comment';
 
-export interface CommentTreeNode {
-  item: CommentItem;
-  children: CommentTreeNode[];
+export interface CommentTreeNode<T = CommentItem> {
+  item: T;
+  children: CommentTreeNode<T>[];
   depth: number;
   /** 仅楼层根有（1,2,3...），子回复 undefined */
   floorNo?: number;
 }
 
-function byCreated(a: CommentItem, b: CommentItem): number {
+function byCreated<T extends CommentItem>(a: T, b: T): number {
   return a.createdAt - b.createdAt;
 }
 
@@ -23,18 +23,18 @@ function byCreated(a: CommentItem, b: CommentItem): number {
  *  5. 同一父节点下 children 按 createdAt 升序（先回的在上）
  *  6. floorNo 仅楼层根有，按楼层根出现顺序从 1 起计
  */
-export function buildCommentTree(list: CommentItem[]): CommentTreeNode[] {
+export function buildCommentTree<T extends CommentItem>(list: T[]): CommentTreeNode<T>[] {
   if (list.length === 0) return [];
 
   // 建所有节点 Map
-  const nodeMap = new Map<string, CommentTreeNode>();
+  const nodeMap = new Map<string, CommentTreeNode<T>>();
   for (const c of list) {
     nodeMap.set(c.eventId, { item: c, children: [], depth: 0 });
   }
 
   // 第一轮：筛楼层根（replyTo=null 或 replyTo 不在 map 里）
-  const rootCandidates: CommentTreeNode[] = [];
-  const pendingChildren: CommentTreeNode[] = [];
+  const rootCandidates: CommentTreeNode<T>[] = [];
+  const pendingChildren: CommentTreeNode<T>[] = [];
   for (const c of list) {
     const node = nodeMap.get(c.eventId)!;
     if (c.replyTo === null || c.replyTo === undefined || !nodeMap.has(c.replyTo)) {
@@ -72,7 +72,7 @@ export function buildCommentTree(list: CommentItem[]): CommentTreeNode[] {
   rootCandidates.sort((a, b) => byCreated(a.item, b.item));
 
   // 同一父节点下 children 也按 createdAt 升序
-  const sortChildren = (node: CommentTreeNode) => {
+  const sortChildren = (node: CommentTreeNode<T>) => {
     node.children.sort((a, b) => byCreated(a.item, b.item));
     for (const child of node.children) sortChildren(child);
   };
