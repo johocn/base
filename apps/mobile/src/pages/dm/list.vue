@@ -15,8 +15,11 @@
 
     <text v-if="friends.length === 0" class="empty">还没有好友。可以「添加好友」生成好友码，或粘贴伙伴给的好友码。</text>
     <navigator v-for="f in friends" :key="f.peerId" class="card" :url="'/pages/dm/chat?peerId=' + f.peerId">
-      <text class="t">{{ short(f.peerId) }}</text>
-      <text class="meta">{{ f.hasKey ? '已建立会话' : '未交换好友码，只读到来信' }}</text>
+      <view class="card-avatar" :style="{ background: avatarBg(f.peerId) }"></view>
+      <view class="card-body">
+        <text class="t">{{ authorName(f.peerId) }}</text>
+        <text class="meta">{{ f.hasKey ? '已建立会话' : '未交换好友码，只读到来信' }}</text>
+      </view>
     </navigator>
   </view>
 </template>
@@ -33,6 +36,7 @@ import {
   type DmOptions,
   type FriendEntry,
 } from '../../core/dm';
+import { avatarBg, useActorNames } from '../../core/useActorNames';
 import { bootstrap } from '../../platform';
 
 const opts = ref<DmOptions | null>(null);
@@ -40,11 +44,15 @@ const friends = ref<FriendEntry[]>([]);
 const error = ref('');
 const notice = ref('');
 
+/** 昵称三级降级（名册 → profile 补查 → id[:8] 回退），与私信会话页同一降级链 */
+const { authorName, loadNames } = useActorNames();
+
 async function load() {
   try {
     const ctx = await bootstrap();
     opts.value = { adapters: ctx.opts.adapters, repo: ctx.repo, nodeBaseUrl: ctx.opts.nodeBaseUrl };
     friends.value = await listFriends(opts.value);
+    await loadNames(friends.value.map((f) => f.peerId), opts.value);
   } catch (e) {
     error.value = (e as Error).message;
   }
@@ -102,10 +110,6 @@ async function pasteCode() {
   }
 }
 
-function short(hex: string): string {
-  return hex.slice(0, 8);
-}
-
 onShow(() => {
   void load();
 });
@@ -117,7 +121,9 @@ onShow(() => {
 .title { font-size: 20px; font-weight: 600; }
 .act { color: #2b6cb0; font-size: 14px; margin-right: 18px; }
 .acts { display: flex; margin-bottom: 10px; }
-.card { display: block; padding: 14px 0; border-bottom: 1px solid #eeeeee; }
+.card { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #eeeeee; }
+.card-avatar { width: 40px; height: 40px; margin-right: 10px; border-radius: 8px; }
+.card-body { flex: 1; }
 .t { display: block; font-size: 17px; }
 .meta { display: block; color: #888888; font-size: 12px; margin-top: 4px; }
 .empty { display: block; color: #999999; font-size: 13px; padding: 6px 0; line-height: 1.7; }

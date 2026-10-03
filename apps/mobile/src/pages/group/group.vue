@@ -60,10 +60,15 @@
     <block v-else>
       <text v-if="!error && !loading && feed.length === 0" class="hint">还没有消息</text>
 
-      <view v-for="m in feed" :key="m.eventId" class="msg">
-        <text class="msg-meta">{{ short(m.actor) }} · {{ rel(m.createdAt) }}</text>
-        <text v-if="m.replyTo" class="msg-reply">回复 {{ short(m.replyTo) }}</text>
-        <text class="msg-text">{{ m.text ?? '（无法解密）' }}</text>
+      <view v-for="(m, i) in feed" :key="m.eventId" class="cmt-floor">
+        <view class="cmt-head">
+          <text class="cmt-floor-no">{{ i + 1 }}楼</text>
+          <view class="cmt-avatar" :style="{ background: avatarBg(m.actor) }"></view>
+          <text class="cmt-author-name">{{ m.actor === myId ? '我' : authorName(m.actor) }}</text>
+          <text class="cmt-meta">· {{ rel(m.createdAt) }}</text>
+        </view>
+        <text v-if="m.replyTo" class="cmt-reply">回复 {{ short(m.replyTo) }}</text>
+        <text class="cmt-text">{{ m.text ?? '（无法解密）' }}</text>
       </view>
       <text v-if="loading" class="hint">加载中…</text>
       <text v-else-if="!error && feed.length > 0 && nextCursor === null" class="hint">没有更多了</text>
@@ -105,6 +110,7 @@ import {
 import { flushPending } from '../../core/comment';
 import { peekLocalIdentity } from '../../core/identity';
 import type { CommentOutRow } from '../../core/types';
+import { avatarBg, useActorNames } from '../../core/useActorNames';
 import { bootstrap } from '../../platform';
 import {
   UNKNOWN_FLAGS,
@@ -137,6 +143,9 @@ const pendingEnvelopes = ref<GroupEnvelope[]>([]);
 
 /** 待发区：只显示本组的行（评论页不过滤是因为评论只有一个 tab，小组页必须按组隔离）。 */
 const pending = ref<CommentOutRow[]>([]);
+
+/** 昵称三级降级（名册 → profile 补查 → id[:8] 回退），与私信会话页同一降级链 */
+const { authorName, loadNames } = useActorNames();
 
 /** 写门控：与评论同一条「能否写事件」的能力，不新增自检探测（补充 9）。 */
 const caps = ref<CapabilityFlags>(UNKNOWN_FLAGS);
@@ -210,6 +219,8 @@ async function refresh() {
   error.value = '';
   try {
     applyFeed(await fetchGroupMessages(opts.value, groupId.value));
+    // 楼层化：消息已按时间升序，楼号即列表序；昵称走同一降级链，失败静默
+    await loadNames(feed.value.map((m) => m.actor), opts.value);
   } catch (e) {
     error.value = e instanceof GroupError ? e.message : (e as Error).message;
     feed.value = [];
@@ -496,10 +507,14 @@ onReachBottom(() => {
 .po-foot { display: flex; align-items: center; justify-content: space-between; }
 .po-state { color: #888888; font-size: 12px; }
 .po-reason { color: #c05621; font-size: 12px; }
-.msg { padding: 10px 0; border-bottom: 1px solid #eeeeee; }
-.msg-meta { display: block; color: #888888; font-size: 12px; }
-.msg-reply { display: block; color: #888888; font-size: 12px; }
-.msg-text { display: block; margin-top: 4px; font-size: 15px; line-height: 1.6; }
+.cmt-floor { padding: 10px 0; border-bottom: 1px solid #eeeeee; }
+.cmt-head { display: flex; align-items: center; }
+.cmt-floor-no { margin-right: 6px; color: #2b6cb0; font-size: 12px; }
+.cmt-avatar { width: 20px; height: 20px; margin-right: 6px; border-radius: 50%; }
+.cmt-author-name { margin-right: 4px; color: #2b6cb0; font-size: 13px; }
+.cmt-meta { display: block; color: #888888; font-size: 12px; }
+.cmt-reply { display: block; color: #888888; font-size: 12px; }
+.cmt-text { display: block; margin-top: 4px; font-size: 15px; line-height: 1.6; }
 .hint { display: block; margin-top: 8px; color: #888888; font-size: 13px; }
 .error { display: block; color: #c53030; font-size: 13px; }
 .notice { display: block; margin-bottom: 8px; color: #b7791f; font-size: 13px; }
