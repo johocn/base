@@ -8,6 +8,9 @@ export interface ItemRow {
   /** active | removed */
   state: string;
   updatedAt: string;
+  /** 归属缓存（治理册 §2.1）；空串表示该条目未验签归属 */
+  authorId: string;
+  authorSig: string;
 }
 
 export interface ArticleRow {

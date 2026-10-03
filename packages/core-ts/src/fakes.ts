@@ -288,6 +288,7 @@ export class MemoryRepo implements LocalRepo {
     this.items.set(item.itemId, {
       itemId: item.itemId, source: 'local', type: item.type, title: item.title,
       rev: '', contentHash: item.contentHash, state: 'active', updatedAt: item.updatedAt,
+      authorId: '', authorSig: '',
     });
     this.segments.set(
       item.itemId,

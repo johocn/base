@@ -273,11 +273,12 @@ export class SqlRepo implements LocalRepo {
     }
     for (const it of p.items) {
       stmts.push({
-        sql: `INSERT INTO items(item_id,source,type,title,rev,content_hash,state,updated_at)
-              VALUES(?,?,?,?,?,?,?,?)
+        sql: `INSERT INTO items(item_id,source,type,title,rev,content_hash,state,updated_at,author_id,author_sig)
+              VALUES(?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(item_id) DO UPDATE SET source=excluded.source,type=excluded.type,title=excluded.title,
-                rev=excluded.rev,content_hash=excluded.content_hash,state=excluded.state,updated_at=excluded.updated_at`,
-        params: [it.itemId, it.source, it.type, it.title, it.rev, it.contentHash, it.state, it.updatedAt],
+                rev=excluded.rev,content_hash=excluded.content_hash,state=excluded.state,updated_at=excluded.updated_at,
+                author_id=excluded.author_id,author_sig=excluded.author_sig`,
+        params: [it.itemId, it.source, it.type, it.title, it.rev, it.contentHash, it.state, it.updatedAt, it.authorId, it.authorSig],
       });
     }
     for (const a of p.articles) {
@@ -327,12 +328,12 @@ export class SqlRepo implements LocalRepo {
   }
 
   async getItem(itemId: string): Promise<ItemRow | null> {
-    const rows = await this.db.select(`SELECT item_id,source,type,title,rev,content_hash,state,updated_at FROM items WHERE item_id=?`, [itemId]);
+    const rows = await this.db.select(`SELECT item_id,source,type,title,rev,content_hash,state,updated_at,author_id,author_sig FROM items WHERE item_id=?`, [itemId]);
     return rows.length > 0 ? toItemRow(rows[0]) : null;
   }
 
   async listItems(): Promise<ItemRow[]> {
-    const rows = await this.db.select(`SELECT item_id,source,type,title,rev,content_hash,state,updated_at FROM items`);
+    const rows = await this.db.select(`SELECT item_id,source,type,title,rev,content_hash,state,updated_at,author_id,author_sig FROM items`);
     return rows.map(toItemRow);
   }
 
@@ -734,6 +735,8 @@ function toItemRow(r: Record<string, unknown>): ItemRow {
     contentHash: String(r.content_hash ?? ''),
     state: String(r.state ?? 'active'),
     updatedAt: String(r.updated_at ?? ''),
+    authorId: String(r.author_id ?? ''),
+    authorSig: String(r.author_sig ?? ''),
   };
 }
 

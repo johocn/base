@@ -36,7 +36,12 @@
               <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
             </view>
             <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-            <text v-if="completionText(it.itemId)" class="meta">{{ completionText(it.itemId) }}</text>
+            <view v-if="completionPercent(it.itemId)" class="completion-bar">
+              <view class="progress-track">
+                <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
+              </view>
+              <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
+            </view>
           </view>
         </block>
       </block>
@@ -47,7 +52,12 @@
           <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
         </view>
         <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-        <text v-if="completionText(it.itemId)" class="meta">{{ completionText(it.itemId) }}</text>
+        <view v-if="completionPercent(it.itemId)" class="completion-bar">
+          <view class="progress-track">
+            <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
+          </view>
+          <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
+        </view>
       </view>
       <text v-if="standalone.length > 0" class="group">独立内容</text>
       <view v-for="it in standalone" :key="it.itemId" class="item" @click="openStandalone(it)">
@@ -66,7 +76,12 @@
           <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
         </view>
         <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-        <text v-if="completionText(it.itemId)" class="meta">{{ completionText(it.itemId) }}</text>
+        <view v-if="completionPercent(it.itemId)" class="completion-bar">
+          <view class="progress-track">
+            <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
+          </view>
+          <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
+        </view>
       </view>
       <text v-if="standalone.length > 0" class="group">未归类</text>
       <view v-for="it in standalone" :key="it.itemId" class="item" @click="openStandalone(it)">
@@ -154,10 +169,12 @@ async function courseCompletion(
   return { done, total };
 }
 
-/** 「已学 a / b 讲」；无数据（分母 0）返回空串 ⇒ 模板不显示该行。 */
-function completionText(courseId: string): string {
+/** 完成度百分比 & 是否全完成；无数据返回 null ⇒ 模板不渲染进度条。 */
+function completionPercent(courseId: string): { percent: number; done: boolean } | null {
   const c = completionByCourse.value.get(courseId);
-  return c ? `已学 ${c.done} / ${c.total} 讲` : '';
+  if (!c || c.total === 0) return null;
+  const percent = Math.round((c.done / c.total) * 100);
+  return { percent, done: c.done === c.total };
 }
 
 async function load() {
@@ -372,9 +389,18 @@ onShow(() => {
 .wrap { padding: 16px; }
 .bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .title { font-size: 20px; font-weight: 600; }
-.item { padding: 12px 0; border-bottom: 1px solid #eeeeee; }
-.item-title { font-size: 17px; }
+/* 课程卡片：仿 Discuz 版块条目 */
+.item { padding: 14px 14px; margin-bottom: 12px; background: #ffffff; border: 1px solid #edf2f7; border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.item:active { background: #f7fafc; }
+.item-title { font-size: 16px; font-weight: 500; }
 .meta { display: block; color: #888888; font-size: 12px; }
+/* 进度条：完成度从文字改成可视化 */
+.completion-bar { display: flex; align-items: center; margin-top: 8px; gap: 8px; }
+.progress-track { flex: 1; height: 4px; background: #edf2f7; border-radius: 2px; overflow: hidden; }
+.progress-fill { height: 100%; background: #2b6cb0; border-radius: 2px; transition: width 0.3s ease; }
+.progress-fill.done { background: #2f855a; }
+.progress-text { font-size: 12px; color: #718096; min-width: 48px; text-align: right; }
+.progress-text.done { color: #2f855a; font-weight: 600; }
 .hint { color: #888888; }
 .tip { color: #2f855a; font-size: 13px; }
 .error { color: #c53030; font-size: 13px; }

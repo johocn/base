@@ -5,10 +5,21 @@
     <block v-else>
       <image v-if="coverPath" :src="coverPath" mode="widthFix" class="cover" />
       <text class="title" :class="titleColor ? 'c-' + titleColor : ''">{{ article?.title }}</text>
+      <view v-if="authorDisplay.name" class="author-bar">
+        <view class="avatar" :style="`background:hsl(${authorDisplay.hue} 65% 55%)`">
+          <text class="avatar-char">{{ authorDisplay.name.slice(0, 1).toUpperCase() }}</text>
+        </view>
+        <view class="author-info">
+          <text class="author-name">{{ authorDisplay.name }}</text>
+          <text v-if="authorDisplay.count > 0" class="author-count">· {{ authorDisplay.count }} 条贡献</text>
+          <text class="author-dot">·</text>
+          <text class="author-time">{{ article?.publishedAt }}</text>
+        </view>
+      </view>
       <view v-if="badge.length > 0" class="chips">
         <text v-for="b in badge" :key="b" class="badge">{{ b }}</text>
       </view>
-      <text class="meta">{{ article?.publishedAt }}</text>
+      <text v-if="!authorDisplay.name" class="meta">{{ article?.publishedAt }}</text>
       <view class="tags">
         <text v-for="t in tagChips(articleTags).chips" :key="t.tagId" class="tag" @click="openTag(t.tagId)">{{ t.label }}<text v-if="t.pending" class="term-badge">待票选</text></text>
         <text v-if="tagChips(articleTags).overflow > 0" class="tag-more">+{{ tagChips(articleTags).overflow }}</text>
@@ -61,6 +72,7 @@ import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../
 import { renderMarkdown } from '../../core/markdown';
 import type { ArticleRow, TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
+import { roster, type ContributorItem } from '../../core/contribution';
 
 const article = ref<ArticleRow | null>(null);
 const bodyHtml = ref('');
@@ -83,6 +95,24 @@ const untagged = ref<Set<string>>(new Set());
 const governor = ref(false);
 const pendingTag = computed(() => governor.value && untagged.value.has(itemId.value));
 const itemId = ref('');
+/** 条目作者归属缓存（节点验签写入，可能为空） */
+const authorId = ref('');
+/** 贡献前 10 名册，authorId → ContributorItem 映射；空 Map 表示 fetch 失败或未拉 */
+const rosterMap = ref(new Map<string, ContributorItem>());
+/** 昵称回退链：名册命中 name → id[:8] 回退 */
+const authorDisplay = computed(() => {
+  if (!authorId.value) return { name: '', count: 0, hue: 0 };
+  const hit = rosterMap.value.get(authorId.value);
+  const name = hit?.name ?? authorId.value.slice(0, 8);
+  const count = hit?.count ?? 0;
+  return { name, count, hue: avatarHue(authorId.value) };
+});
+/** authorId → 稳定 HSL 色相（纯本地哈希，零网络） */
+function avatarHue(hex: string): number {
+  let h = 0;
+  for (let i = 0; i < hex.length; i++) h = (h * 31 + hex.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
 // 图章与标题色（册子 #53 §2.5）：文章不产属性行，无载体行时自然为空（设计册登记的事实）
 const badge = ref<string[]>([]);
 const titleColor = ref('');
@@ -103,6 +133,15 @@ onLoad(async (query) => {
   try {
     const { opts, repo } = await bootstrap();
     directory.value = await loadDirectory(repo);
+    // 贡献前 10 名册：独立 try-catch，失败静默（不阻塞正文渲染、不影响任何路径）
+    if (opts.nodeBaseUrl) {
+      try {
+        const list = await roster({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
+        rosterMap.value = new Map(list.map((c) => [c.id, c]));
+      } catch {
+        // 静默：无网络 / 节点未配置时 author-bar 自然降级为 id[:8]
+      }
+    }
     // from=ledger：从「我创建的」区进入 → 正文取台账行，不读包表（册子 #51 §3.3）。
     if (q.from === 'ledger') {
       const sub = await repo.getSubmission(raw);
@@ -138,6 +177,9 @@ onLoad(async (query) => {
     }
     article.value = row;
     itemId.value = row.itemId;
+    // 拿归属缓存：节点验签写入的 authorId（可能为空 → author-bar 自然降级不渲染）
+    const item = await repo.getItem(row.itemId);
+    authorId.value = item?.authorId ?? '';
     bodyHtml.value = renderMarkdown(row.bodyMd);
     const a = attrsOf(await repo.listSegments(raw));
     badge.value = a.badge;
@@ -352,6 +394,15 @@ function decodedId(raw: string): string {
 .wrap { padding: 16px; min-height: 100vh; }
 .progress { position: fixed; top: 0; left: 0; height: 2px; background: #2b6cb0; z-index: 10; }
 .title { font-size: 22px; font-weight: 600; }
+/* 作者栏：仿 Discuz 经典帖首行 */
+.author-bar { display: flex; align-items: center; gap: 10px; margin: 8px 0 6px; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.avatar-char { color: #fff; font-size: 14px; font-weight: 600; }
+.author-info { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.author-name { font-size: 14px; font-weight: 600; color: #2b6cb0; }
+.author-count { font-size: 12px; color: #718096; }
+.author-dot { font-size: 12px; color: #cbd5e0; margin: 0 2px; }
+.author-time { font-size: 12px; color: #a0aec0; }
 .meta { display: block; color: #888888; font-size: 12px; margin-bottom: 12px; }
 .cover { width: 100%; margin-bottom: 12px; }
 .actions { display: flex; margin-bottom: 16px; }
@@ -384,6 +435,8 @@ function decodedId(raw: string): string {
 .wrap.sepia { background: #f4ecd8; color: #4a4034; }
 .sepia .title { color: #3d3428; }
 .sepia .meta { color: #8a7c66; }
+.sepia .author-name { color: #8a6d3b; }
+.sepia .author-count, .sepia .author-dot, .sepia .author-time { color: #8a7c66; }
 .sepia .act { color: #8a6d3b; }
 .sepia .body { color: #4a4034; }
 .sepia .c-red { color: #B23A3A; }
@@ -397,6 +450,8 @@ function decodedId(raw: string): string {
 .wrap.dark { background: #1a1a1a; color: #e6e6e6; }
 .dark .title { color: #f0f0f0; }
 .dark .meta { color: #999999; }
+.dark .author-name { color: #63b3ed; }
+.dark .author-count, .dark .author-dot, .dark .author-time { color: #a0aec0; }
 .dark .body { color: #e6e6e6; }
 .dark .act { color: #63b3ed; }
 .dark .c-red { color: #FC8181; }

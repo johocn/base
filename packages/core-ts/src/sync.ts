@@ -245,16 +245,25 @@ async function syncContentOnce(o: SyncOptions): Promise<SyncResult> {
     }
   }
 
-  const items: ItemRow[] = cat.items.map((it) => ({
-    itemId: it.item_id,
-    source: it.source,
-    type: it.type,
-    title: it.title,
-    rev: it.source_rev,
-    contentHash: it.content_hash,
-    state: 'active',
-    updatedAt: now,
-  }));
+  // 数据源切到 manifest.entries：catalog handler 精简字段不含 author_id，
+  // 而 manifest.entries（已拉取 + 验签 + hash 对账）带完整归属链。
+  // 但 manifest 可能比 catalog 多 media_meta/segments 条目——按 catalog 的 item_id 集合过滤，
+  // 保持 ItemRow 语义（article/quiz/course/lesson）与原逻辑一致。
+  const catIds = new Set(cat.items.map((it) => it.item_id));
+  const items: ItemRow[] = man.entries
+    .filter((e) => catIds.has(e.item_id))
+    .map((e) => ({
+      itemId: e.item_id,
+      source: e.source,
+      type: e.type,
+      title: e.title,
+      rev: e.source_rev,
+      contentHash: e.content_hash,
+      state: 'active',
+      updatedAt: now,
+      authorId: e.author_id ?? '',
+      authorSig: e.author_sig ?? '',
+    }));
   const tombstones: TombstoneRow[] = man.tombstone.map((t) => ({ itemId: t.item_id, revokedRev: t.revoked_rev }));
 
   // 必须在 applyPack 之前取路径：applyPack 会删掉 blob_index 行，之后再也查不到块文件位置（契约 §9.3）

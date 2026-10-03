@@ -27,6 +27,7 @@ describe('upsertLocalContainer：本地乐观落库（册子 #56 §2.1）', () =
     expect(await repo.getItem('course/c1')).toEqual({
       itemId: 'course/c1', source: 'local', type: 'course', title: 'A',
       rev: '', contentHash: segmentsContentHash(segments), state: 'active', updatedAt: '2026-10-01T00:00:00Z',
+      authorId: '', authorSig: '',
     });
     expect((await repo.listSegments('course/c1')).map((s) => s.seq)).toEqual([-1, 1]);
   });
