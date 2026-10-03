@@ -864,7 +864,18 @@ interface TemplateSet {
   defs: Map<string, TplNode[]>;
 }
 
-const TPL_DIR = new URL("../../../../web/templates/", import.meta.url);
+// 模板目录（单一真源：同仓 web/templates/，不复制、不预编译）。
+// 源码运行时按相对路径解析；**打包产物的层级与源码不同**（`dist/based-node.mjs` 比
+// `src/routes/portal.ts` 少一层 ⇒ 相对路径会落到文件系统根），故部署时用 `BASE_WEB_DIR`
+// 显式指定模板目录（绝对路径，结尾斜杠可有可无）；未设置时行为与源码模式完全一致。
+const TPL_DIR = resolveTemplateDir();
+
+function resolveTemplateDir(): URL {
+  const raw = (process.env.BASE_WEB_DIR ?? "").trim();
+  if (raw === "") return new URL("../../../../web/templates/", import.meta.url);
+  return new URL(raw.endsWith("/") ? raw : `${raw}/`, "file:///");
+}
+
 const PAGE_FILE: Record<string, string> = {
   index: "index.html",
   article: "article.html",
