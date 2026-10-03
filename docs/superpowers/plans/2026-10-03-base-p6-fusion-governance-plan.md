@@ -184,13 +184,15 @@ P6 不再做设计，只把 `#74` 已定稿的提案落地：**1 个事件类型
 - commit `da354b4`，4 files / +926 −58；store/httpapi/peersync 全绿；vitest 578/51 files（2 skipped）；tsc 0 错。
 - 合并计 1 实现中有一处重复 segments 查询（computeContainerPassed + accumulateCounts 各查一次 lesson→父course），功能正确、无性能问题、记为未来可优化项。
 
-### T6 vectors/v1/seats.json 跨实现同解 —— **已收口**
+### T6 vectors/v1/seats.json 跨实现同解 —— **已收口（含补边界）**
 
-- **黄金向量** 28 cases（4 section）：15 GovernorSeats/Quorum 边界（m=1→10 段阶梯 / 上限 10 / ⌈2k/3⌉ / min(2,k) / min(30,⌊m/3⌋+1）+ 4 EventWatermark（空 / 单条 / 乱序 / dup 去重——EventWatermark 本身不去重、直接 sort+join，dup 原样拼接 sha256）+ 4 ContributionRank（同分按 id 升序 tie-break / 24h 防刷上限 20 贪心接受 / 已移出者不计入输出 / 全零成员也返回按 id 升序）+ 5 DeriveSeats（Decidable k=1 / Decidable k=3 / Undecidable 空 msg k=3 / 创建者永久 1 席跳过自身名次 / event_id 去重 + 非 msg action 不计入）。
-- **Go 侧**：genvectors/main.go 加 writeSeats；internal/store/groupseats.go `rankInput → RankInput` 导出（genvectors 需外部构造参数）；groupseats_test.go 同步改名。
-- **TS 侧**：apps/node/src/store/groupseats.test.ts 消费测试（逐字段断言 Go 生成值与 TS 实现同解）；28 tests 全 PASS。
-- commit `3bae003`，5 files；go build/vet/test 全绿；seats.json 幂等（再跑 genvectors 输出不变）。
-- groupBodyAction 边界（null/no-op / 非 string 返回空 / 重复键后者覆盖）本次向量 body_json 用标准 `{"action":"msg"}`，极端边界未覆盖——记为未来可加 case。
+- **黄金向量** 42 cases（5 section）：① **15 GovernorSeats/Quorum**（m=1→10 段阶梯 / 上限 10 / ⌈2k/3⌉ / min(2,k) / min(30,⌊m/3⌋+1）② **4 EventWatermark**（空 / 单条 / 乱序 / dup 原样拼接 sha256——函数本身不去重、sort+join 后直接 hash）③ **4 ContributionRank**（同分按 id 升序 tie-break / 24h 防刷上限 20 贪心接受 / 已移出者不计入输出 / 全零成员也返回按 id 升序）④ **5 DeriveSeats**（Decidable k=1 / Decidable k=3 / Undecidable 空 msg k=3 / 创建者永久 1 席跳过自身名次 / event_id 去重 + 非 msg action 不计入）⑤ **14 GroupBodyAction 边界**（坏 JSON / 顶层 null / 顶层 string / 顶层 array / 空 object / 无 action 键 / action=null / action=number / action=boolean / action=嵌套 object / 同键后者覆盖 / 正常 msg / **纯大写 Action 键名** / **混合大小重复键后者覆盖**）。
+- **Go 侧**：genvectors/main.go writeSeats 覆盖全部 5 section；internal/store/groupseats.go `rankInput → RankInput`（genvectors 跨包调用）+ `groupBodyAction → GroupBodyAction` 导出；groupseats_test.go 同步改名。
+- **TS 侧**：apps/node/src/store/groupseats.test.ts 消费测试（遍历 seats.json GroupBodyAction section 逐字段断言）；**42 tests 全 PASS**（含追加 14 边界）。
+- **三次 commit**：初始 28 cases `3bae003`（5 files）→ 补 12 边界 `c8e0d18`（误判 Go 大小写敏感、故意排除的 2 case）→ 实证探针打穿误判补回 2 case `fe59ee0`。
+- **实证探针教训**：子代理初始假设 "Go `json.Unmarshal(struct tag:"action")` 精确小写匹配、TS `toLowerCase()` 遍历 → 大小写不同解"，脑内推理后**故意排除**了 `{"Action":"msg"}` 和 `{"action":"msg","Action":"hello"}` 两个 case。写了 6 行临时 probe test `TestGroupBodyActionCaseSensitivityProbe` 一跑就钉死——Go `encoding/json` 对 struct tag **默认就是大小写不敏感匹配**（匹配 `action` / `Action` / `ACTION` 三种写法、重复键后者覆盖），与 TS 侧行为**完全一致**。探针删后补回 2 case，全仓回归零影响。**结论：跨语言同解判断必须先跑实证、不要脑内推理**。
+- 幂等确认：连续两次 `go run ./tools/genvectors -out vectors/v1`，git diff 空输出。
+- Go 全仓 `./...` build/vet/test 全绿；vitest **104 files / 1225 passed / 2 skipped**（只增不减、基线 1225）。
 
 ### T7 线上部署 —— **已收口**
 
