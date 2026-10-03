@@ -1,8 +1,8 @@
 <template>
   <view class="wrap">
     <text v-if="rows.length === 0" class="hint">还没有收藏，在文章页点收藏会出现在这里。</text>
-    <view v-for="r in rows" :key="r.itemId" class="item" @click="open(r.itemId)">
-      <text class="item-title">{{ r.title }}</text>
+    <view v-for="r in rows" :key="r.itemId" class="card" @click="open(r.itemId)">
+      <text class="t">{{ r.title }}</text>
       <text class="meta">收藏于 {{ r.favoritedAt.slice(0, 10) }}</text>
     </view>
   </view>
@@ -34,8 +34,8 @@ function open(itemId: string) {
 
 <style>
 .wrap { padding: 16px; }
-.item { padding: 14px 0; border-bottom: 1px solid #eeeeee; }
-.item-title { font-size: 17px; }
-.meta { display: block; color: #888888; font-size: 12px; margin-top: 4px; }
-.hint { color: #888888; font-size: 14px; }
+.card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+.t { display: block; font-size: 15px; }
+.meta { display: block; color: #888888; font-size: 12px; }
+.hint { display: block; color: #888888; font-size: 13px; }
 </style>
