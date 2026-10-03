@@ -8,24 +8,24 @@
         <view v-if="courseTitle" class="breadcrumb">
           <text class="bc-item">{{ courseTitle }}</text>
           <text class="bc-sep">›</text>
-          <text class="bc-cur">第 {{ lessonPosition?.cur ?? '?' }} 讲</text>
+          <text class="bc-cur">第 {{ lessonPos?.cur ?? '?' }} 讲</text>
         </view>
         <image v-if="coverPath" :src="coverPath" mode="widthFix" class="cover" />
         <text class="title" :class="titleColor ? 'c-' + titleColor : ''">{{ lessonLabel }}</text>
         <!-- Discuz 仿效方案 C：课时位置序号点 -->
-        <view v-if="lessonPosition && lessonPosition.total > 1" class="lesson-dots">
+        <view v-if="lessonPos && lessonPos.total > 1" class="lesson-dots">
           <view
-            v-for="i in lessonPosition.total"
+            v-for="i in lessonPos.total"
             :key="i"
             class="lesson-dot"
-            :class="{ done: i < lessonPosition.cur, cur: i === lessonPosition.cur }"
+            :class="{ done: i < lessonPos.cur, cur: i === lessonPos.cur }"
           ></view>
         </view>
         <!-- Discuz 仿效方案 C：课程进度条 -->
-        <view v-if="lessonPosition" class="course-progress">
-          <text class="cp-label">课程进度 {{ lessonPosition.cur }}/{{ lessonPosition.total }}</text>
+        <view v-if="lessonPos" class="course-progress">
+          <text class="cp-label">课程进度 {{ lessonPos.cur }}/{{ lessonPos.total }}</text>
           <view class="cp-track">
-            <view class="cp-fill" :style="`width:${Math.round((lessonPosition.cur / lessonPosition.total) * 100)}%`"></view>
+            <view class="cp-fill" :style="`width:${Math.round((lessonPos.cur / lessonPos.total) * 100)}%`"></view>
           </view>
         </view>
         <view v-if="badge.length > 0" class="chips">
@@ -109,7 +109,7 @@ import { onLoad } from '@dcloudio/uni-app';
 
 import { fetchBlob } from '../../core/blob';
 import { attrsOf, childrenRowsOf, type AttachmentVM } from '../../core/container-view';
-import { childrenOf, lessonNo } from '../../core/course-tree';
+import { childrenOf, lessonNo, lessonPos, prevNextLesson, relatedLessons } from '../../core/course-tree';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
 import { renderMarkdown } from '../../core/markdown';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
@@ -151,7 +151,7 @@ const { authorId, authorDisplay, avatarHue, fetchAuthorBar, setAuthorId } = useA
 /** 面包屑：课程标题（courseId → repo.getItem）；空表示没拿到（courseId 缺失或课程不存在） */
 const courseTitle = ref('');
 /** 课时位置：{ cur, total }；courseId 空或算不出 → null（模板不渲染序号点+进度条） */
-const lessonPosition = ref<{ cur: number; total: number } | null>(null);
+const lessonPos = ref<{ cur: number; total: number } | null>(null);
 /** 上下讲导航：null 表示没拿到 */
 const prevLesson = ref<{ itemId: string; title: string; no: number } | null>(null);
 const nextLesson = ref<{ itemId: string; title: string; no: number } | null>(null);
@@ -204,38 +204,39 @@ onLoad(async (query) => {
 
     // 「第 N 讲」口径与课程页同源：拿课程清单算出位次（拿不到课程就不显示位次）
     let no = 0;
-    let lessonIds: string[] = [];
     if (courseId.value !== '') {
       try {
         const courseSegs = await repo.listSegments(courseId.value);
-        lessonIds = childrenOf(courseSegs);
         no = lessonNo(courseSegs, lid);
-        // —— Discuz 仿效：复用同一次 courseSegs 派生所有位置/导航数据（Advisor 提醒避免不一致）——
+        // —— Discuz 仿效：复用同一次 courseSegs 派生所有位置/导航数据 ——
         const courseItem = await repo.getItem(courseId.value);
         courseTitle.value = courseItem?.title ?? '';
-        if (lessonIds.length > 0 && no > 0) {
-          lessonPosition.value = { cur: no, total: lessonIds.length };
-          const curIdx = lessonIds.indexOf(lid);
-          if (curIdx > 0) {
-            const prevId = lessonIds[curIdx - 1]!;
-            const prevItem = await repo.getItem(prevId);
-            prevLesson.value = { itemId: prevId, title: prevItem?.title ?? prevId, no: no - 1 };
-          }
-          if (curIdx >= 0 && curIdx < lessonIds.length - 1) {
-            const nextId = lessonIds[curIdx + 1]!;
-            const nextItem = await repo.getItem(nextId);
-            nextLesson.value = { itemId: nextId, title: nextItem?.title ?? nextId, no: no + 1 };
-          }
-          // 同课程相关推荐：排除当前，取前 5（保持清单位次，不做排序）
-          const others = lessonIds.filter((id) => id !== lid);
-          const related: { itemId: string; title: string; no: number }[] = [];
-          for (const id of others.slice(0, 5)) {
-            const it = await repo.getItem(id);
-            const pos = lessonNo(courseSegs, id);
-            related.push({ itemId: id, title: it?.title ?? id, no: pos || 0 });
-          }
-          relatedLessons.value = related;
+
+        // 位置（序号点 + 进度条）—— ref 名 lessonPos，与纯函数 lessonPos 区分
+        lessonPos.value = lessonPosition(courseSegs, lid);
+
+        // 上下讲导航
+        const nav = prevNextLesson(courseSegs, lid);
+        if (nav.prev) {
+          const it = await repo.getItem(nav.prev);
+          const pNo = lessonNo(courseSegs, nav.prev);
+          prevLesson.value = { itemId: nav.prev, title: it?.title ?? nav.prev, no: pNo || 0 };
         }
+        if (nav.next) {
+          const it = await repo.getItem(nav.next);
+          const pNo = lessonNo(courseSegs, nav.next);
+          nextLesson.value = { itemId: nav.next, title: it?.title ?? nav.next, no: pNo || 0 };
+        }
+
+        // 同课程相关推荐 top 5
+        const relatedIds = relatedLessons(courseSegs, lid);
+        const related: { itemId: string; title: string; no: number }[] = [];
+        for (const id of relatedIds) {
+          const it = await repo.getItem(id);
+          const pNo = lessonNo(courseSegs, id);
+          related.push({ itemId: id, title: it?.title ?? id, no: pNo || 0 });
+        }
+        relatedLessons.value = related;
       } catch {
         no = 0;
       }
