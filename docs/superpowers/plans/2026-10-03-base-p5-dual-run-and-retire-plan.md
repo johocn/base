@@ -372,8 +372,8 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 | G5 | 影子重放 0 分歧 | P5-3：真实流量 **47 条 0 分歧** → **过** |
 | G6 | 并存无回归 | P5-4：**22 条 0 分歧**（19 直接 MATCH + 3 门户归一化后 MATCH），线上 Go 零影响 → **过** |
 | G7 | 判据全过 | §5 追溯表 7 条全 **过**（判据 3 明标弱证据）；另经「双影子对练」补验运行态 → **过** |
-| G8 | 仓库纪律 | `git diff --stat HEAD -- internal/` **无输出**（零 Go 改动；`internal/httpapi/web.go` 仅有工作区既有的 stat 脏标记，`git diff --raw HEAD` 亦无输出）；只 add 本册相关文件（**未** add `.tmp/`、`based-linux-amd64`、`.gitignore`、`internal/httpapi/web.go`）→ **过** |
+| G8 | 仓库纪律 | `git diff --stat HEAD -- internal/` / `git diff --raw HEAD` **均无输出** ⇒ 零 Go 改动。`internal/httpapi/web.go` 在 `git status` 上的 ` M` **已坐实为纯行尾现象**：`git diff --quiet HEAD -- <file>` **exit=0**（git 权威内容判据，施 clean 过滤）；带过滤 `git hash-object <file>` = `git rev-parse HEAD:<file>` = **同一 blob `c6b9590d…`**（`--no-filters` 原始字节 `42fa3f9d…` 不同）；字节统计 **12832 B / CR=388 / LF=388**，与 HEAD blob 12444 B 之差 **恰为 388 个 CR**；成因 `core.autocrlf=true` + 无 `.gitattributes`。`git update-index --refresh` 实测**未能**清除（`web.go: needs update`，exit=1）——该命令按 stat() 判定（工作区 CRLF 大小 ≠ 索引缓存 LF 大小），故 ` M` 是 stat 缓存 + 行尾归一的表面现象，**非内容改动**。只 add 本册相关文件（**未** add `.tmp/`、`based-linux-amd64`、`.gitignore`、`internal/httpapi/web.go`；亦**未**用 `git add --renormalize` 去消标志，以免触碰「不 add web.go」约束）→ **过** |
 
-- **提交**：GAP-A/GAP-C 修复 + 双影子对练回填 = `6713e61`；退役实况 + G1–G8 回填 + `docs/README.md` 同步（`#70` 行状态 + `#76` 行登记）= 本册末次提交。**tag `last-go-node` 已 push**。
+- **提交**：GAP-A/GAP-C 修复 + 双影子对练回填 = `6713e61`；退役实况 + G1–G8 回填 + `docs/README.md` 同步（`#70` 行状态 + `#76` 行登记）= 收口提交；G8 判据坐实补记（`web.go` 行尾定性）= 其后一次提交。**tag `last-go-node` 已 push**。
 - **结论：P5 收口** —— 线上 `base-cache` 已由 Node 壳接管；`base`（源节点）仍为 Go。
   Go 实现（`internal/` / `cmd/` / `web/` / `based-linux-amd64`）**全留**，回退 = 一次 `restart`。
