@@ -470,6 +470,8 @@ func writeSeats(out string) error {
 		{"action_nested_obj", `{"action":{"nested":"x"}}`},
 		{"dup_key_second_wins", `{"action":"first","action":"second"}`},
 		{"action_msg", `{"action":"msg"}`},
+		{"capital_A", `{"Action":"msg"}`},
+		{"mixed_dup_first_lower", `{"action":"msg","Action":"hello"}`},
 	}
 	groupBodyCases := make([]groupBodyCase, 0, len(groupBodyInputs))
 	for _, in := range groupBodyInputs {

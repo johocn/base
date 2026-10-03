@@ -676,6 +676,16 @@
         "name": "action_msg",
         "body_json": "{\"action\":\"msg\"}",
         "action": "msg"
+      },
+      {
+        "name": "capital_A",
+        "body_json": "{\"Action\":\"msg\"}",
+        "action": "msg"
+      },
+      {
+        "name": "mixed_dup_first_lower",
+        "body_json": "{\"action\":\"msg\",\"Action\":\"hello\"}",
+        "action": "hello"
       }
     ]
   },
