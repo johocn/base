@@ -2,7 +2,7 @@
 
 - 日期：2026-10-03
 - 上游：总纲 `#69`（§0.13 迁移节奏 = 并行双跑 → 行为等价后 Go 节点退役）；路线计划 `#70`（§1 P5 行、§6 六条等价判据、§8 风险）；P4 设计册 `#74`（**2026-10-03 已定稿，P5 开工闸门已解除**）；P3 各批 = 计划 `#75`（批 A–G 已全收口，判据 2–7 均已各自对拍过）
-- 状态：**执行中**（P5-1 ~ P5-4 已收口，P5-4 遗留项已定案并落地；P5-5 起待执行）
+- 状态：**执行中**（P5-1 ~ P5-4 已收口；P5-5 前置「双影子对练」补验已通过并修 GAP-A/GAP-C、登记 GAP-B；退役待执行）
 - 性质：任务级计划，**不承载契约**。契约一律回册子。
 
 ## 0. 一句话
@@ -106,14 +106,21 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
 | 1 | `vectors/v1/` **全部**向量在核包内通过 | P5-2 | vitest 向量全绿（P1 起即为 13/13，本阶段回归确认） | **过** |
 | 2 | 公开读接口响应体**字节级**一致（含 4 个门禁头与 304 语义） | P5-2 + P5-3 | 静态对拍（EB 批 39 令牌含 ETag/304 边界）+ 线上真实样本 47 条 0 分歧；P5-4 再以**真库快照**在服务器上对拍 22 条 0 分歧 | **过** |
 | 3 | 认证写接口签名域与错误码语义一致（`X-Base-*` 五头） | P5-2（+ P5-3 弱证据） | 静态对拍为主（批 B 40 令牌）；真实面只到错误码层（5 类已取到，**未取得合法签名的真实写请求**） | **过（弱证据）** |
-| 4 | `sync` / `fetch` / `event-sync` 结果集一致且**只增不减** | P5-2 | 批 D 工装重跑（tokens=43，0 分歧） | **过** |
+| 4 | `sync` / `fetch` / `event-sync` 结果集一致且**只增不减** | P5-2 + 双影子对练 | 批 D 工装重跑（tokens=43，0 分歧）；真实运行态：Node↔Go 互为对端跑通 `importPack`（`imported=true`、只增不减）与多轮 `RoundResult`/`event_sync`（§8） | **过** |
 | 5 | `proposal` 列表 / 票数 / 门槛（含小节点豁免）逐条一致 | P5-2 | 批 C 工装重跑（tokens=63，0 分歧；DB 对称差 0） | **过** |
 | 6 | 同一数据集导出包 **`pack_id` 与 `merkle_root` 同一** | P5-2 | 批 E 证据（含真实视频块的非平凡 merkle） | **过** |
 | 7 | 开库引导等价（批 F 追加，`#75 §8` 边界项） | P5-2 | 开库后 **DB 快照对称差归零**（批 C 141 / 批 D 27 / 批 G 3×3 / EB 13 逐批 0） | **过** |
 
-**残留风险（不改变上述判定，但退役前须知情）**：P5-4 的线上影子是**只读影子**（不配 `BASE_PEERS` / `BASE_PEER_ADDR`），
-故 Node 的「**权威写 + 对端监听 + 反熵/scrub 调度 + TLS 身份**」这一整套运行态**尚未在任何真实环境跑过**；
-其等价性目前全部由 P3 各批的静态对拍 + 单测承担（判据 3/4）。
+**残留风险（原登记 → 已补验，见下）**：P5-4 的线上影子是**只读影子**（不配 `BASE_PEERS` / `BASE_PEER_ADDR`），
+故 Node 的「**权威写 + 对端监听 + 反熵/scrub 调度 + TLS 身份**」这一整套运行态当时**尚未在任何真实环境跑过**。
+
+**补验结果（2026-10-03「双影子对练」，实况见 §8）**：该运行态已在服务器上与**真实 Go 节点互为对端**跑通
+（①门户身份 ②mTLS 指纹固定 + 反熵 ③权威写/`importPack` ④scrub ⑤生产零影响，五段全过），
+并据此挖出并修复 **GAP-C**（出站反熵约半数轮次失败）。补验后残留：
+
+1. 出站指纹校验在 `rejectUnauthorized:false` 下 `checkServerIdentity` **不生效**，唯一校验点是**响应后**对
+   `res.socket.getPeerCertificate().raw` 的复核 ⇒ 依赖「每次连接都传证书」；**GAP-C 已通过禁用 TLS 会话复用保证**。
+2. **GAP-B（登记未修）**：身份加载判定与 Go 不一致（详见 §8），现有两单元均配 `-peer-addr` 故不受影响。
 
 ## 6. 风险与回退
 
@@ -268,4 +275,53 @@ P1–P3 已经把 Node 壳的**面**铺完了（HTTP 无未移植路由、CLI 11
   - 环境变量：`BASE_DATA` / `BASE_DB` / `BASE_ADDR` / `BASE_ISSUER` / `BASE_TLS_CERT`（`off` 或证书路径）/ `BASE_STORE_KEY_FILE` 或 `<data>.key`（**密钥必须与所接管的库匹配，否则密文解不开**）。
   - 只读影子额外约束：不配 `BASE_PEERS` / `BASE_PEER_ADDR`（正因如此影子不加载 TLS 身份、门户页身份行为空，属**预期**差异）。
 
-### Task P5-5 ~ P5-6
+### Task P5-5　判据定案 + 退役
+
+#### P5-5 前置补验：服务器「双影子对练」（2026-10-03）—— **已通过**
+
+- **目的**：补验 §5 残留风险所指的运行态 ——「权威写 + 对端监听 + 反熵/scrub 调度 + TLS 身份」（P5-4 只读影子未覆盖）。
+- **拓扑**：同机**双影子并存、互为对端**；瞬态单元 `p5-go-shadow` / `p5-node-shadow`（`systemd-run --collect`）。
+  - Go 影子 `/opt/p5-shadow-go`：快照源 = `/opt/base/data`（源节点）；主监听 `127.0.0.1:8093`、对端监听 `127.0.0.1:8091`；
+    GoFP=`eed8fb64a566b4024f0e9075a71386ac5388af4243836ff30bc3c33f7612356c`、GoPC=`53MP-WZFF-M22A-ETYO`。
+  - Node 影子 `/opt/p5-shadow-node`：快照源 = `/opt/base-cache/data`（缓存节点）；主监听 `127.0.0.1:8094`、对端监听 `127.0.0.1:8092`；
+    `BASE_TLS_CERT=off`；NodeFP=`521e1d853d263bccda5ee57ae23a805e1217747f86e9c9841ed54529402f8d66`、NodePC=`KIPB-3BJ5-EY54-ZWS6`。
+  - 快照口径同 P5-4：`sqlite3 .backup`（服务器无 `VACUUM INTO`）+ `cp -a blobs/packs/release.json` + 改写 `packs.dir` + 连带 `<data>.key`。
+- **五段结论（全过）**：
+
+  | 段 | 验证点 | 结果 |
+  |---|---|---|
+  | ① | 门户页身份（GAP-A 修复的线上实证） | 各显示**自身**配对码/指纹（Go 页 `53MP-WZFF-M22A-ETYO` / `eed8fb64a566…`；Node 页 `KIPB-3BJ5-EY54-ZWS6` / `521e1d853d26…`）→ **PASS** |
+  | ② | 对端监听 + 双向 TLS 指纹固定 | 正例（用 Node 指纹连 Go 的 `:8092`）exit=0；**反例**（故意错指纹）→ `tls_fingerprint_mismatch: 对端指纹 … 不在白名单` exit=1（fail-closed）；Node→Go 出站调度产生完整 `RoundResult` 与 `event_sync events=36 tombstones=0` → **PASS** |
+  | ③ | 权威写 + `importPack` | Go 影子 `import-video`（2.5 MiB / 3 块）→ `export` 出 `pack_id=f7d832fe4b29c1ad7aff2ebd6e230a74 cv=4`；Node 影子自动 `imported=true equal=false missing=3 extra=3 fetched=3`，落 `cv=4 packs=4 blobs=11`，新包目录 `manifest.json`+`pack.sqlite` 就位 → **PASS** |
+  | ④ | scrub（本地校验修复） | 干净轮 `checked=11 repaired=0 dropped=0 unrepaired=0`；注入坏块后 `checked=10 repaired=1 dropped=1 unrepaired=0` 且文件恢复 524316 字节 → **PASS** |
+  | ⑤ | 生产零影响 | `base` / `base-cache` 均 active、`ActiveEnterTimestamp=Thu 2026-10-01 23:52:10 CST` **未变**；nginx 与公网 `/`、`/v1/catalog`、`/v1/release` 全 200 → **PASS** |
+
+- **预期值修正（非缺陷）**：Node 影子（base-cache 快照）比 Go 影子（base 快照）**多 3 个块**，故 `extra=3` / `no_replica=3`、
+  merkle **永不相等** —— 两侧数据集不同源，在「只增不减」语义下这是**期望行为**，不是实现差异。
+
+- **GAP-A（门户页身份证恒为空）—— 已修**
+  - 根因：`main.ts` 的 TLS 身份 `info` 在 `startServer` **之后**才加载，门户页拿到的 `opts.fingerprintHex`/`pairingCode` 恒为空。
+  - 修复：把 `info` 加载**移到 `startServer` 之前**并注入 `opts`（对齐 `serve.go:63-76`）；**判定条件保持不动**（避免牵出 GAP-B）。
+  - 线上实证：见上表 ①。
+
+- **GAP-C（出站反熵约半数轮次失败）—— 已修**
+  - 症状：`peersync: https://127.0.0.1:8091 事件同步失败: POST /v1/event-sync: Error: tls_fingerprint_mismatch: 对端未提供证书` + 「本轮失败」。
+  - 根因（已实证）：`peersync/peer.ts` 在**响应到达后**用 `res.socket.getPeerCertificate().raw` 复核对端 DER 指纹；
+    Node `https.globalAgent` 默认 `maxCachedSessions:100` ⇒ **TLS 会话复用（abbreviated handshake）时对端不再传证书** ⇒ `raw` 为空
+    ⇒ `verifyPinned` 抛「对端未提供证书」整轮中止。**fail-closed，故为可用性缺陷而非安全漏洞**。
+    Go 侧 `tls.Config.ClientSessionCache` 默认 `nil` ⇒ **从不复用会话** ⇒ 无此问题。
+  - 探针证据：v1（每请求后 `destroy()`）6/6 成功 `raw len=474` 且 `checkServerIdentity` **从未被调用**
+    （证明 `rejectUnauthorized:false` 下它不生效）；v2（keep-alive，16s 间隔）**#8–#12 全部 `rawLen=0`**（新 socket + 会话复用）。
+  - 修复：`tlsTransport` 改用自带 `new https.Agent({ keepAlive: true, maxCachedSessions: 0 })`（对齐 Go 语义：每次全握手、证书必在）。
+  - 复验：重打包上线后连续 **11 轮**（180 s，间隔 15 s）**0 次**「对端未提供证书」、**0 次**「本轮失败」（修复前约半数轮次失败）。
+
+- **GAP-B（身份加载判定与 Go 不一致）—— 登记，未修**
+  - Go（`serve.go:61-76`）加载身份 ⟺ `tls-cert ≠ off` **或** `-peer-addr` 非空；Node（`main.ts:91-94`）⟺ `-peer-addr` 非空 **或** `-peers` 非空。
+  - 两处可复现分歧：① `tls-cert≠off` 且无 `-peer-addr`/`-peers` → Go 加载、Node 不加载（Node 主监听将丢失 TLS 身份）；
+    ② `-peers` 非空但无 `-peer-addr` 且 `tls-cert=off` → Node 加载、Go 不加载（仅门户页身份行可见性差异）。
+  - **现有两单元均配 `-peer-addr`，不受影响**；本阶段不修（改判定会牵动 GAP-A 修复的边界）。
+
+- **工装**（`.tmp/g4/`，不入版本控制；服务器 `/root/`）：`p55_setup.sh`（快照 + 证书 + 环境 + 起双影子）、
+  `p55_verify.sh`（五段验证）、`p55_tlsprobe.mjs`（只读取证探针）、`p55_c_verify.sh`（GAP-C 复验）。
+
+### Task P5-5 ~ P5-6（退役与门禁）

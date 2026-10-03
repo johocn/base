@@ -80,19 +80,6 @@ export async function main(): Promise<void> {
       const dbPath = process.env.BASE_DB ?? "base.db";
       // 对齐 serve.go:43-46：env 读取与默认值保持不变。
       const dataDir = process.env.BASE_DATA ?? dirname(dbPath);
-      const opts: ServerOptions = {
-        ...parseAddr(process.env.BASE_ADDR ?? ":8080"),
-        dataDir,
-        issuer: process.env.BASE_ISSUER || "base-node-1",
-        signKeyHex: process.env.BASE_SIGN_KEY ?? "",
-        // 对齐 serve.go:93：未配置（空串）即不注册审核路由。
-        reviewKey: process.env.BASE_REVIEW_KEY ?? "",
-      };
-
-      const db = openBootstrapDb(dbPath);
-      const listener = await startServer(adapters, db, opts);
-      process.stdout.write(`listening ${listener.addr()}\n`);
-
       const peers = peersFromRaw(process.env.BASE_PEERS ?? "");
       const peerAddr = process.env.BASE_PEER_ADDR ?? "";
       const nodeKey = (process.env.BASE_NODE_KEY ?? "").trim();
@@ -100,10 +87,25 @@ export async function main(): Promise<void> {
       const tlsKey = process.env.BASE_TLS_KEY ?? "";
       const fetchMaxBlobs = envIntOr("BASE_FETCH_MAX_BLOBS", 64);
       // 本节点 TLS 身份：主监听明文（tls-cert=off）时也按默认证书路径加载（出站/对端监听需要）。
+      // **必须先于 startServer**：门户页身份证（配对码/指纹）随 Options 注入，对齐 serve.go:63-76。
       const info =
         peerAddr !== "" || peers.length > 0
           ? await adapters.tls.loadOrCreate(resolveTlsMaterial(tlsCert, tlsKey, dataDir))
           : undefined;
+      const opts: ServerOptions = {
+        ...parseAddr(process.env.BASE_ADDR ?? ":8080"),
+        dataDir,
+        issuer: process.env.BASE_ISSUER || "base-node-1",
+        signKeyHex: process.env.BASE_SIGN_KEY ?? "",
+        // 对齐 serve.go:93：未配置（空串）即不注册审核路由。
+        reviewKey: process.env.BASE_REVIEW_KEY ?? "",
+        fingerprintHex: info?.fingerprintHex ?? "",
+        pairingCode: info?.pairingCode ?? "",
+      };
+
+      const db = openBootstrapDb(dbPath);
+      const listener = await startServer(adapters, db, opts);
+      process.stdout.write(`listening ${listener.addr()}\n`);
 
       // 对端监听（公开路由 ∪ 内部路由）：只有配置 -peer-addr 才起。
       if (peerAddr !== "") {

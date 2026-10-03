@@ -11,10 +11,13 @@
 //      Node 无对应类型，用 node:https 的 cert/key（本节点证书）+ rejectUnauthorized:false
 //      + checkServerIdentity（并在响应处再核一次对端 DER 指纹）实现**对端 DER sha256 指纹钉扎**；
 //      白名单为空即 fail-closed 拒绝。
+//      另：出站用自带 Agent（keepAlive + maxCachedSessions:0）禁用 TLS 会话复用，对齐 Go 默认
+//      ClientSessionCache=nil——否则 Node 在会话复用的简握手（abbreviated handshake）中拿不到对端证书，
+//      getPeerCertificate().raw 为空，会被响应后的复核误判为「对端未提供证书」而 fail-closed 中止整轮。
 //   4. Go 的方法 `Config.do` 在 TS 里叫 `doRequest`（`do` 是 JS 保留字，不能作函数名）。
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import type { PeerCertificate, TLSSocket } from "node:tls";
 
 /** 一个对端节点（与 cmd/based 的 peerSpec / BASE_PEERS 元素同形）。 */
@@ -105,6 +108,8 @@ function tlsTransport(own: TlsIdentity | undefined, peerFingerprintHex: string):
   const cert = readFileSync(own.certFile);
   const key = readFileSync(own.keyFile);
   const allowed = normalizeFingerprints([peerFingerprintHex]);
+  // 禁用 TLS 会话复用（maxCachedSessions:0）：每次都全握手，对端证书必在（见文件头差异 3）。
+  const agent = new HttpsAgent({ keepAlive: true, maxCachedSessions: 0 });
   return (req) =>
     new Promise<PeerResponse>((resolve, reject) => {
       const u = new URL(req.url);
@@ -118,6 +123,7 @@ function tlsTransport(own: TlsIdentity | undefined, peerFingerprintHex: string):
           headers: req.headers,
           cert,
           key,
+          agent,
           rejectUnauthorized: false,
           checkServerIdentity: (_host, peer: PeerCertificate) =>
             verifyPinned(peer.raw, allowed) ?? undefined,
