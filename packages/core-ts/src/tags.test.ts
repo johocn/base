@@ -23,7 +23,7 @@ function fixture() {
 }
 
 function item(itemId: string, type: string, title = itemId): ItemRow {
-  return { itemId, source: 'importer', type, title, rev: '1', contentHash: 'h', state: 'active', updatedAt: '' };
+  return { itemId, source: 'importer', type, title, rev: '1', contentHash: 'h', state: 'active', updatedAt: '', authorId: '', authorSig: '' };
 }
 
 function link(tagId: string, targetId: string, kind: string): TagLinkRow {

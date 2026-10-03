@@ -55,7 +55,7 @@ import { onLoad, onShow } from '@dcloudio/uni-app';
 import { createProposal, listProposals, myIdentityId, vote, type GovernAction, type ProposalItem } from '../../core/govern';
 import { bootstrap } from '../../platform';
 
-const ACTION_LABEL: Record<GovernAction, string> = { remove: '下架', edit: '改写', revive: '复活' };
+const ACTION_LABEL: Record<GovernAction, string> = { remove: '下架', edit: '改写', revive: '复活', directory_add: '补词条' };
 const STATUS_LABEL: Record<ProposalItem['status'], string> = { pending: '待决', effective: '已生效', void: '已作废' };
 const ACTIONS: Array<{ key: GovernAction; label: string }> = [
   { key: 'remove', label: '下架' },

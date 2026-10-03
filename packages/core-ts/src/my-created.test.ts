@@ -223,6 +223,8 @@ describe('containerFormFromLedger：台账行集 → 详情渲染（与 loadCont
       contentHash: '',
       state: 'active',
       updatedAt: '2026-09-30T00:00:00Z',
+      authorId: '',
+      authorSig: '',
     });
     repo.segments.set(itemId, segs);
     return loadContainerForm(repo, itemId, type);

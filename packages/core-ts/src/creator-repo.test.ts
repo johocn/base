@@ -79,7 +79,7 @@ describe('removeLocalContainer：失败行的本地删除（册子 #61 §4.3）'
     const repo = new MemoryRepo();
     repo.items.set('course/c1', {
       itemId: 'course/c1', source: 'course', type: 'course', title: '同步来的',
-      rev: '1', contentHash: 'h', state: 'active', updatedAt: '',
+      rev: '1', contentHash: 'h', state: 'active', updatedAt: '', authorId: '', authorSig: '',
     });
     repo.segments.set('course/c1', [{ itemId: 'course/c1', seq: 1, kind: 'lesson', text: 'x', contentHash: '' }]);
     await repo.removeLocalContainer('course/c1');

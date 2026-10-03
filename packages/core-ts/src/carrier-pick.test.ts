@@ -5,7 +5,7 @@ import { MemoryRepo } from './fakes';
 import type { ItemRow } from './types';
 
 function row(itemId: string, type: string, title: string, state = 'active'): ItemRow {
-  return { itemId, source: type, type, title, rev: 'r', contentHash: 'h', state, updatedAt: '' };
+  return { itemId, source: type, type, title, rev: 'r', contentHash: 'h', state, updatedAt: '', authorId: '', authorSig: '' };
 }
 
 async function repo(): Promise<MemoryRepo> {

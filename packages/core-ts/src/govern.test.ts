@@ -17,7 +17,7 @@ function json(v: unknown) {
 }
 
 function itemRow(itemId: string): ItemRow {
-  return { itemId, source: 'import', type: 'article', title: 'T', rev: 'r1', contentHash: HASH, state: 'active', updatedAt: '2026-01-01T00:00:00Z' };
+  return { itemId, source: 'import', type: 'article', title: 'T', rev: 'r1', contentHash: HASH, state: 'active', updatedAt: '2026-01-01T00:00:00Z', authorId: '', authorSig: '' };
 }
 
 function fixture(http: FakeHttp = new FakeHttp()) {

@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue';
+import type { Adapters } from '@base/core-ts/platform/adapter';
 import type { ContributorItem } from './contribution';
 import { roster } from './contribution';
 import { decodeUtf8 } from './sync';
@@ -9,7 +10,7 @@ import { decodeUtf8 } from './sync';
  * 然后在合适的时机调 fetchAuthorBar({ adapters, repo, nodeBaseUrl })——内部处理所有降级链。
  */
 export interface UseAuthorBarOpts {
-  adapters: { http: { get: (u: string) => Promise<{ status: number; body: Uint8Array }> } };
+  adapters: Adapters;
   repo: unknown;
   nodeBaseUrl: string;
 }

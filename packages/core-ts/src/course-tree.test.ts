@@ -24,6 +24,8 @@ function item(itemId: string, type: string): ItemRow {
     contentHash: 'h',
     state: 'active',
     updatedAt: '2026-01-01T00:00:00Z',
+    authorId: '',
+    authorSig: '',
   };
 }
 

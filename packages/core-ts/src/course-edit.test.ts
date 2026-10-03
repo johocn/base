@@ -119,7 +119,7 @@ describe('loadContainerForm：从本地包回填', () => {
     await repo.applyPack({
       version: 1, packId: 'p1', updatedAt: '2026-09-30T00:00:00Z', articles: [], quizzes: [], tombstones: [],
       items: [
-        { itemId: 'course/c1/lesson/l1', source: 'lesson', type: 'lesson', title: '第一讲', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '' },
+        { itemId: 'course/c1/lesson/l1', source: 'lesson', type: 'lesson', title: '第一讲', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '', authorId: '', authorSig: '' },
       ],
       segments: [
         { itemId: 'course/c1/lesson/l1', seq: -1, kind: 'attr.cover', text: '00112233445566778899aabbccddeeff', contentHash: 'h' },
@@ -143,7 +143,7 @@ describe('loadContainerForm：从本地包回填', () => {
     await repo.applyPack({
       version: 1, packId: 'p2', updatedAt: '2026-09-30T00:00:00Z', articles: [], quizzes: [], tombstones: [],
       items: [
-        { itemId: 'course/c1', source: 'course', type: 'course', title: '数学', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '' },
+        { itemId: 'course/c1', source: 'course', type: 'course', title: '数学', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '', authorId: '', authorSig: '' },
       ],
       segments: [
         { itemId: 'course/c1', seq: -1, kind: 'attr.category', text: 'math', contentHash: 'h' },
@@ -165,8 +165,8 @@ describe('loadContainerForm：从本地包回填', () => {
     await repo.applyPack({
       version: 1, packId: 'p3', updatedAt: '2026-09-30T00:00:00Z', articles: [], quizzes: [], tombstones: [],
       items: [
-        { itemId: 'course/c1', source: 'course', type: 'course', title: '数学', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '' },
-        { itemId: 'course/c1/lesson/l1', source: 'lesson', type: 'lesson', title: '第一讲', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '' },
+        { itemId: 'course/c1', source: 'course', type: 'course', title: '数学', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '', authorId: '', authorSig: '' },
+        { itemId: 'course/c1/lesson/l1', source: 'lesson', type: 'lesson', title: '第一讲', rev: 'r', contentHash: 'h', state: 'active', updatedAt: '', authorId: '', authorSig: '' },
       ],
       segments: [
         { itemId: 'course/c1', seq: -1, kind: 'attr.badge', text: '悬赏,活动', contentHash: 'h' },
@@ -297,7 +297,7 @@ describe('loadContainerForm：参数解码（册子 #61 §2）', () => {
     const repo = new MemoryRepo();
     repo.items.set('course/c1', {
       itemId: 'course/c1', source: 'course', type: 'course', title: '数学',
-      rev: 'r', contentHash: 'h', state: 'active', updatedAt: '',
+      rev: 'r', contentHash: 'h', state: 'active', updatedAt: '', authorId: '', authorSig: '',
     });
     repo.segments.set('course/c1', [
       { itemId: 'course/c1', seq: -1, kind: 'attr.instructor', text: '李老师', contentHash: '' },

@@ -109,7 +109,7 @@ import { onLoad } from '@dcloudio/uni-app';
 
 import { fetchBlob } from '../../core/blob';
 import { attrsOf, childrenRowsOf, type AttachmentVM } from '../../core/container-view';
-import { childrenOf, lessonNo, lessonPos, prevNextLesson, relatedLessons } from '../../core/course-tree';
+import { childrenOf, lessonNo, lessonPosition, prevNextLesson, relatedLessons as deriveRelatedLessons } from '../../core/course-tree';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
 import { renderMarkdown } from '../../core/markdown';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
@@ -212,7 +212,7 @@ onLoad(async (query) => {
         const courseItem = await repo.getItem(courseId.value);
         courseTitle.value = courseItem?.title ?? '';
 
-        // 位置（序号点 + 进度条）—— ref 名 lessonPos，与纯函数 lessonPos 区分
+        // 位置（序号点 + 进度条）—— ref 名 lessonPos，与纯函数 lessonPosition 区分
         lessonPos.value = lessonPosition(courseSegs, lid);
 
         // 上下讲导航
@@ -229,7 +229,7 @@ onLoad(async (query) => {
         }
 
         // 同课程相关推荐 top 5
-        const relatedIds = relatedLessons(courseSegs, lid);
+        const relatedIds = deriveRelatedLessons(courseSegs, lid);
         const related: { itemId: string; title: string; no: number }[] = [];
         for (const id of relatedIds) {
           const it = await repo.getItem(id);

@@ -175,7 +175,7 @@ onLoad(async (query) => {
       return;
     }
     itemId.value = row.itemId;
-    type.value = row.type;
+    type.value = row.type === 'quiz' ? 'quiz' : 'article';
     title.value = row.title;
     bodyMd.value = row.bodyMd;
     const loaded = row.type === 'quiz' ? draftsFromQuestionJSON(row.questionJson) : [];
