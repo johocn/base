@@ -190,7 +190,7 @@ P6 不再做设计，只把 `#74` 已定稿的提案落地：**1 个事件类型
 - **Go 侧**：genvectors/main.go writeSeats 覆盖全部 5 section；internal/store/groupseats.go `rankInput → RankInput`（genvectors 跨包调用）+ `groupBodyAction → GroupBodyAction` 导出；groupseats_test.go 同步改名。
 - **TS 侧**：apps/node/src/store/groupseats.test.ts 消费测试（遍历 seats.json GroupBodyAction section 逐字段断言）；**42 tests 全 PASS**（含追加 14 边界）。
 - **三次 commit**：初始 28 cases `3bae003`（5 files）→ 补 12 边界 `c8e0d18`（误判 Go 大小写敏感、故意排除的 2 case）→ 实证探针打穿误判补回 2 case `fe59ee0`。
-- **实证探针教训**：子代理初始假设 "Go `json.Unmarshal(struct tag:"action")` 精确小写匹配、TS `toLowerCase()` 遍历 → 大小写不同解"，脑内推理后**故意排除**了 `{"Action":"msg"}` 和 `{"action":"msg","Action":"hello"}` 两个 case。写了 6 行临时 probe test `TestGroupBodyActionCaseSensitivityProbe` 一跑就钉死——Go `encoding/json` 对 struct tag **默认就是大小写不敏感匹配**（匹配 `action` / `Action` / `ACTION` 三种写法、重复键后者覆盖），与 TS 侧行为**完全一致**。探针删后补回 2 case，全仓回归零影响。**结论：跨语言同解判断必须先跑实证、不要脑内推理**。
+- **实证探针教训**：子代理初始假设 "Go `json.Unmarshal(struct tag:"action")` 精确小写匹配、TS `toLowerCase()` 遍历 → 大小写不同解"，脑内推理后**故意排除**了 `{"Action":"msg"}` 和 `{"action":"msg","Action":"hello"}` 两个 case。写了 6 行临时 probe test `TestGroupBodyActionCaseSensitivityProbe`（6 case 全 PASS）一跑就钉死——Go `encoding/json` 源码 [`decode.go:700-703`](file:///D:/go/src/encoding/json/decode.go#L700-L703) 确认是**两级查找**：先精确匹配 `fields.byExactName[string(key)]`（区分大小写）、精确 miss 再做 Unicode case folding `fields.byFoldedName[string(foldName(key))]`（覆盖全量 Unicode 折叠组、不止 ASCII）。因此纯 `json:"action"`（无逗号修饰符、无自定义 UnmarshalJSON）的 struct 字段，`action` / `Action` / `ACTION` 三种 key 都会命中，重复键后者覆盖——与 TS 侧行为**完全一致**。探针删后补回 2 case，全仓回归零影响。**结论：跨语言同解判断必须先跑实证、不要脑内推理**。
 - 幂等确认：连续两次 `go run ./tools/genvectors -out vectors/v1`，git diff 空输出。
 - Go 全仓 `./...` build/vet/test 全绿；vitest **104 files / 1225 passed / 2 skipped**（只增不减、基线 1225）。
 
