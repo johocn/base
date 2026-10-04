@@ -11,7 +11,7 @@ import (
 const TagSegmentMaxRunes = 64
 
 // tagKindOrder 是关联的 kind 取值集合（册子 §3.2）；排序口径在 store 侧（册子 §3.3）。
-var tagKindOrder = []string{"course", "lesson", "article", "comment"}
+var tagKindOrder = []string{"course", "lesson", "article", "quiz", "comment"}
 
 // normalizeTagSegment 归一化一段：去首尾空白。
 // **本册口径收窄（2026-09-30 用户定案）**：不做 NFC/NFD 归一化——Go 标准库无 NFC，

@@ -33,12 +33,12 @@ type TagSubmission struct {
 
 // tagKindRank 是物化 segments 行的 kind 固定序（册子 §3.3）。
 func tagKindRank(kind string) int {
-	for i, k := range []string{"course", "lesson", "article", "comment"} {
+	for i, k := range []string{"course", "lesson", "article", "quiz", "comment"} {
 		if k == kind {
 			return i
 		}
 	}
-	return 4
+	return 5
 }
 
 // MaterializeTagSegments 把关联集物化成 segments 行（册子 §3.3）：seq 从 1 起，

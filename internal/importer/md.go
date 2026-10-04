@@ -434,14 +434,5 @@ func importQuiz(st *store.Store, filename string, raw []byte, p placement, tags 
 	}, source); err != nil {
 		return err
 	}
-	// tags → 写 tag_links（让 tag/ 容器在阶段 3.5 重建时能包含 quiz）
-	for _, t := range tags {
-		if t == "" {
-			continue
-		}
-		if err := st.AddTagLink("tag/"+t, p.ItemID, "quiz"); err != nil {
-			return err
-		}
-	}
 	return nil
 }
