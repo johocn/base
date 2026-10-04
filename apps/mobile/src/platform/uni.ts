@@ -107,7 +107,7 @@ interface UniGlobal {
   }): void;
   request(o: {
     url: string;
-    method: 'GET' | 'POST';
+    method: 'GET' | 'POST' | 'PUT';
     header?: Record<string, string>;
     /** POST 用；arraybuffer 收发，不经过字符串编解码 */
     data?: ArrayBuffer;
@@ -497,9 +497,14 @@ export class PlusHttp implements HttpAdapter {
     return this.send(url, 'POST', buf, headers);
   }
 
+  async put(url: string, body: Uint8Array, headers?: Record<string, string>): Promise<HttpResponse> {
+    const buf = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer;
+    return this.send(url, 'PUT', buf, headers);
+  }
+
   private async send(
     url: string,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT',
     data: ArrayBuffer | undefined,
     headers?: Record<string, string>,
   ): Promise<HttpResponse> {

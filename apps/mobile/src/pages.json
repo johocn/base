@@ -99,6 +99,14 @@
     {
       "path": "pages/directory/apply",
       "style": { "navigationBarTitleText": "补词条" }
+    },
+    {
+      "path": "pages/identity/backup",
+      "style": { "navigationBarTitleText": "账号托管与备份" }
+    },
+    {
+      "path": "pages/identity/restore",
+      "style": { "navigationBarTitleText": "恢复账号" }
     }
   ],
   "tabBar": {

@@ -24,6 +24,12 @@
       <button size="mini" @click="checkUpdate">检查更新</button>
       <text v-if="updateLine" class="meta">{{ updateLine }}</text>
     </view>
+
+    <view class="identity">
+      <text class="identity-title">账号与恢复</text>
+      <navigator url="/pages/identity/backup" class="nav-link">账号托管与备份</navigator>
+      <navigator url="/pages/identity/restore" class="nav-link">换手机恢复账号</navigator>
+    </view>
   </view>
 </template>
 
@@ -136,4 +142,7 @@ function openSelfCheck() {
 .acts { display: flex; margin-top: 24px; }
 .probe { margin-right: 8px; }
 .ver { margin-top: 24px; }
+.identity { margin-top: 24px; padding-top: 12px; border-top: 1px solid #eeeeee; }
+.identity-title { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.nav-link { display: block; color: #2b6cb0; font-size: 13px; padding: 6px 0; }
 </style>
