@@ -219,190 +219,83 @@ function isReservedWord(col: string): boolean {
   return RESERVED.has(normalizeIdent(col));
 }
 
-/** 把全部静态 SQL（不包含 `${}`）从 repo.ts + search.ts 源文件里抠出来。 */
+/**
+ * 把全部静态 SQL（不含 `${...}` 动态片段）从 repo.ts + search.ts 源文件里抠出来。
+ * 读源文件 + 正则，而非手抄清单——新增 SQL 自动被覆盖，不会因为忘了补测试产生虚假安全感。
+ */
 function collectLocalRepoSql(): string[] {
-  // 直接手列，避免再写一套源文件扫描；漏一条马上加。
-  // 按调用点分组，带注释说明跳过原因。
   const out: string[] = [];
 
-  // === search.ts ===
+  // SEARCH_SQL 是直接导出的常量
   out.push(SEARCH_SQL);
 
-  // === repo.ts ===
-  out.push("SELECT value FROM config WHERE key=?");
-  out.push("INSERT INTO config(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
-  out.push("INSERT INTO tombstone(item_id,revoked_rev) VALUES(?,?) ON CONFLICT(item_id) DO UPDATE SET revoked_rev=excluded.revoked_rev");
+  // repo.ts 的 SQL：读源文件，抽 `this.db.select/execute(...)` 和 `{ sql: ... }` 模板字符串
+  const repoSrc = readSource('repo.ts');
+  out.push(...extractSqlTemplates(repoSrc));
 
-  // tombstone: DELETE 全部下游表
-  out.push("DELETE FROM blob_index WHERE item_id=?");
-  out.push("DELETE FROM articles WHERE item_id=?");
-  out.push("DELETE FROM quizzes WHERE item_id=?");
-  out.push("DELETE FROM segments WHERE item_id=?");
-  out.push("DELETE FROM tag_links WHERE tag_id=?");
-  out.push("DELETE FROM items WHERE item_id=?");
+  // 跳过：store/*（节点侧）、sync.ts（pack 读，不是本地库）、fakes.ts（FakePackReader 是测试替身）
+  // —— 这三处表/列名都按节点 schema 写 source_rev/sqlite_table/dist_class，对 SCHEMA_SQL 必红。
 
-  // applyPack：items / articles / quizzes 三支 INSERT + DELETE
-  out.push(
-    "INSERT INTO items(item_id,source,type,title,rev,content_hash,state,updated_at,author_id,author_sig) " +
-      "VALUES(?,?,?,?,?,?,?,?,?,?) " +
-      "ON CONFLICT(item_id) DO UPDATE SET source=excluded.source,type=excluded.type,title=excluded.title," +
-      "rev=excluded.rev,content_hash=excluded.content_hash,state=excluded.state,updated_at=excluded.updated_at," +
-      "author_id=excluded.author_id,author_sig=excluded.author_sig",
-  );
-  out.push(
-    "INSERT INTO articles(item_id,title,digest,published_at,tags_json,body_md,content_hash,rev) " +
-      "VALUES(?,?,?,?,?,?,?,?) " +
-      "ON CONFLICT(item_id) DO UPDATE SET title=excluded.title,digest=excluded.digest," +
-      "published_at=excluded.published_at,tags_json=excluded.tags_json,body_md=excluded.body_md," +
-      "content_hash=excluded.content_hash,rev=excluded.rev",
-  );
-  out.push(
-    "INSERT INTO quizzes(item_id,question_json,content_hash) VALUES(?,?,?) " +
-      "ON CONFLICT(item_id) DO UPDATE SET question_json=excluded.question_json," +
-      "content_hash=excluded.content_hash",
-  );
-  out.push("INSERT INTO segments(item_id,seq,kind,text,content_hash) VALUES(?,?,?,?,?)");
-  out.push(
-    "INSERT INTO tag_links(tag_id,target_id,kind) VALUES(?,?,?) " +
-      "ON CONFLICT(tag_id,target_id,kind) DO NOTHING",
-  );
-  out.push("DELETE FROM segments WHERE item_id=?");
-  out.push("DELETE FROM tag_links WHERE tag_id=?");
+  return Array.from(new Set(out));
+}
 
-  // applyPack 的 config 版本号 upsert
-  out.push("INSERT INTO config(key,value) VALUES('content_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
-  out.push("INSERT INTO config(key,value) VALUES('pack_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+/** 以本文件为锚点，取同目录下另一份源码的文本（vitest 跑在 ts 上，__dirname 用的是 cwd；这里用显式相对路径）。 */
+function readSource(name: string): string {
+  // 运行时文件在 packages/core-ts/src/ 下，用 __dirname 取基目录
+  // vitest 的 __dirname 就是源文件目录（因为 transform 后直接跑 ts）
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { readFileSync } = require('node:fs') as typeof import('node:fs');
+  const { join } = require('node:path') as typeof import('node:path');
+  // __filename 在 ESM+vitest 下不可用；用相对路径定位
+  // 实际上 vitest 把本文件放在 packages/core-ts/src/schema-check.test.ts，
+  // repo.ts 就在同目录。所以直接用 packages/core-ts/src/ 作为基。
+  const base = join(process.cwd(), 'src');
+  return readFileSync(join(base, name), 'utf8');
+}
 
-  // get / list items
-  out.push("SELECT item_id,source,type,title,rev,content_hash,state,updated_at,author_id,author_sig FROM items WHERE item_id=?");
-  out.push("SELECT item_id,source,type,title,rev,content_hash,state,updated_at,author_id,author_sig FROM items");
-  // get article
-  out.push("SELECT item_id,title,digest,published_at,tags_json,body_md,content_hash,rev FROM articles WHERE item_id=?");
-  // getContainerSegments
-  out.push("SELECT item_id,seq,kind,text,content_hash FROM segments WHERE item_id=? ORDER BY seq ASC");
-  // tags：listTagLinks / getByTagIds
-  out.push("SELECT tag_id,target_id,kind FROM tag_links ORDER BY tag_id ASC, kind ASC, target_id ASC");
-  out.push("SELECT tag_id,target_id,kind FROM tag_links WHERE target_id IN (?) ORDER BY tag_id ASC, kind ASC, target_id ASC");
-
-  // syncOnce：tombstone 清单 + blob_index 查
-  out.push("SELECT item_id FROM items");
-  out.push("DELETE FROM user_state WHERE item_id=?");
-  out.push("DELETE FROM quiz_attempt WHERE item_id=?");
-  out.push("SELECT blob_id FROM blob_index WHERE blob_id=?");
-  out.push(
-    "INSERT INTO blob_index(blob_id,item_id,path,size,verified_at) VALUES(?,?,?,?,?) " +
-      "ON CONFLICT(blob_id) DO UPDATE SET item_id=excluded.item_id,path=excluded.path," +
-      "size=excluded.size,verified_at=excluded.verified_at",
-  );
-  out.push("SELECT item_id,revoked_rev FROM tombstone");
-  out.push("SELECT path FROM blob_index WHERE item_id=?");
-
-  // favorite
-  out.push("SELECT favorited_at FROM user_state WHERE item_id=?");
-  out.push(
-    "INSERT INTO user_state(item_id,favorited_at) VALUES(?,?) " +
-      "ON CONFLICT(item_id) DO UPDATE SET favorited_at=excluded.favorited_at",
-  );
-  out.push("SELECT item_id FROM user_state WHERE item_id=? AND favorited_at IS NOT NULL");
-  // listFavorites JOIN（动态列 `${cols}` 不在此范围）
-  out.push(
-    "SELECT u.item_id AS item_id, i.title AS title, u.favorited_at AS favorited_at " +
-      "FROM user_state u INNER JOIN items i ON i.item_id=u.item_id WHERE u.favorited_at IS NOT NULL ORDER BY u.favorited_at DESC",
-  );
-  out.push("SELECT read_at FROM user_state WHERE item_id=?");
-  out.push(
-    "INSERT INTO user_state(item_id,read_at) VALUES(?,?) " +
-      "ON CONFLICT(item_id) DO UPDATE SET read_at=excluded.read_at",
-  );
-
-  // quiz
-  out.push("SELECT item_id,source,type,title,rev,content_hash,state,updated_at FROM items WHERE type='quiz'");
-  out.push("SELECT item_id,question_json,content_hash FROM quizzes WHERE item_id=?");
-  out.push("INSERT INTO quiz_attempt(item_id,answered_at,correct,total) VALUES(?,?,?,?)");
-
-  // learningStats
-  out.push("SELECT count(*) AS n, MAX(read_at) AS m FROM user_state WHERE read_at IS NOT NULL");
-  out.push("SELECT count(*) AS n, COALESCE(SUM(correct),0) AS c, COALESCE(SUM(total),0) AS t, MAX(answered_at) AS m FROM quiz_attempt");
-
-  // comment_out：enqueue / list / fail / delete
-  out.push(
-    "INSERT INTO comment_out(event_id,target_id,text,reply_to,wire,state,reason,queued_at) VALUES(?,?,?,?,?,?,?,?) " +
-      "ON CONFLICT(event_id) DO UPDATE SET target_id=excluded.target_id,text=excluded.text," +
-      "reply_to=excluded.reply_to,wire=excluded.wire,queued_at=excluded.queued_at",
-  );
-  out.push("SELECT event_id,target_id,text,reply_to,wire,state,reason,queued_at FROM comment_out ORDER BY queued_at ASC");
-  out.push("UPDATE comment_out SET state='failed', reason=? WHERE event_id=?");
-  out.push("DELETE FROM comment_out WHERE event_id=?");
-
-  // groups / group_keys
-  out.push(
-    "INSERT INTO groups(group_id,name,creator_id,epoch,encrypted,roster_rev,member_ids_json,joined_at) VALUES(?,?,?,?,?,?,?,?) " +
-      "ON CONFLICT(group_id) DO UPDATE SET name=excluded.name,epoch=excluded.epoch,encrypted=excluded.encrypted," +
-      "roster_rev=excluded.roster_rev,member_ids_json=excluded.member_ids_json,joined_at=excluded.joined_at",
-  );
-  out.push("SELECT group_id,name,creator_id,epoch,encrypted,roster_rev,member_ids_json,joined_at FROM groups ORDER BY joined_at ASC");
-  out.push("SELECT group_id,name,creator_id,epoch,encrypted,roster_rev,member_ids_json,joined_at FROM groups WHERE group_id=?");
-  out.push("INSERT INTO group_keys(group_id,epoch,key_cipher,created_at) VALUES(?,?,?,?) ON CONFLICT(group_id,epoch) DO NOTHING");
-  out.push("SELECT group_id,epoch,key_cipher,created_at FROM group_keys WHERE group_id=? ORDER BY epoch ASC");
-
-  // dm_keys
-  out.push("INSERT INTO dm_keys(peer_id,key_cipher,created_at) VALUES(?,?,?) " +
-    "ON CONFLICT(peer_id) DO UPDATE SET key_cipher=excluded.key_cipher,created_at=excluded.created_at");
-  out.push("SELECT peer_id,key_cipher,created_at FROM dm_keys WHERE peer_id=?");
-  out.push("SELECT peer_id,key_cipher,created_at FROM dm_keys ORDER BY created_at ASC");
-
-  // my_submissions：upsert（长 INSERT ON CONFLICT DO UPDATE SET）
-  out.push(
-    "INSERT INTO my_submissions(item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at,local_only) " +
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) " +
-      "ON CONFLICT(item_id) DO UPDATE SET type=excluded.type,title=excluded.title,body_md=excluded.body_md," +
-      "question_json=excluded.question_json,links_json=excluded.links_json,segments_json=excluded.segments_json," +
-      "state=excluded.state,reason=excluded.reason,created=excluded.created,queued_at=excluded.queued_at," +
-      "sent_at=excluded.sent_at,local_only=excluded.local_only",
-  );
-  // getSubmission（listSubmissions 的 `${cols}` 动态列跳过，但这里是静态的）
-  out.push(
-    "SELECT item_id,type,title,body_md,question_json,links_json,segments_json,state,reason,created,queued_at,sent_at,local_only FROM my_submissions WHERE item_id=?",
-  );
-  // submissions 的 UPDATE/DELETE
-  out.push("UPDATE my_submissions SET state='sent', reason=NULL, created=?, sent_at=? WHERE item_id=?");
-  out.push("UPDATE my_submissions SET state='failed', reason=? WHERE item_id=?");
-  out.push("DELETE FROM my_submissions WHERE item_id=?");
-  // local submission 的覆盖式 upsert（items + segments + my_submissions）
-  out.push(
-    "INSERT INTO items(item_id,source,type,title,rev,content_hash,state,updated_at) " +
-      "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET source=excluded.source,type=excluded.type," +
-      "title=excluded.title,rev=excluded.rev,content_hash=excluded.content_hash,state=excluded.state,updated_at=excluded.updated_at",
-  );
-  out.push("DELETE FROM segments WHERE item_id=?");
-  out.push("INSERT INTO segments(item_id,seq,kind,text,content_hash) VALUES(?,?,?,?,?)");
-  out.push("DELETE FROM segments WHERE item_id=?");
-  out.push("DELETE FROM items WHERE item_id=? AND source='local'");
-  out.push("UPDATE my_submissions SET state='failed', reason=?, local_only=1 WHERE item_id=?");
-
-  // progress / checkin_days
-  out.push(
-    "INSERT INTO progress(item_id,position,done,day,updated_at,event_id,dirty) VALUES(?,?,?,?,?,?,?) " +
-      "ON CONFLICT(item_id) DO UPDATE SET position=excluded.position,done=excluded.done,day=excluded.day," +
-      "updated_at=excluded.updated_at,event_id=excluded.event_id,dirty=excluded.dirty",
-  );
-  out.push("INSERT INTO checkin_days(day,first_event_id,created_at) VALUES(?,?,?) ON CONFLICT(day) DO NOTHING");
-  out.push(
-    "INSERT INTO progress(item_id,position,done,day,updated_at,event_id,dirty) VALUES(?,?,?,?,?,?,?) " +
-      "ON CONFLICT(item_id,day) DO UPDATE SET position=excluded.position,done=excluded.done,day=excluded.day," +
-      "updated_at=excluded.updated_at,event_id=excluded.event_id,dirty=excluded.dirty",
-  );
-  out.push("SELECT item_id,position,done,day,updated_at,event_id,dirty FROM progress ORDER BY item_id ASC");
-  out.push("SELECT item_id,position,done,day,updated_at,event_id,dirty FROM progress WHERE item_id=?");
-  out.push("SELECT day,first_event_id,created_at FROM checkin_days ORDER BY day ASC");
-
-  // ensureItemsColumns：ALTER 语句也走本地库
-  out.push("ALTER TABLE items ADD COLUMN author_id TEXT NOT NULL DEFAULT ''");
-  out.push("ALTER TABLE items ADD COLUMN author_sig TEXT NOT NULL DEFAULT ''");
-  out.push("ALTER TABLE groups ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 1");
-  out.push("ALTER TABLE groups ADD COLUMN roster_rev INTEGER NOT NULL DEFAULT 0");
-
+/**
+ * 从源码里抽所有反引号模板字符串内以 SQL 关键字开头的内容。
+ * 跳过含 `${` 的（动态片段，我们不知道最终形态）、PRAGMA/空串。
+ *
+ * 同时抽 `${cols}` 这种动态列的出现次数，用于条数守卫。
+ */
+function extractSqlTemplates(src: string): string[] {
+  const out: string[] = [];
+  // 反引号模板：`...`，简单匹配（不处理嵌套反引号，源码里没有）
+  const re = /`([^`]*)`/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    const body = m[1]!;
+    if (body.includes('${')) continue; // 跳过动态
+    const trimmed = body.trim();
+    if (!trimmed) continue;
+    // 只认 SQL 语句
+    if (/^(SELECT|INSERT|UPDATE|DELETE|ALTER)\s/i.test(trimmed)) {
+      out.push(normalizeWhitespace(trimmed));
+    }
+  }
   return out;
+}
+
+/** 把多空白 / 换行收敛成单空格，保证相同 SQL 不因为换行格式不同重复入队。 */
+function normalizeWhitespace(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/** repo.ts 里 `this.db.select/execute` / `{ sql: ... }` 的调用次数（含动态 `\`\${cols}\``）。 */
+function repoSqlInvocationCount(): number {
+  const src = readSource('repo.ts');
+  const patterns = [
+    /this\.db\.select\s*\(/g,
+    /this\.db\.execute\s*\(/g,
+    /\{[^}]*\bsql\s*:\s*`/g, // stmts.push({ sql: `...`, params: [...] })
+  ];
+  let n = 0;
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src))) n++;
+  }
+  return n;
 }
 
 // ---------- 校验 ----------
@@ -498,5 +391,39 @@ describe('本地库 SQL 列名 ↔ DDL 一致性', () => {
       .split(',')
       .map((c) => c.trim());
     for (const c of cols) expect(ddl).toContain(c);
+  });
+
+  // 结构性守卫：手维护 SQL 清单是已知弱点——改为源文件扫描后，断言抽取出的静态 SQL 数
+  // 与 repo.ts 里实际存在的模板串数一致，新增 SQL 会被自动纳入。
+  it('静态 SQL 源文件抽取：repo.ts 里每条不含 ${ 的 SQL 模板都被 collectLocalRepoSql 抓到', () => {
+    const repoSrc = readSource('repo.ts');
+    const re = /`([^`]*)`/g;
+    let m;
+    const staticSqLsFromSource: string[] = [];
+    while ((m = re.exec(repoSrc))) {
+      const body = m[1]!;
+      if (body.includes('${')) continue;
+      const trimmed = body.trim();
+      if (!trimmed) continue;
+      if (/^(SELECT|INSERT|UPDATE|DELETE|ALTER)\s/i.test(trimmed)) {
+        staticSqLsFromSource.push(normalizeWhitespace(trimmed));
+      }
+    }
+    const scanned = new Set(collectLocalRepoSql().map(normalizeWhitespace));
+    for (const s of staticSqLsFromSource) {
+      expect(scanned.has(s), `repo.ts 里这条静态 SQL 没被扫描器抓到：${s.slice(0, 80)}`).toBe(true);
+    }
+    // 另外 search.ts 里的 SEARCH_SQL 也必须被覆盖
+    expect(scanned.has(normalizeWhitespace(SEARCH_SQL)), 'SEARCH_SQL 被扫描器漏掉').toBe(true);
+
+    // repo.ts 里的含 ${ 的 SQL 模板必须 ≤ 3 条（已知：listSubmissions 两条 `${cols}`、
+    //                                 getByTagIds 一条 `${marks}`）。
+    // 新增动态 SQL 意味着必须显式在扫描器里加跳过逻辑——否则下次改动就出意外。
+    let dyn = 0;
+    while ((m = re.exec(repoSrc))) {
+      if (!m[1]!.includes('${')) continue;
+      if (/^(SELECT|INSERT|UPDATE|DELETE|ALTER)\s/i.test(m[1]!.trim())) dyn++;
+    }
+    expect(dyn, 'repo.ts 里含 ${ 的 SQL 模板条数（已知 3 条）').toBe(3);
   });
 });
