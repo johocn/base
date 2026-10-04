@@ -15,10 +15,9 @@ let sqlInitPromise: ReturnType<typeof initSqlJs> | null = null;
 
 async function getSqlJs() {
   if (!sqlInitPromise) {
-    // locateFile 让 sql.js 在 H5/Vite 下能找到 .wasm（public 目录或 node_modules）
+    // sql-wasm.wasm 在 H5 static/ 下（uni-app build 产物路径）
     sqlInitPromise = initSqlJs({
-      locateFile: (file: string) =>
-        new URL(`../../node_modules/sql.js/dist/${file}`, import.meta.url).toString(),
+      locateFile: (file: string) => `/static/${file}`,
     });
   }
   return sqlInitPromise;
