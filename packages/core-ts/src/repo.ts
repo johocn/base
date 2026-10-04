@@ -53,6 +53,12 @@ export interface LocalRepo {
   findBlobPathByItem(itemId: string): Promise<string | null>;
   /** 取某条目在 blob_index 中登记的全部块文件路径（墓碑删文件用，契约 §9.3） */
   listBlobPathsByItem(itemId: string): Promise<string[]>;
+  /** 某 blob 被多少条目正文引用（blob_references 表） */
+  countBlobRefs(blobId: string): Promise<number>;
+  /** 删 blob_index 行 + 本地文件 + blob_references 全部引用 */
+  removeBlob(blobId: string): Promise<void>;
+  /** 刷 blob_references：先 DELETE 某条目全部旧引用 → 批量 INSERT 新引用列表 */
+  refreshBlobRefs(itemId: string, blobIds: string[]): Promise<void>;
   listTombstones(): Promise<TombstoneRow[]>;
   toggleFavorite(itemId: string, at: string): Promise<boolean>;
   isFavorite(itemId: string): Promise<boolean>;
@@ -154,6 +160,9 @@ export const SCHEMA_SQL: string[] = [
      blob_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL DEFAULT '', path TEXT, size INTEGER, verified_at TEXT,
      original_name TEXT NOT NULL DEFAULT '', content_type TEXT NOT NULL DEFAULT '',
      item_id TEXT)`,
+  `CREATE TABLE IF NOT EXISTS blob_references(
+     blob_id TEXT NOT NULL, item_id TEXT NOT NULL,
+     PRIMARY KEY(blob_id, item_id))`,
   `CREATE TABLE IF NOT EXISTS tombstone(item_id TEXT PRIMARY KEY, revoked_rev INTEGER)`,
   `CREATE TABLE IF NOT EXISTS user_state(
      item_id TEXT PRIMARY KEY, favorited_at TEXT, read_at TEXT)`,
@@ -435,6 +444,34 @@ export class SqlRepo implements LocalRepo {
        original_name=excluded.original_name,content_type=excluded.content_type,item_id=excluded.item_id`,
       [blobId, ownerId, path, size, verifiedAt, originalName ?? '', contentType ?? '', itemId ?? ''],
     );
+  }
+
+  async countBlobRefs(blobId: string): Promise<number> {
+    const rows = await this.db.select(`SELECT COUNT(*) AS c FROM blob_references WHERE blob_id=?`, [blobId]);
+    return Number((rows[0] as any)?.c ?? 0);
+  }
+
+  async removeBlob(blobId: string): Promise<void> {
+    // 删引用追踪 + blob_index 行（文件删留给 UI 层，因为 LocalRepo 没有 fs 权限）
+    const stmts: Array<{ sql: string; params?: unknown[] }> = [
+      { sql: `DELETE FROM blob_references WHERE blob_id=?`, params: [blobId] },
+      { sql: `DELETE FROM blob_index WHERE blob_id=?`, params: [blobId] },
+    ];
+    await this.db.tx(stmts);
+  }
+
+  async refreshBlobRefs(itemId: string, blobIds: string[]): Promise<void> {
+    const unique = [...new Set(blobIds.filter(Boolean))];
+    const stmts: Array<{ sql: string; params?: unknown[] }> = [
+      { sql: `DELETE FROM blob_references WHERE item_id=?`, params: [itemId] },
+    ];
+    for (const bid of unique) {
+      stmts.push({
+        sql: `INSERT OR IGNORE INTO blob_references(blob_id,item_id) VALUES(?,?)`,
+        params: [bid, itemId],
+      });
+    }
+    await this.db.tx(stmts);
   }
 
   async listTombstones(): Promise<TombstoneRow[]> {

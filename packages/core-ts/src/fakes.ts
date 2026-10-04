@@ -46,6 +46,8 @@ export class MemoryRepo implements LocalRepo {
   items = new Map<string, ItemRow>();
   articles = new Map<string, ArticleRow>();
   blobs = new Map<string, { ownerId: string; itemId: string; path: string; size: number; verifiedAt: string }>();
+  /** blob_references 的内存模拟：key = blob_id\titem_id */
+  blobRefs = new Set<string>();
   tombstones = new Map<string, TombstoneRow>();
   segments = new Map<string, SegmentRow[]>();
   tagLinks = new Map<string, TagLinkRow>(); // `${tagId}\t${targetId}` -> row
@@ -140,6 +142,29 @@ export class MemoryRepo implements LocalRepo {
       if (b.itemId === itemId) out.push(b.path);
     }
     return out;
+  }
+  async countBlobRefs(blobId: string): Promise<number> {
+    let c = 0;
+    for (const key of this.blobRefs) {
+      if (key.startsWith(blobId + '\t')) c++;
+    }
+    return c;
+  }
+  async removeBlob(blobId: string): Promise<void> {
+    this.blobs.delete(blobId);
+    for (const key of [...this.blobRefs]) {
+      if (key.startsWith(blobId + '\t')) this.blobRefs.delete(key);
+    }
+  }
+  async refreshBlobRefs(itemId: string, blobIds: string[]): Promise<void> {
+    // 先删旧
+    for (const key of [...this.blobRefs]) {
+      if (key.endsWith('\t' + itemId)) this.blobRefs.delete(key);
+    }
+    // 再插新
+    for (const bid of new Set(blobIds.filter(Boolean))) {
+      this.blobRefs.add(`${bid}\t${itemId}`);
+    }
   }
   async listTombstones(): Promise<TombstoneRow[]> {
     return [...this.tombstones.values()];

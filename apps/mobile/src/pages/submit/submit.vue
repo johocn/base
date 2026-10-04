@@ -502,6 +502,11 @@ async function submit() {
     const { opts, repo } = await bootstrap();
     const out = await enqueueOrSend({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl }, draft);
     itemId.value = out.itemId;
+    // 保存后刷 blob_references：从 bodyMd 扫 blobId → DELETE + INSERT 到 blob_references
+    if (type.value === 'article') {
+      const { extractBlobRefs } = await import('@base/core-ts/blob-refs');
+      await repo.refreshBlobRefs(itemId.value, extractBlobRefs(bodyMd.value));
+    }
     if (out.ledgerState === 'sent') {
       uni.showToast({ title: out.created ? '已提交' : '已更新', icon: 'success' });
       setTimeout(() => uni.navigateBack(), 600);
