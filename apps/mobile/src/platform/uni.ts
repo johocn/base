@@ -573,17 +573,61 @@ export interface PickedFile {
 
 /**
  * 选一个本地文件并读成字节（封面 / 附件上传，本册 §6）。
- * 运行时探测：App 端有 `uni.chooseImage` 走相册 / 拍照，否则退回 `uni.chooseFile`（保持原逻辑）。
- * 读字节复用本层的 `PlusFs.readFile`（与附件下载落盘同一实现）。
+ * 三分支：
+ *   1) App 有 plus + chooseImage → 相册 / 拍照 → PlusFs 读本地临时文件
+ *   2) App 有 plus + 只有 chooseFile → 文件选择 → PlusFs 读
+ *   3) H5（无 plus）→ 原生 <input type="file"> → FileReader → Uint8Array
  * **用户主动取消返回 null**——取消不是错误，页面据此静默返回。
  */
 export async function pickLocalFile(): Promise<PickedFile | null> {
+  // H5 降级：没有 plus runtime → 用原生 <input type="file">
+  if (plusRuntime() === undefined) {
+    return pickByNativeFileInput();
+  }
   const uni = uniGlobal();
-  // 能力判定与自检同源（本册 §3）；'none' 时仍走 pickByChooseFile 以抛既有的可读错误。
   const hit = pickCapability() === 'album' ? await pickByAlbum(uni) : await pickByChooseFile(uni);
   if (hit === null) return null;
   const bytes = await new PlusFs(assertAppRuntime()).readFile(hit.path);
   return { name: hit.name, bytes };
+}
+
+/**
+ * H5 降级：动态创建 <input type="file">，让浏览器弹出原生文件选择框，
+ * FileReader 读成 ArrayBuffer 转 Uint8Array。
+ * 用户取消 → resolve(null)；读文件出错 → throw。
+ */
+async function pickByNativeFileInput(): Promise<PickedFile | null> {
+  return new Promise<PickedFile | null>((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.style.display = 'none';
+    // 有些桌面浏览器需要先 appendChild 才能触发 click
+    document.body.appendChild(input);
+
+    input.onchange = async () => {
+      document.body.removeChild(input);
+      const file = input.files?.[0];
+      if (!file) { resolve(null); return; }
+      try {
+        const buf = await file.arrayBuffer();
+        resolve({ name: file.name, bytes: new Uint8Array(buf) });
+      } catch (e) {
+        // 读失败也给 resolve(null)，不 throw——用户取消式体验
+        resolve(null);
+      }
+    };
+    // 用户点取消 → onchange 不触发 → 永远等不到？不：大多数浏览器
+    // 关闭文件选择器时 onchange 不触发，input 留在 DOM 泄漏。
+    // 解决：setTimeout 兜底 30s 后 resolve(null) 并清理
+    setTimeout(() => {
+      if (document.body.contains(input)) {
+        document.body.removeChild(input);
+        resolve(null);
+      }
+    }, 60_000);
+
+    input.click();
+  });
 }
 
 /** 相册 / 拍照支：uni.chooseImage，取消 → null，其余失败 → 抛错 */

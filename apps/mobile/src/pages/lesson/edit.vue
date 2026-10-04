@@ -78,8 +78,9 @@
             <view class="modal-actions">
               <text class="act" @click="pickAndUploadImage">{{ uploadBusy ? '上传中…' : '选择图片并上传' }}</text>
               <text class="act act-primary" @click="confirmUploadImage" :class="uploadedBlobId === '' ? 'act-disabled' : ''">确认插入</text>
+              <text class="act" @click="closeImageDialog">取消</text>
             </view>
-            <text v-if="uploadedBlobId !== ''" class="hint">已上传 blob_id={{ uploadedBlobId }}</text>
+            <text v-if="uploadedBlobId !== ''" class="hint">✅ 已上传：{{ uploadedFileName || uploadedBlobId }}</text>
             <input v-model="uploadAlt" class="input" placeholder="alt 文本（可空）" />
           </block>
           <block v-else>
@@ -298,6 +299,7 @@ const imageOpen = ref(false);
 const imageTab = ref<'upload' | 'library'>('upload');
 const uploadBusy = ref(false);
 const uploadedBlobId = ref('');
+const uploadedFileName = ref('');
 const uploadAlt = ref('');
 const blobQuery = ref('');
 const blobRows = ref<BlobSearchRow[]>([]);
@@ -444,6 +446,7 @@ function submitInternalLink(it: ItemSearchRow) {
 function openImageDialog() {
   imageTab.value = 'upload';
   uploadedBlobId.value = '';
+  uploadedFileName.value = '';
   uploadAlt.value = '';
   uploadBusy.value = false;
   imageOpen.value = true;
@@ -490,7 +493,8 @@ async function pickAndUploadImage() {
       { name: picked.name, bytes: picked.bytes },
     );
     uploadedBlobId.value = up.blobId;
-    uni.showToast({ title: '上传成功', icon: 'success' });
+    uploadedFileName.value = picked.name;
+    uni.showToast({ title: `上传成功：${picked.name}`, icon: 'success' });
     await refreshBlobs();
   } catch (e) {
     uni.showToast({ title: (e as Error).message, icon: 'none' });
