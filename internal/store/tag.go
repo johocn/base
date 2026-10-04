@@ -264,8 +264,8 @@ func (s *Store) EnsureTagItem(tagID, title string, contentHash string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at,author_id,author_sig)
-		VALUES(?,?,?,?,?,?,?,?,?,'',?)
+	if _, err := tx.Exec(`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,tags_json,updated_at,author_id,author_sig)
+		VALUES(?,?,?,?,?,?,?,?,?,'[]',?,'','')
 		ON CONFLICT(item_id) DO UPDATE SET title=excluded.title, source_rev=excluded.source_rev, content_hash=excluded.content_hash, updated_at=excluded.updated_at`,
 		tagID, "tag", "tag", title, contentHash[:16], contentHash, "segments", "public", "active", nowUTC()); err != nil {
 		return fmt.Errorf("store: ensure tag item %s: %w", tagID, err)
