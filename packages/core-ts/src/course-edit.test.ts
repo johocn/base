@@ -371,15 +371,15 @@ describe('uploadAndStoreBlob：上传 + 落盘 + 登记（册子 #61 §5）', ()
 
     const got = await uploadAndStoreBlob(
       { adapters, repo, nodeBaseUrl: BASE, workDir: '/work' },
-      'course/c1',
-      'cover',
+      'me',
       { name: 'c.png', bytes: utf8('hello') },
+      'course/c1',   // 封面保留条目关联（墓碑清理用）
     );
 
     expect(got.blobId).toBe(blobId);
     expect(got.path).toBe(`/work/blobs/${blobId}`);
     expect(await fs.exists(got.path)).toBe(true);
-    expect(await repo.findBlobPathByItem('course/c1/cover')).toBe(got.path);
+    expect(await repo.findBlobPathByItem('course/c1')).toBe(got.path);
     expect(await repo.hasBlob(blobId)).toBe(true);
   });
 });

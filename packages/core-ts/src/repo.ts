@@ -48,7 +48,7 @@ export interface LocalRepo {
   /** 把以旧 id 为键的用户数据（user_state / quiz_attempt）改指到新 id；目标已有行则保留目标 */
   renameItemId(from: string, to: string): Promise<void>;
   hasBlob(blobId: string): Promise<boolean>;
-  addBlob(blobId: string, itemId: string, path: string, size: number, verifiedAt: string, originalName?: string, contentType?: string): Promise<void>;
+  addBlob(blobId: string, ownerId: string, path: string, size: number, verifiedAt: string, originalName?: string, contentType?: string, itemId?: string): Promise<void>;
   /** 取某条目的本地块路径（文章页按 cover:<slug> 取封面，Task 19 用） */
   findBlobPathByItem(itemId: string): Promise<string | null>;
   /** 取某条目在 blob_index 中登记的全部块文件路径（墓碑删文件用，契约 §9.3） */
@@ -151,8 +151,9 @@ export const SCHEMA_SQL: string[] = [
      item_id TEXT PRIMARY KEY, title TEXT, digest TEXT, published_at TEXT,
      tags_json TEXT, body_md TEXT, content_hash TEXT, rev TEXT)`,
   `CREATE TABLE IF NOT EXISTS blob_index(
-     blob_id TEXT PRIMARY KEY, item_id TEXT, path TEXT, size INTEGER, verified_at TEXT,
-     original_name TEXT NOT NULL DEFAULT '', content_type TEXT NOT NULL DEFAULT '')`,
+     blob_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL DEFAULT '', path TEXT, size INTEGER, verified_at TEXT,
+     original_name TEXT NOT NULL DEFAULT '', content_type TEXT NOT NULL DEFAULT '',
+     item_id TEXT)`,
   `CREATE TABLE IF NOT EXISTS tombstone(item_id TEXT PRIMARY KEY, revoked_rev INTEGER)`,
   `CREATE TABLE IF NOT EXISTS user_state(
      item_id TEXT PRIMARY KEY, favorited_at TEXT, read_at TEXT)`,
@@ -264,9 +265,9 @@ export async function ensureProgressColumns(db: LocalDb): Promise<void> {
 }
 
 /**
- * 存量库幂等补列（`blob_index.original_name` / `content_type`）。
- * 图片库功能依赖这两列做文件名和 MIME 过滤；老库上传的块会回落为空串，
- * 但新建 DDL 已带默认值，不会报错。
+ * 存量库幂等补列（blob_index.original_name / content_type / owner_id）。
+ * owner_id 是图片库归属用户的核心列（单机固定 'me'）；老库封面/附件上传的块回落为空串，
+ * 新建 DDL 已带默认值 ''。
  */
 export async function ensureBlobColumns(db: LocalDb): Promise<void> {
   const cols = new Set((await db.select(`PRAGMA table_info(blob_index)`)).map((r) => String(r.name)));
@@ -276,6 +277,9 @@ export async function ensureBlobColumns(db: LocalDb): Promise<void> {
   }
   if (!cols.has('content_type')) {
     await db.execute(`ALTER TABLE blob_index ADD COLUMN content_type TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!cols.has('owner_id')) {
+    await db.execute(`ALTER TABLE blob_index ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''`);
   }
 }
 
@@ -424,11 +428,12 @@ export class SqlRepo implements LocalRepo {
     return rows.length > 0;
   }
 
-  async addBlob(blobId: string, itemId: string, path: string, size: number, verifiedAt: string, originalName?: string, contentType?: string): Promise<void> {
+  async addBlob(blobId: string, ownerId: string, path: string, size: number, verifiedAt: string, originalName?: string, contentType?: string, itemId?: string): Promise<void> {
     await this.db.execute(
-      `INSERT INTO blob_index(blob_id,item_id,path,size,verified_at,original_name,content_type) VALUES(?,?,?,?,?,?,?)
-       ON CONFLICT(blob_id) DO UPDATE SET item_id=excluded.item_id,path=excluded.path,size=excluded.size,verified_at=excluded.verified_at,original_name=excluded.original_name,content_type=excluded.content_type`,
-      [blobId, itemId, path, size, verifiedAt, originalName ?? '', contentType ?? ''],
+      `INSERT INTO blob_index(blob_id,owner_id,path,size,verified_at,original_name,content_type,item_id) VALUES(?,?,?,?,?,?,?,?)
+       ON CONFLICT(blob_id) DO UPDATE SET owner_id=excluded.owner_id,path=excluded.path,size=excluded.size,verified_at=excluded.verified_at,
+       original_name=excluded.original_name,content_type=excluded.content_type,item_id=excluded.item_id`,
+      [blobId, ownerId, path, size, verifiedAt, originalName ?? '', contentType ?? '', itemId ?? ''],
     );
   }
 

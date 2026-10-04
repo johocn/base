@@ -240,7 +240,7 @@ async function syncContentOnce(o: SyncOptions): Promise<SyncResult> {
       if (res.body.length !== c.size) throw new Error(`块大小不符 ${c.blob_id}: ${res.body.length} != ${c.size}`);
       const path = `${o.workDir}/blobs/${c.blob_id}`;
       await o.adapters.fs.writeFile(path, res.body);
-      await o.repo.addBlob(c.blob_id, e.item_id, path, res.body.length, now);
+      await o.repo.addBlob(c.blob_id, '', path, res.body.length, now, undefined, undefined, e.item_id);
       // original_name / content_type：manifest.Chunk 不带元数据（内容寻址），回落空串；
       // 前端上传路径在 course-edit.ts 里自带 picked.name + ext 推断
       blobs++;

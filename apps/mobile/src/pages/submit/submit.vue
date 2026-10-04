@@ -378,15 +378,15 @@ async function refreshBlobs() {
   }
   blobRows.value = await searchLocalBlobs({
     db: editCtx.db,
-    ownerIdentityId: '',
+    ownerIdentityId: 'me',
     query: blobQuery.value,
     limit: 50,
   });
 }
 /** 上传新图 Tab：选文件 → 上传 → 记录 blob_id */
 async function pickAndUploadImage() {
-  if (!editCtx || itemId.value === '') {
-    uni.showToast({ title: '先保存条目再上传图片', icon: 'none' });
+  if (!editCtx) {
+    uni.showToast({ title: '编辑器尚未初始化', icon: 'none' });
     return;
   }
   uploadBusy.value = true;
@@ -398,9 +398,9 @@ async function pickAndUploadImage() {
     }
     const up = await uploadAndStoreBlob(
       { adapters: editCtx.opts.adapters, repo: editCtx.repo, nodeBaseUrl: editCtx.opts.nodeBaseUrl, workDir: editCtx.opts.workDir },
-      itemId.value,
-      'editor-image',
+      'me',              // ownerId：图片归属当前用户（单机固定 'me'）
       { name: picked.name, bytes: picked.bytes },
+      // itemId 不传：编辑器图片进独立图库，不绑定条目
     );
     uploadedBlobId.value = up.blobId;
     uploadedFileName.value = picked.name;

@@ -45,7 +45,7 @@ export class MemoryRepo implements LocalRepo {
   config = new Map<string, string>();
   items = new Map<string, ItemRow>();
   articles = new Map<string, ArticleRow>();
-  blobs = new Map<string, { itemId: string; path: string; size: number; verifiedAt: string }>();
+  blobs = new Map<string, { ownerId: string; itemId: string; path: string; size: number; verifiedAt: string }>();
   tombstones = new Map<string, TombstoneRow>();
   segments = new Map<string, SegmentRow[]>();
   tagLinks = new Map<string, TagLinkRow>(); // `${tagId}\t${targetId}` -> row
@@ -125,8 +125,8 @@ export class MemoryRepo implements LocalRepo {
   async hasBlob(id: string): Promise<boolean> {
     return this.blobs.has(id);
   }
-  async addBlob(id: string, itemId: string, path: string, size: number, verifiedAt: string, _originalName?: string, _contentType?: string): Promise<void> {
-    this.blobs.set(id, { itemId, path, size, verifiedAt });
+  async addBlob(id: string, ownerId: string, path: string, size: number, verifiedAt: string, _originalName?: string, _contentType?: string, itemId?: string): Promise<void> {
+    this.blobs.set(id, { ownerId, itemId: itemId ?? '', path, size, verifiedAt });
   }
   async findBlobPathByItem(itemId: string): Promise<string | null> {
     for (const b of this.blobs.values()) {

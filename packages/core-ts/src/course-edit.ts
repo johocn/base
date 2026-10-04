@@ -350,16 +350,21 @@ export function mimeFromName(name: string): string {
   return IMAGE_EXTS.get(name.slice(dot + 1).toLowerCase()) ?? '';
 }
 
+/**
+ * 上传一块并把字节落到本机（册子 #61 §5）。
+ * ownerId：上传者（单机固定 'me'），图片库归属 owner
+ * itemId：可选关联条目（封面/附件清理墓碑用；编辑器图片库传空串）
+ */
 export async function uploadAndStoreBlob(
   o: BlobStoreOptions,
-  itemId: string,
-  slot: string,
+  ownerId: string,
   picked: PickedBytes,
+  itemId?: string,
 ): Promise<{ blobId: string; path: string }> {
   const blobId = await uploadBlob({ adapters: o.adapters, repo: o.repo, nodeBaseUrl: o.nodeBaseUrl }, picked.bytes, picked.name);
   const path = `${o.workDir}/blobs/${blobId}`;
   await o.adapters.fs.writeFile(path, picked.bytes);
   const ct = mimeFromName(picked.name);
-  await o.repo.addBlob(blobId, `${itemId}/${slot}`, path, picked.bytes.length, new Date().toISOString(), picked.name, ct);
+  await o.repo.addBlob(blobId, ownerId, path, picked.bytes.length, new Date().toISOString(), picked.name, ct, itemId ?? undefined);
   return { blobId, path };
 }

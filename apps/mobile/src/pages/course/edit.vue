@@ -323,9 +323,9 @@ async function storeBlob(slot: string, picked: PickedFile): Promise<string> {
   try {
     const up = await uploadAndStoreBlob(
       { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl, workDir: opts.workDir },
-      form.value.itemId,
-      slot,
+      'me',
       { name: picked.name, bytes: picked.bytes },
+      form.value.itemId,    // 封面/附件保留条目关联（墓碑清理用）
     );
     return up.blobId;
   } catch (e) {

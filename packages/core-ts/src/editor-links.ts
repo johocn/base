@@ -119,18 +119,26 @@ export async function searchLocalBlobs(opts: {
   const where: string[] = [];
   const params: unknown[] = [];
 
+  // owner 过滤：传了 ownerIdentityId 就只看这个用户的图片库；不传（空/undefined）看全部
+  // 单机固定 'me' 时，早期封面/附件老数据 owner_id='' 不会出现——这是对的，图库只显示用户上传的独立图片
+  if (opts.ownerIdentityId && opts.ownerIdentityId.trim() !== '') {
+    where.push(`owner_id = ?`);
+    params.push(opts.ownerIdentityId.trim());
+  }
+
   if (filter === 'image') {
-    // 只看图片；但 content_type='' 的老数据（sync 路径）也不放过
+    // 只看图片；但 content_type='' 的老数据也不放过（sync 路径 / 早期上传）
     where.push(`(content_type LIKE 'image/%' OR content_type = '')`);
   }
   if (opts.query && opts.query.trim() !== '') {
     const like = `%${opts.query.trim()}%`;
-    where.push(`(original_name LIKE ? OR item_id LIKE ?)`);
-    params.push(like, like);
+    // 文件名 / 条目路径 / owner 三搜
+    where.push(`(original_name LIKE ? OR item_id LIKE ? OR owner_id LIKE ?)`);
+    params.push(like, like, like);
   }
 
   const sql =
-    `SELECT blob_id, item_id, size, verified_at, original_name, content_type FROM blob_index` +
+    `SELECT blob_id, owner_id, item_id, size, verified_at, original_name, content_type FROM blob_index` +
     (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '') +
     ` ORDER BY verified_at DESC LIMIT ?`;
   params.push(limit);

@@ -160,10 +160,10 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
     });
     expect(db.lastSql).toContain('FROM blob_index');
     expect(db.lastSql).toContain('(content_type LIKE');
-    expect(db.lastSql).toContain('(original_name LIKE ? OR item_id LIKE ?)');
+    expect(db.lastSql).toContain('(original_name LIKE ? OR item_id LIKE ? OR owner_id LIKE ?)');
     expect(db.lastSql).toContain('ORDER BY verified_at DESC');
-    // filter 先推 2 params，query 再加 2，最后 limit 共 5
-    expect(db.lastParams).toEqual(['%rust%', '%rust%', 10]);
+    // query 三搜 original_name/item_id/owner_id 各 1 param，最后 limit 共 4
+    expect(db.lastParams).toEqual(['%rust%', '%rust%', '%rust%', 10]);
 
     expect(rows.length).toBe(2);
     expect(rows[0]!.blobId).toBe('b1');

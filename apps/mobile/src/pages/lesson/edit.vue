@@ -469,14 +469,14 @@ async function refreshBlobs() {
   }
   blobRows.value = await searchLocalBlobs({
     db: ctx.db,
-    ownerIdentityId: '',
+    ownerIdentityId: 'me',
     query: blobQuery.value,
     limit: 50,
   });
 }
 async function pickAndUploadImage() {
-  if (!ctx || form.value.itemId === '') {
-    uni.showToast({ title: '先保存课时再上传图片', icon: 'none' });
+  if (!ctx) {
+    uni.showToast({ title: '编辑器尚未初始化', icon: 'none' });
     return;
   }
   uploadBusy.value = true;
@@ -488,8 +488,7 @@ async function pickAndUploadImage() {
     }
     const up = await uploadAndStoreBlob(
       { adapters: ctx.opts.adapters, repo: ctx.repo, nodeBaseUrl: ctx.opts.nodeBaseUrl, workDir: ctx.opts.workDir },
-      form.value.itemId,
-      'editor-image',
+      'me',
       { name: picked.name, bytes: picked.bytes },
     );
     uploadedBlobId.value = up.blobId;
@@ -644,9 +643,9 @@ async function storeBlob(slot: string, picked: PickedFile): Promise<string> {
   try {
     const up = await uploadAndStoreBlob(
       { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl, workDir: opts.workDir },
-      form.value.itemId,
-      slot,
+      'me',
       { name: picked.name, bytes: picked.bytes },
+      form.value.itemId,    // 封面/附件保留条目关联（墓碑清理用）
     );
     return up.blobId;
   } catch (e) {
