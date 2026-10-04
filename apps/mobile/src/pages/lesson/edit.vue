@@ -524,8 +524,10 @@ async function submit() {
 }
 </script>
 
+<!-- #ifdef APP-PLUS -->
 <!-- renderjs 桥：App 视图层声明 `caretBridge`（uni 编译器改写为 <renderjs name=…>，vue-tsc 不参与运行） -->
 <script module="caretBridge" lang="renderjs" src="src/core/caret-bridge.renderjs.js"></script>
+<!-- #endif -->
 
 <style>
   .wrap { padding: 16px; }
