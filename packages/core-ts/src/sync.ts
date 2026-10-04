@@ -1,5 +1,6 @@
-import { blobId, sha256Hex, utf8, verifyManifest, type Manifest } from '@base/protocol-ts';
+import { ATTR_BODY_MD, blobId, sha256Hex, utf8, verifyManifest, type Manifest } from '@base/protocol-ts';
 
+import { extractBlobRefs } from './blob-refs';
 import type { Adapters, SqliteConnection } from './platform/adapter';
 import { pullDirectory } from './directory';
 import { migrateLegacyIds } from './id-migrate';
@@ -275,6 +276,27 @@ async function syncContentOnce(o: SyncOptions): Promise<SyncResult> {
   }
 
   await o.repo.applyPack({ version: cat.content_version, packId: cat.pack_id, items, articles, quizzes, segments, tombstones, updatedAt: now });
+
+  // 刷 blob_references：
+  // 1) articles.body_md 里的 blob: 协议图片（最常见）
+  // 2) segments 中 kind='attr.body_md' 的课时讲稿 markdown 正文
+  // 3) tombstone 条目 → refreshBlobRefs(itemId, []) 清孤儿引用
+  for (const art of articles) {
+    await o.repo.refreshBlobRefs(art.itemId, extractBlobRefs(art.bodyMd));
+  }
+  const bodyMdSegByItem = new Map<string, string[]>();
+  for (const s of segments) {
+    if (s.kind !== ATTR_BODY_MD) continue;
+    const prev = bodyMdSegByItem.get(s.itemId) ?? [];
+    prev.push(s.text);
+    bodyMdSegByItem.set(s.itemId, prev);
+  }
+  for (const [itemId, texts] of bodyMdSegByItem) {
+    await o.repo.refreshBlobRefs(itemId, extractBlobRefs(texts.join('\n')));
+  }
+  for (const t of tombstones) {
+    await o.repo.refreshBlobRefs(t.itemId, []);
+  }
 
   // 行已删、文件后删：删文件失败不阻断本轮（本地视图已一致，下次同步会重跑同一流程）
   for (const path of stalePaths) {

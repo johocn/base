@@ -77,6 +77,7 @@ import { reportProgress } from '../../core/progress-store';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
 import { renderMarkdown } from '../../core/markdown';
+import { resolveBlobRefsInMd } from '@base/core-ts/blob-refs';
 import { useAuthorBar } from '../../core/useAuthorBar';
 import type { ArticleRow, TagLinkRow } from '../../core/types';
 import { bootstrap } from '../../platform';
@@ -144,7 +145,7 @@ onLoad(async (query) => {
         rev: '',
       };
       itemId.value = sub.itemId;
-      bodyHtml.value = renderMarkdown(sub.bodyMd);
+      bodyHtml.value = renderMarkdown(resolveBlobRefsInMd(sub.bodyMd, opts.nodeBaseUrl || ''));
       theme.value = normalizeTheme(await repo.getConfig('reader_theme'));
       fontScale.value = normalizeFontScale(await repo.getConfig('reader_font_scale'));
       fav.value = await repo.isFavorite(sub.itemId);
@@ -165,7 +166,7 @@ onLoad(async (query) => {
     const item = await repo.getItem(row.itemId);
     setAuthorId(item?.authorId ?? '');
     if (item?.authorId && opts.nodeBaseUrl) void fetchAuthorBar({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
-    bodyHtml.value = renderMarkdown(row.bodyMd);
+    bodyHtml.value = renderMarkdown(resolveBlobRefsInMd(row.bodyMd, opts.nodeBaseUrl || ''));
     const a = attrsOf(await repo.listSegments(raw));
     badge.value = a.badge;
     titleColor.value = a.titleColor;

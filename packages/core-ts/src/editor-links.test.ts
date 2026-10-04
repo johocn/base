@@ -4,6 +4,7 @@ import {
   buildBlobImage,
   buildExternalLink,
   buildItemLink,
+  resolveBlobUrl,
   searchLocalBlobs,
   searchLocalItems,
 } from './editor-links';
@@ -59,15 +60,16 @@ describe('buildBlobImage', () => {
 });
 
 describe('resolveBlobUrl', () => {
+  const H32 = 'a'.repeat(32);
   it('blob: 协议 → 当前节点 baseUrl 拼接', () => {
-    expect(resolveBlobUrl('https://base.com', 'blob:abc123')).toBe('https://base.com/v1/blob/abc123');
+    expect(resolveBlobUrl('https://base.com', `blob:${H32}`)).toBe(`https://base.com/v1/blob/${H32}`);
   });
   it('带尾斜杠的 baseUrl 自动去掉', () => {
-    expect(resolveBlobUrl('https://base.com/', 'blob:abc')).toBe('https://base.com/v1/blob/abc');
+    expect(resolveBlobUrl('https://base.com/', `blob:${H32}`)).toBe(`https://base.com/v1/blob/${H32}`);
   });
   it('已经是绝对 URL → 直接返回（兼容老数据）', () => {
-    expect(resolveBlobUrl('https://new-node.com', 'https://old-node.com/v1/blob/abc')).toBe(
-      'https://old-node.com/v1/blob/abc',
+    expect(resolveBlobUrl('https://new-node.com', `https://old-node.com/v1/blob/${H32}`)).toBe(
+      `https://old-node.com/v1/blob/${H32}`,
     );
   });
 });
