@@ -190,7 +190,7 @@ let editCtx: AppContext | null = null;
 
 /** 链接对话框 */
 const linkOpen = ref(false);
-const linkTab = ref<'ext' | 'int'>('ext');
+const linkTab = ref<'ext' | 'int'>('int');
 const extUrl = ref('');
 const extText = ref('');
 const intQuery = ref('');
@@ -291,10 +291,13 @@ function applyTool(action: ToolbarAction) {
 
 /** ============ 链接对话框 ============ */
 function openLinkDialog() {
-  linkTab.value = 'ext';
+  linkTab.value = 'int';
+  intQuery.value = '';
   extUrl.value = '';
   extText.value = '';
   linkOpen.value = true;
+  // 打开即加载最近条目（空关键词 → ORDER BY updated_at DESC）
+  void refreshIntItems();
 }
 function closeLinkDialog() {
   linkOpen.value = false;

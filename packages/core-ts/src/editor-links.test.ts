@@ -120,11 +120,21 @@ describe('searchLocalItems：FakeDb 验证 SQL 和返回映射', () => {
     ]);
   });
 
-  it('limit 默认 20，空查询也能跑', async () => {
+  it('limit 默认 20，空查询返回最近条目', async () => {
     const db = new FakeDb();
     db.setResponse('FROM items', []);
     await searchLocalItems({ db, query: '' });
-    expect(db.lastParams?.[1]).toBe(20);
+    // 空关键词走 ORDER BY updated_at DESC LIMIT ?，只有一个 param
+    expect(db.lastSql).toContain('ORDER BY updated_at DESC');
+    expect(db.lastParams).toEqual([20]);
+  });
+
+  it('非空查询走 title LIKE 分支', async () => {
+    const db = new FakeDb();
+    db.setResponse('FROM items', []);
+    await searchLocalItems({ db, query: 'rust' });
+    expect(db.lastSql).toContain('title LIKE ?');
+    expect(db.lastParams).toEqual(['%rust%', 20]);
   });
 
   it('返回空数组不报错', async () => {

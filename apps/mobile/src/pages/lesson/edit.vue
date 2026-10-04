@@ -286,7 +286,7 @@ const notice = ref('');
 
 /** 链接对话框 */
 const linkOpen = ref(false);
-const linkTab = ref<'ext' | 'int'>('ext');
+const linkTab = ref<'ext' | 'int'>('int');
 const extUrl = ref('');
 const extText = ref('');
 const intQuery = ref('');
@@ -385,10 +385,12 @@ function applyTool(action: ToolbarAction) {
 
 /** ============ 链接对话框 ============ */
 function openLinkDialog() {
-  linkTab.value = 'ext';
+  linkTab.value = 'int';
+  intQuery.value = '';
   extUrl.value = '';
   extText.value = '';
   linkOpen.value = true;
+  void refreshIntItems();
 }
 function closeLinkDialog() {
   linkOpen.value = false;

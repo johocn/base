@@ -64,11 +64,20 @@ export async function searchLocalItems(opts: {
   limit?: number;
 }): Promise<ItemSearchRow[]> {
   const limit = opts.limit ?? 20;
-  const like = `%${opts.query}%`;
-  const rows = await opts.db.select(
-    `SELECT item_id, title, type, author_id FROM items WHERE title LIKE ? LIMIT ?`,
-    [like, limit],
-  );
+  let rows: any[];
+  if (!opts.query.trim()) {
+    // 空关键词 → 返回最近条目（updated_at 是 ISO 时间串，字典序即时间序）
+    rows = await opts.db.select(
+      `SELECT item_id, title, type, author_id FROM items ORDER BY updated_at DESC LIMIT ?`,
+      [limit],
+    );
+  } else {
+    const like = `%${opts.query}%`;
+    rows = await opts.db.select(
+      `SELECT item_id, title, type, author_id FROM items WHERE title LIKE ? LIMIT ?`,
+      [like, limit],
+    );
+  }
   return rows.map((r) => ({
     itemId: String(r.item_id ?? ''),
     title: String(r.title ?? ''),
