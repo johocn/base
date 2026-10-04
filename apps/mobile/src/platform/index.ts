@@ -5,7 +5,8 @@ import { SCHEMA_SQL, SqlRepo, ensureBlobColumns, ensureGroupColumns, ensureItems
 import { UNKNOWN_FLAGS, type CapabilityFlags, type SelfCheckReport } from '../core/selfcheck';
 import type { SyncOptions } from '../core/sync';
 import type { Adapters, LocalDb } from './adapter';
-import { PlusFs, PlusHttp, PlusLocalDb, PlusPackReader, PlusStorage, assertAppRuntime, pickHandle } from './uni';
+import { h5Adapters, SqlJsLocalDb } from './browser';
+import { PlusFs, PlusHttp, PlusLocalDb, PlusPackReader, PlusStorage, pickHandle, plusRuntime } from './uni';
 
 export interface AppContext {
   opts: SyncOptions;
@@ -13,30 +14,55 @@ export interface AppContext {
   db: LocalDb;
   /** 平台能力标志：只有明确 fail 才降级，unknown 与 ok 都照常尝试（selfcheck spec §4） */
   capabilities: CapabilityFlags;
+  /** 'app' 有 plus runtime；'h5' 走 BrowserAdapter */
+  platform: 'app' | 'h5';
 }
 
 let cached: AppContext | null = null;
 
-/** 建表 + 组装适配器；重复调用复用同一实例。 */
-export async function bootstrap(): Promise<AppContext> {
-  if (cached) return cached;
-  const p = assertAppRuntime();
+/** H5 bootstrap：sql.js（WASM SQLite）+ localStorage + fetch()。 */
+async function h5Bootstrap(): Promise<AppContext> {
+  const db = new SqlJsLocalDb();
+  for (const sql of SCHEMA_SQL) await db.execute(sql);
+  await ensureGroupColumns(db);
+  await ensureItemsColumns(db);
+  await ensureSubmissionColumns(db);
+  await ensureProgressColumns(db);
+  await ensureBlobColumns(db);
+
+  const repo = new SqlRepo(db);
+  const adapters = h5Adapters();
+  const root = await adapters.fs.rootDir();
+  const nodeBaseUrl = ((await repo.getConfig('node_base_url')) ?? '').replace(/\/+$/, '');
+
+  // H5 没有 pickOk —— 原生 <input type="file"> 在 pickLocalFile() 里动态创建，
+  // 这里只把能力标志设为 ok（页面据此不阻塞入口）
+  const capabilities: CapabilityFlags = { ...UNKNOWN_FLAGS, pickOk: 'ok' };
+
+  // sql.js 没有 randomblob，跳过 crypto 预填
+  capabilities.cryptoOk = 'fail';
+
+  cached = { repo, db, opts: { adapters, repo, nodeBaseUrl, workDir: root }, capabilities, platform: 'h5' };
+  return cached;
+}
+
+/** App bootstrap：plus.io + plus.sqlite + uni.request（原有逻辑）。 */
+async function appBootstrap(): Promise<AppContext> {
+  const p = plusRuntime()!;
   const fs = new PlusFs(p);
   const root = await fs.rootDir();
   await fs.ensureDir(root);
 
   const db = new PlusLocalDb(p, `${root}/base.db`);
   for (const sql of SCHEMA_SQL) await db.execute(sql);
-  await ensureGroupColumns(db); // 存量库（老 DB 已有 groups 表）幂等补 encrypted / roster_rev 两列
-  await ensureItemsColumns(db); // 存量库幂等补 items.author_id / author_sig 两列
-  await ensureSubmissionColumns(db); // 存量库幂等补 my_submissions.links_json
-  await ensureProgressColumns(db); // 存量库幂等补 progress.done / day / event_id 三列
-  await ensureBlobColumns(db); // 存量库幂等补 blob_index.original_name / content_type 两列
+  await ensureGroupColumns(db);
+  await ensureItemsColumns(db);
+  await ensureSubmissionColumns(db);
+  await ensureProgressColumns(db);
+  await ensureBlobColumns(db);
 
-  // 冷启动只定 cryptoOk：随机池预填的成败就是随机源可用与否的初值；其余标志保持 unknown
   const capabilities: CapabilityFlags = { ...UNKNOWN_FLAGS };
 
-  // 逻辑层没有 WebCrypto，随机源改由 SQLite 提供（randomblob 的种子来自系统熵源）
   try {
     await installRandomFallback(async () => {
       const rows = await db.select(`SELECT hex(randomblob(${ENTROPY_FILL_BYTES})) AS b`);
@@ -44,11 +70,9 @@ export async function bootstrap(): Promise<AppContext> {
     });
     capabilities.cryptoOk = 'ok';
   } catch {
-    // 预填失败不阻断启动：评论页据此直接禁用发表并给出原因，不再等用户点一次才报错
     capabilities.cryptoOk = 'fail';
   }
 
-  // 选择文件能力：同步 typeof 探测（零 IO），有无任一选择 API 即 ok
   const pick = pickHandle();
   capabilities.pickOk = typeof pick.chooseFile === 'function' || typeof pick.chooseImage === 'function' ? 'ok' : 'fail';
 
@@ -60,8 +84,14 @@ export async function bootstrap(): Promise<AppContext> {
     packReader: new PlusPackReader(p),
   };
   const nodeBaseUrl = ((await repo.getConfig('node_base_url')) ?? '').replace(/\/+$/, '');
-  cached = { repo, db, opts: { adapters, repo, nodeBaseUrl, workDir: root }, capabilities };
+  cached = { repo, db, opts: { adapters, repo, nodeBaseUrl, workDir: root }, capabilities, platform: 'app' };
   return cached;
+}
+
+/** 建表 + 组装适配器；重复调用复用同一实例。 */
+export async function bootstrap(): Promise<AppContext> {
+  if (cached) return cached;
+  return plusRuntime() !== undefined ? appBootstrap() : h5Bootstrap();
 }
 
 /** 节点地址保存后刷新缓存里的 baseUrl */
