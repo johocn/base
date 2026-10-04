@@ -25,11 +25,12 @@
         >{{ b.label }}</view>
         <view class="tool-divider" />
         <view
-          v-for="b in INLINE_BUTTONS"
+          v-for="b in INLINE_BUTTONS.filter(b => b.key !== 'link')"
           :key="b.key"
           class="tool"
           @click="applyTool(b.action)"
         >{{ b.label }}</view>
+        <view class="tool" @click="openLinkDialog">链接</view>
         <view class="tool-divider" />
         <view
           v-for="b in COLOR_BUTTONS"
@@ -38,6 +39,71 @@
           :title="b.hint"
           @click="applyTool(b.action)"
         >{{ b.label }}<text class="tool-note">{{ b.hint }}</text></view>
+        <view class="tool-divider" />
+        <view class="tool" @click="openImageDialog">图片</view>
+      </view>
+      <!-- 链接对话框：外部链接 / 内部链接 两个 Tab -->
+      <view v-if="linkOpen" class="modal-mask" @click.self="closeLinkDialog">
+        <view class="modal">
+          <view class="modal-tabs">
+            <text class="modal-tab" :class="linkTab === 'ext' ? 'modal-tab-on' : ''" @click="linkTab = 'ext'">外部链接</text>
+            <text class="modal-tab" :class="linkTab === 'int' ? 'modal-tab-on' : ''" @click="switchLinkTab('int')">内部链接</text>
+          </view>
+          <block v-if="linkTab === 'ext'">
+            <input v-model="extUrl" class="input" placeholder="https://example.com" />
+            <input v-model="extText" class="input" placeholder="显示文本（可空，默认用 URL）" />
+            <view class="modal-actions">
+              <text class="act" @click="closeLinkDialog">取消</text>
+              <text class="act act-primary" @click="submitExternalLink">插入</text>
+            </view>
+          </block>
+          <block v-else>
+            <input v-model="intQuery" class="input" placeholder="搜索本机条目标题" @input="refreshIntItems" />
+            <scroll-view scroll-y class="modal-scroll">
+              <view v-for="it in intItems" :key="it.itemId" class="modal-row" @click="submitInternalLink(it)">
+                <text class="val">{{ it.title || it.itemId }}</text>
+                <text class="hint">{{ it.kind }} · {{ it.itemId }}</text>
+              </view>
+              <text v-if="intItems.length === 0" class="hint">没有匹配的条目</text>
+            </scroll-view>
+            <view class="modal-actions">
+              <text class="act" @click="closeLinkDialog">取消</text>
+            </view>
+          </block>
+        </view>
+      </view>
+      <!-- 图片对话框：上传新图 / 图片库 两个 Tab -->
+      <view v-if="imageOpen" class="modal-mask" @click.self="closeImageDialog">
+        <view class="modal">
+          <view class="modal-tabs">
+            <text class="modal-tab" :class="imageTab === 'upload' ? 'modal-tab-on' : ''" @click="imageTab = 'upload'">上传新图</text>
+            <text class="modal-tab" :class="imageTab === 'library' ? 'modal-tab-on' : ''" @click="switchImageTab('library')">图片库</text>
+          </view>
+          <block v-if="imageTab === 'upload'">
+            <view class="modal-actions">
+              <text class="act" @click="pickAndUploadImage">{{ uploadBusy ? '上传中…' : '选择图片并上传' }}</text>
+              <text class="act act-primary" @click="confirmUploadImage" :class="uploadedBlobId === '' ? 'act-disabled' : ''">确认插入</text>
+            </view>
+            <text v-if="uploadedBlobId !== ''" class="hint">已上传 blob_id={{ uploadedBlobId }}</text>
+            <input v-model="uploadAlt" class="input" placeholder="alt 文本（可空）" />
+          </block>
+          <block v-else>
+            <input v-model="blobQuery" class="input" placeholder="搜索（可选）" @input="refreshBlobs" />
+            <scroll-view scroll-y class="modal-scroll">
+              <view v-for="b in blobRows" :key="b.blobId" class="modal-row" @click="submitBlobImage(b)">
+                <image :src="imageUrlOf(b.blobId)" class="thumb" mode="aspectFill" />
+                <view class="thumb-meta">
+                  <text class="val">{{ b.blobId }}</text>
+                  <text class="hint">{{ formatSize(b.size) }}</text>
+                </view>
+              </view>
+              <text v-if="blobRows.length === 0" class="hint">本机还没有上传过图片</text>
+            </scroll-view>
+            <view class="modal-actions">
+              <text class="act" @click="closeImageDialog">取消</text>
+            </view>
+          </block>
+        </view>
       </view>
       <view :prop="caretCmd" :change:prop="caretBridge.setCaret">
         <textarea
@@ -83,6 +149,18 @@
 import { computed, nextTick, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
+import {
+  composeBlobImg,
+  composeExternalLink,
+  composeInternalLink,
+  formatSize,
+  insertMarkdown,
+  searchLocalBlobs,
+  searchLocalItems,
+  type BlobSearchRow,
+  type ItemSearchRow,
+} from '../../core/editor-dialogs';
+import { uploadAndStoreBlob } from '../../core/course-edit';
 import { renderMarkdown } from '../../core/markdown';
 import { resolveCaret } from '../../core/editor-caret';
 import {
@@ -90,11 +168,13 @@ import {
   INLINE_BUTTONS,
   PARAGRAPH_BUTTONS,
   applyToolbar,
+  wrapSelection,
   type ToolbarAction,
 } from '../../core/markdown-toolbar';
 import { buildQuestionJSON, draftsFromQuestionJSON, emptyDraft, type QuestionDraft } from '../../core/quizdoc';
 import { enqueueOrSend, newItemID, type SubmitDraft } from '../../core/submit';
-import { bootstrap } from '../../platform';
+import { bytesToBase64, pickLocalFile, type PickedFile } from '../../platform/uni';
+import { bootstrap, type AppContext } from '../../platform';
 
 const itemId = ref('');
 const type = ref<'article' | 'quiz'>('article');
@@ -104,6 +184,50 @@ const drafts = ref<QuestionDraft[]>([emptyDraft()]);
 const busy = ref(false);
 const error = ref('');
 const notice = ref('');
+
+/** 编辑器对话框上下文（bootstrap 后才有） */
+let editCtx: AppContext | null = null;
+
+/** 链接对话框 */
+const linkOpen = ref(false);
+const linkTab = ref<'ext' | 'int'>('ext');
+const extUrl = ref('');
+const extText = ref('');
+const intQuery = ref('');
+const intItems = ref<ItemSearchRow[]>([]);
+
+/** 图片对话框 */
+const imageOpen = ref(false);
+const imageTab = ref<'upload' | 'library'>('upload');
+const uploadBusy = ref(false);
+const uploadedBlobId = ref('');
+const uploadAlt = ref('');
+const blobQuery = ref('');
+const blobRows = ref<BlobSearchRow[]>([]);
+
+/** 在当前光标位置插入一段 markdown 字符串，光标落在串末尾。 */
+function insertMarkdownAtCursor(markdown: string) {
+  const src = bodyMd.value;
+  const field = bodyTextarea();
+  const live = field ? { start: field.selectionStart, end: field.selectionEnd } : null;
+  const pick = resolveCaret(live, caretLedger.value, src.length);
+  const r = wrapSelection(src, pick.caret.start, pick.caret.end, '', markdown);
+  bodyMd.value = r.text;
+  caretLedger.value = { start: r.start, end: r.end };
+  caretCmd.value = { start: r.start, end: r.end, text: r.text };
+  if (pick.source === 'fallback') {
+    uni.showToast({ title: '未取到光标，已插入到正文末尾', icon: 'none' });
+  }
+  bodyFocus.value = true;
+  setTimeout(() => {
+    const el = bodyTextarea();
+    if (el) el.setSelectionRange(r.start, r.end);
+  }, 60);
+  setTimeout(() => {
+    const el = bodyTextarea();
+    if (el) el.setSelectionRange(r.start, r.end);
+  }, 250);
+}
 
 /** 正文编辑：工具栏产出源文本标记；预览是只读派生，不落库（保存口径零改动） */
 const bodyRef = ref<{ $el?: Element } | null>(null);
@@ -165,14 +289,131 @@ function applyTool(action: ToolbarAction) {
   }, 250);
 }
 
+/** ============ 链接对话框 ============ */
+function openLinkDialog() {
+  linkTab.value = 'ext';
+  extUrl.value = '';
+  extText.value = '';
+  linkOpen.value = true;
+}
+function closeLinkDialog() {
+  linkOpen.value = false;
+}
+async function switchLinkTab(tab: 'ext' | 'int') {
+  linkTab.value = tab;
+  if (tab === 'int') {
+    intQuery.value = '';
+    await refreshIntItems();
+  }
+}
+async function refreshIntItems() {
+  if (!editCtx) {
+    intItems.value = [];
+    return;
+  }
+  intItems.value = await searchLocalItems({ db: editCtx.db, query: intQuery.value, limit: 30 });
+}
+function submitExternalLink() {
+  const url = extUrl.value.trim();
+  if (url === '') {
+    uni.showToast({ title: '请先填 URL', icon: 'none' });
+    return;
+  }
+  const md = composeExternalLink(url, extText.value);
+  insertMarkdownAtCursor(md);
+  closeLinkDialog();
+}
+function submitInternalLink(it: ItemSearchRow) {
+  if (!editCtx) return;
+  const baseUrl = editCtx.opts.nodeBaseUrl;
+  const md = composeInternalLink(baseUrl, it.itemId, it.title);
+  insertMarkdownAtCursor(md);
+  closeLinkDialog();
+}
+
+/** ============ 图片对话框 ============ */
+function openImageDialog() {
+  imageTab.value = 'upload';
+  uploadedBlobId.value = '';
+  uploadAlt.value = '';
+  uploadBusy.value = false;
+  imageOpen.value = true;
+}
+function closeImageDialog() {
+  imageOpen.value = false;
+}
+async function switchImageTab(tab: 'upload' | 'library') {
+  imageTab.value = tab;
+  if (tab === 'library') {
+    blobQuery.value = '';
+    await refreshBlobs();
+  }
+}
+async function refreshBlobs() {
+  if (!editCtx) {
+    blobRows.value = [];
+    return;
+  }
+  blobRows.value = await searchLocalBlobs({
+    db: editCtx.db,
+    ownerIdentityId: '',
+    query: blobQuery.value,
+    limit: 50,
+  });
+}
+/** 上传新图 Tab：选文件 → 上传 → 记录 blob_id */
+async function pickAndUploadImage() {
+  if (!editCtx || itemId.value === '') {
+    uni.showToast({ title: '先保存条目再上传图片', icon: 'none' });
+    return;
+  }
+  uploadBusy.value = true;
+  try {
+    const picked = await pickLocalFile();
+    if (!picked) {
+      uploadBusy.value = false;
+      return; // 用户取消
+    }
+    const up = await uploadAndStoreBlob(
+      { adapters: editCtx.opts.adapters, repo: editCtx.repo, nodeBaseUrl: editCtx.opts.nodeBaseUrl, workDir: editCtx.opts.workDir },
+      itemId.value,
+      'editor-image',
+      { name: picked.name, bytes: picked.bytes },
+    );
+    uploadedBlobId.value = up.blobId;
+    uni.showToast({ title: '上传成功', icon: 'success' });
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message, icon: 'none' });
+  } finally {
+    uploadBusy.value = false;
+  }
+}
+function confirmUploadImage() {
+  if (uploadedBlobId.value === '' || !editCtx) return;
+  const md = composeBlobImg(editCtx.opts.nodeBaseUrl, uploadedBlobId.value, uploadAlt.value);
+  insertMarkdownAtCursor(md);
+  closeImageDialog();
+}
+function imageUrlOf(blobId: string): string {
+  const base = editCtx?.opts.nodeBaseUrl ?? '';
+  return `${base.replace(/\/+$/, '')}/v1/blob/${blobId}`;
+}
+function submitBlobImage(b: BlobSearchRow) {
+  if (!editCtx) return;
+  const md = composeBlobImg(editCtx.opts.nodeBaseUrl, b.blobId, 'image');
+  insertMarkdownAtCursor(md);
+  closeImageDialog();
+}
+
 const isUpdate = computed(() => itemId.value !== '');
 
 onLoad(async (query) => {
   const raw = String((query as Record<string, string> | undefined)?.itemId ?? '');
-  if (raw === '') return;
   try {
-    const { repo } = await bootstrap();
-    const row = await repo.getSubmission(raw);
+    const ctx = await bootstrap();
+    editCtx = ctx;
+    if (raw === '') return;
+    const row = await ctx.repo.getSubmission(raw);
     if (!row) {
       error.value = '本地台账没有这条记录';
       return;
@@ -294,4 +535,28 @@ async function submit() {
 .error { display: block; color: #c53030; font-size: 13px; margin: 8px 0; }
 .notice { display: block; color: #b7791f; font-size: 13px; margin: 8px 0; }
 .submit { margin-top: 16px; background: #2b6cb0; color: #ffffff; }
+
+/* ============ 链接 / 图片对话框 ============ */
+.modal-mask {
+  position: fixed; left: 0; top: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 99;
+}
+.modal {
+  width: 92%; max-width: 520px;
+  background: #ffffff; border-radius: 12px;
+  padding: 16px; max-height: 80vh;
+}
+.modal-tabs { display: flex; border-bottom: 1px solid #eee; margin-bottom: 12px; }
+.modal-tab { padding: 8px 16px; color: #888; font-size: 14px; }
+.modal-tab-on { color: #2b6cb0; border-bottom: 2px solid #2b6cb0; font-weight: 500; }
+.modal-scroll { max-height: 360px; margin-top: 8px; }
+.modal-row { padding: 10px 0; border-bottom: 1px solid #f5f5f5; display: flex; align-items: center; gap: 10px; }
+.modal-row .thumb { width: 56px; height: 56px; border-radius: 6px; background: #f0f0f0; flex-shrink: 0; }
+.modal-row .thumb-meta { flex: 1; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 12px; padding-top: 12px; }
+.act { color: #666; font-size: 14px; padding: 6px 12px; }
+.act-primary { color: #2b6cb0; font-weight: 500; }
+.act-disabled { color: #ccc; }
 </style>
