@@ -447,6 +447,7 @@ function openImageDialog() {
   uploadAlt.value = '';
   uploadBusy.value = false;
   imageOpen.value = true;
+  void refreshBlobs();
 }
 function closeImageDialog() {
   imageOpen.value = false;
@@ -490,6 +491,7 @@ async function pickAndUploadImage() {
     );
     uploadedBlobId.value = up.blobId;
     uni.showToast({ title: '上传成功', icon: 'success' });
+    await refreshBlobs();
   } catch (e) {
     uni.showToast({ title: (e as Error).message, icon: 'none' });
   } finally {

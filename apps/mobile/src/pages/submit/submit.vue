@@ -355,6 +355,8 @@ function openImageDialog() {
   uploadAlt.value = '';
   uploadBusy.value = false;
   imageOpen.value = true;
+  // 打开即预加载图库（用户切 Tab 立刻看到）
+  void refreshBlobs();
 }
 function closeImageDialog() {
   imageOpen.value = false;
@@ -399,6 +401,8 @@ async function pickAndUploadImage() {
     );
     uploadedBlobId.value = up.blobId;
     uni.showToast({ title: '上传成功', icon: 'success' });
+    // 上传即入库 → 刷新图库，用户切 Tab 立刻能看到
+    await refreshBlobs();
   } catch (e) {
     uni.showToast({ title: (e as Error).message, icon: 'none' });
   } finally {
