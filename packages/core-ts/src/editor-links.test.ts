@@ -145,54 +145,61 @@ describe('searchLocalItems：FakeDb 验证 SQL 和返回映射', () => {
   });
 });
 
-describe('searchLocalBlobs：最小实现（适配现有 blob_index DDL）', () => {
-  it('有关键词 → WHERE item_id LIKE + ORDER BY verified_at DESC', async () => {
+describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路径搜索', () => {
+  it('有关键词 → original_name LIKE OR item_id LIKE + 图片过滤', async () => {
     const db = new FakeDb();
-    db.setResponse('WHERE item_id LIKE', [
-      { blob_id: 'b1', item_id: 'course/rust/lesson/l1/cover', size: 1024, verified_at: '2026-10-01' },
-      { blob_id: 'b2', item_id: 'course/rust/lesson/l2/cover', size: 2048, verified_at: '2026-10-02' },
+    db.setResponse('FROM blob_index', [
+      { blob_id: 'b1', item_id: 'course/rust/lesson/l1/cover', size: 1024, verified_at: '2026-10-01', original_name: 'cover.png', content_type: 'image/png' },
+      { blob_id: 'b2', item_id: 'course/rust/lesson/l2/cover', size: 2048, verified_at: '2026-10-02', original_name: '', content_type: '' },
     ]);
 
     const rows = await searchLocalBlobs({
       db,
-      ownerIdentityId: 'alice',
       query: 'rust',
       limit: 10,
     });
     expect(db.lastSql).toContain('FROM blob_index');
-    expect(db.lastSql).toContain('item_id LIKE ?');
+    expect(db.lastSql).toContain('(content_type LIKE');
+    expect(db.lastSql).toContain('(original_name LIKE ? OR item_id LIKE ?)');
     expect(db.lastSql).toContain('ORDER BY verified_at DESC');
-    expect(db.lastParams).toEqual(['%rust%', 10]);
+    // filter 先推 2 params，query 再加 2，最后 limit 共 5
+    expect(db.lastParams).toEqual(['%rust%', '%rust%', 10]);
 
     expect(rows.length).toBe(2);
     expect(rows[0]!.blobId).toBe('b1');
-    expect(rows[0]!.size).toBe(1024);
-    expect(rows[0]!.name).toBe('');
-    expect(rows[0]!.contentType).toBe('');
+    expect(rows[0]!.name).toBe('cover.png');
+    expect(rows[0]!.contentType).toBe('image/png');
   });
 
-  it('无关键词 → 只 ORDER BY + LIMIT', async () => {
+  it('无关键词 → 只 ORDER BY + LIMIT + 图片过滤', async () => {
     const db = new FakeDb();
-    db.setResponse('ORDER BY verified_at DESC', [
-      { blob_id: 'b1', item_id: 'x', size: 100, verified_at: '2026-09-01' },
+    db.setResponse('FROM blob_index', [
+      { blob_id: 'b1', item_id: 'x', size: 100, verified_at: '2026-09-01', original_name: '', content_type: 'image/jpeg' },
     ]);
-    const rows = await searchLocalBlobs({ db, ownerIdentityId: 'alice' });
+    const rows = await searchLocalBlobs({ db });
     expect(rows).toHaveLength(1);
+    expect(db.lastSql).toContain('ORDER BY verified_at DESC');
   });
 
-  it('空关键词字符串也走「无关键词」分支', async () => {
+  it('空关键词字符串也走「无关键词」分支（无 OR LIKE）', async () => {
     const db = new FakeDb();
-    db.setResponse('ORDER BY verified_at DESC', []);
-    await searchLocalBlobs({ db, ownerIdentityId: 'a', query: '  ' });
-    // 如果误走了 LIKE 分支，FakeDb 会因为没匹配到 WHERE item_id LIKE 而返回空，
-    // 但不会抛错；此处断言 SQL 不含 item_id LIKE。
-    expect(db.lastSql).not.toContain('item_id LIKE');
+    db.setResponse('FROM blob_index', []);
+    await searchLocalBlobs({ db, query: '  ' });
+    expect(db.lastSql).not.toContain('original_name LIKE');
   });
 
-  it('limit 默认 30', async () => {
+  it('limit 默认 50', async () => {
     const db = new FakeDb();
-    db.setResponse('ORDER BY verified_at DESC', []);
-    await searchLocalBlobs({ db, ownerIdentityId: 'a' });
-    expect(db.lastParams?.[0]).toBe(30);
+    db.setResponse('FROM blob_index', []);
+    await searchLocalBlobs({ db });
+    expect(db.lastParams?.[db.lastParams.length - 1]).toBe(50);
+  });
+
+  it("filter='all' 时不加 content_type 条件", async () => {
+    const db = new FakeDb();
+    db.setResponse('FROM blob_index', []);
+    await searchLocalBlobs({ db, filter: 'all' });
+    expect(db.lastSql).not.toContain('content_type LIKE');
+    expect(db.lastSql).toContain('ORDER BY verified_at DESC');
   });
 });

@@ -1,7 +1,7 @@
 import { hexToBytes } from '@base/protocol-ts';
 
 import { ENTROPY_FILL_BYTES, installRandomFallback } from '../core/entropy';
-import { SCHEMA_SQL, SqlRepo, ensureGroupColumns, ensureItemsColumns, ensureProgressColumns, ensureSubmissionColumns, type LocalRepo } from '../core/repo';
+import { SCHEMA_SQL, SqlRepo, ensureBlobColumns, ensureGroupColumns, ensureItemsColumns, ensureProgressColumns, ensureSubmissionColumns, type LocalRepo } from '../core/repo';
 import { UNKNOWN_FLAGS, type CapabilityFlags, type SelfCheckReport } from '../core/selfcheck';
 import type { SyncOptions } from '../core/sync';
 import type { Adapters, LocalDb } from './adapter';
@@ -31,6 +31,7 @@ export async function bootstrap(): Promise<AppContext> {
   await ensureItemsColumns(db); // 存量库幂等补 items.author_id / author_sig 两列
   await ensureSubmissionColumns(db); // 存量库幂等补 my_submissions.links_json
   await ensureProgressColumns(db); // 存量库幂等补 progress.done / day / event_id 三列
+  await ensureBlobColumns(db); // 存量库幂等补 blob_index.original_name / content_type 两列
 
   // 冷启动只定 cryptoOk：随机池预填的成败就是随机源可用与否的初值；其余标志保持 unknown
   const capabilities: CapabilityFlags = { ...UNKNOWN_FLAGS };

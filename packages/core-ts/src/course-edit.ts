@@ -338,6 +338,18 @@ export interface BlobStoreOptions {
  * 封面键 `<itemId>/cover` 与 `pages/course/detail.vue` 的取键**逐字一致**，重进编辑页即可回显。
  * 「字节 → 预览 src」留页面（`bytesToBase64` 属平台层）。
  */
+const IMAGE_EXTS = new Map<string, string>([
+  ['png', 'image/png'], ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'],
+  ['gif', 'image/gif'], ['webp', 'image/webp'], ['bmp', 'image/bmp'], ['svg', 'image/svg+xml'],
+]);
+
+/** 从文件名扩展名推断 MIME；未知返回 ''。 */
+export function mimeFromName(name: string): string {
+  const dot = name.lastIndexOf('.');
+  if (dot < 0) return '';
+  return IMAGE_EXTS.get(name.slice(dot + 1).toLowerCase()) ?? '';
+}
+
 export async function uploadAndStoreBlob(
   o: BlobStoreOptions,
   itemId: string,
@@ -347,6 +359,7 @@ export async function uploadAndStoreBlob(
   const blobId = await uploadBlob({ adapters: o.adapters, repo: o.repo, nodeBaseUrl: o.nodeBaseUrl }, picked.bytes, picked.name);
   const path = `${o.workDir}/blobs/${blobId}`;
   await o.adapters.fs.writeFile(path, picked.bytes);
-  await o.repo.addBlob(blobId, `${itemId}/${slot}`, path, picked.bytes.length, new Date().toISOString());
+  const ct = mimeFromName(picked.name);
+  await o.repo.addBlob(blobId, `${itemId}/${slot}`, path, picked.bytes.length, new Date().toISOString(), picked.name, ct);
   return { blobId, path };
 }

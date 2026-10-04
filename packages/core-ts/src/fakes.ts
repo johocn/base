@@ -125,7 +125,7 @@ export class MemoryRepo implements LocalRepo {
   async hasBlob(id: string): Promise<boolean> {
     return this.blobs.has(id);
   }
-  async addBlob(id: string, itemId: string, path: string, size: number, verifiedAt: string): Promise<void> {
+  async addBlob(id: string, itemId: string, path: string, size: number, verifiedAt: string, _originalName?: string, _contentType?: string): Promise<void> {
     this.blobs.set(id, { itemId, path, size, verifiedAt });
   }
   async findBlobPathByItem(itemId: string): Promise<string | null> {

@@ -89,51 +89,58 @@ export async function searchLocalItems(opts: {
 /** 图片库搜索的返回行（对应客户端 blob_index 表）。 */
 export interface BlobSearchRow {
   blobId: string;
-  /** 客户端 blob_index 未存 original_name，回落为 '' */
+  /** 客户端 blob_index.original_name（上传时填真实文件名；sync 路径回落 ''） */
   name: string;
-  /** 客户端 blob_index 未存 content_type，回落为 '' */
+  /** 客户端 blob_index.content_type（上传时从扩展名推断；sync 路径回落 ''） */
   contentType: string;
   size: number;
-  /** 客户端 blob_index 用 verified_at 存 ISO 时间串；此处回落 0 */
+  /** 从 verified_at ISO 串解析得到的 ms 时间戳；解析失败回落 0 */
   createdAt: number;
 }
 
 /**
  * 本地图片库搜索（查客户端 blob_index 表）。
  *
- * 注意：当前客户端 blob_index 只登记 (blob_id, item_id, path, size, verified_at)，
- * 不存 original_name / content_type / owner_identity_id，因此本函数在现阶段做**最小实现**：
- *   - 忽略 ownerIdentityId 参数（无对应列）
- *   - 不做 content_type LIKE 'image/%' 过滤（无对应列）
- *   - query 关键字只对 item_id 做模糊匹配
- *   - 按 verified_at DESC 排序
- * 后续扩展 blob_index 列后可无缝补齐。
+ * blob_index 现有列：blob_id, item_id, path, size, verified_at, original_name, content_type
+ *  - 默认 content_type LIKE 'image/%' 只看图片（编辑器图库场景）
+ *  - query 同时模糊匹配 original_name 和 item_id（文件名 + 条目路径）
+ *  - content_type = '' 的老数据（sync 拉的块）也会被收进来（image/% LIKE '' 不匹配，fallback）
  */
 export async function searchLocalBlobs(opts: {
   db: { select: (sql: string, params?: unknown[]) => Promise<any[]> };
-  ownerIdentityId: string;
+  ownerIdentityId?: string;
   query?: string;
   limit?: number;
+  /** 'image'（默认，只显示图片）| 'all'（全部类型） */
+  filter?: 'image' | 'all';
 }): Promise<BlobSearchRow[]> {
-  const limit = opts.limit ?? 30;
-  let rows: any[];
-  if (opts.query && opts.query.trim() !== '') {
-    const like = `%${opts.query}%`;
-    rows = await opts.db.select(
-      `SELECT blob_id, item_id, size, verified_at FROM blob_index WHERE item_id LIKE ? ORDER BY verified_at DESC LIMIT ?`,
-      [like, limit],
-    );
-  } else {
-    rows = await opts.db.select(
-      `SELECT blob_id, item_id, size, verified_at FROM blob_index ORDER BY verified_at DESC LIMIT ?`,
-      [limit],
-    );
+  const limit = opts.limit ?? 50;
+  const filter = opts.filter ?? 'image';
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  if (filter === 'image') {
+    // 只看图片；但 content_type='' 的老数据（sync 路径）也不放过
+    where.push(`(content_type LIKE 'image/%' OR content_type = '')`);
   }
+  if (opts.query && opts.query.trim() !== '') {
+    const like = `%${opts.query.trim()}%`;
+    where.push(`(original_name LIKE ? OR item_id LIKE ?)`);
+    params.push(like, like);
+  }
+
+  const sql =
+    `SELECT blob_id, item_id, size, verified_at, original_name, content_type FROM blob_index` +
+    (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '') +
+    ` ORDER BY verified_at DESC LIMIT ?`;
+  params.push(limit);
+
+  const rows = await opts.db.select(sql, params);
   return rows.map((r) => ({
     blobId: String(r.blob_id ?? ''),
-    name: '',
-    contentType: '',
+    name: String(r.original_name ?? ''),
+    contentType: String(r.content_type ?? ''),
     size: Number(r.size ?? 0),
-    createdAt: 0,
+    createdAt: Number(new Date(String(r.verified_at ?? '')).getTime()) || 0,
   }));
 }
