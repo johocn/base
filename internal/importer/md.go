@@ -271,6 +271,12 @@ func Run(st *store.Store, dir string, opts Options) (Result, error) {
 		res.Errors = append(res.Errors, e)
 	}
 
+	// 阶段 3.6：tag 容器重建。扫所有 items.tags_json → 聚合 → 跳过 governance 管控的 tag → 重建 tag_links + segments。
+	for _, e := range rebuildTagLinks(st) {
+		res.Failed++
+		res.Errors = append(res.Errors, e)
+	}
+
 	// 阶段 4：一次性退役旧形态（item_id 含 ':'）条目。
 	if opts.RetireLegacy {
 		rev, err := st.NextContentVersion()

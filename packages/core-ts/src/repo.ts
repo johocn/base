@@ -151,7 +151,7 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS config(key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS items(
      item_id TEXT PRIMARY KEY, source TEXT, type TEXT, title TEXT, rev TEXT,
-     content_hash TEXT, state TEXT, updated_at TEXT,
+     content_hash TEXT, state TEXT, updated_at TEXT, tags_json TEXT NOT NULL DEFAULT '[]',
      author_id TEXT NOT NULL DEFAULT '', author_sig TEXT NOT NULL DEFAULT '')`,
   `CREATE TABLE IF NOT EXISTS articles(
      item_id TEXT PRIMARY KEY, title TEXT, digest TEXT, published_at TEXT,
@@ -234,6 +234,9 @@ export async function ensureItemsColumns(db: LocalDb): Promise<void> {
   }
   if (!cols.has('author_sig')) {
     await db.execute(`ALTER TABLE items ADD COLUMN author_sig TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!cols.has('tags_json')) {
+    await db.execute(`ALTER TABLE items ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'`);
   }
 }
 

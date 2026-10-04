@@ -22,6 +22,7 @@ var schemaStatements = []string{
 		sqlite_table TEXT NOT NULL,
 		dist_class   TEXT NOT NULL DEFAULT 'public',
 		state        TEXT NOT NULL DEFAULT 'active',
+		tags_json    TEXT NOT NULL DEFAULT '[]',
 		updated_at   TEXT NOT NULL
 	)`,
 
@@ -294,8 +295,9 @@ var eventColumnMigrations = []struct{ column, ddl string }{
 // itemColumnMigrations 是 items 表的**后加列**（治理册 §3.1 的归属缓存）。
 // 与 events 同因：schemaStatements 全是 CREATE TABLE IF NOT EXISTS，对既有表不补列。
 var itemColumnMigrations = []struct{ column, ddl string }{
-	{"author_id", `ALTER TABLE items ADD COLUMN author_id TEXT NOT NULL DEFAULT ''`},
+	{"author_id",  `ALTER TABLE items ADD COLUMN author_id TEXT NOT NULL DEFAULT ''`},
 	{"author_sig", `ALTER TABLE items ADD COLUMN author_sig TEXT NOT NULL DEFAULT ''`},
+	{"tags_json",  `ALTER TABLE items ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'`},
 }
 
 // groupColumnMigrations 是 groups 表的**后加列**（#33 册子 §3.8）。

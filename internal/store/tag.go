@@ -236,3 +236,39 @@ func backfillTagLinksTx(tx *sql.Tx, tagID string) error {
 	_, err = replaceTagLinksTx(tx, tagID, links)
 	return err
 }
+
+// ReplaceTagLinks 公开入口：在独立事务里全量替换一个 tag 的关联集（importer 重建 tag 容器用）。
+// 返回新的 content_hash。只碰 tag_links + segments + items.content_hash，不碰 items.author_id。
+func (s *Store) ReplaceTagLinks(tagID string, links []TagLink) (string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	hash, err := replaceTagLinksTx(tx, tagID, links)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(`UPDATE items SET content_hash=?,source_rev=?,updated_at=? WHERE item_id=?`,
+		hash, hash[:16], nowUTC(), tagID); err != nil {
+		return "", err
+	}
+	return hash, tx.Commit()
+}
+
+// EnsureTagItem 幂等创建一个 tag item 行（items 表）。已存在则不写 author_id/author_sig。
+// importer 重建 tag 容器时：author_id="" 表示"可被 governance 认领"。
+func (s *Store) EnsureTagItem(tagID, title string, contentHash string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at,author_id,author_sig)
+		VALUES(?,?,?,?,?,?,?,?,?,'',?)
+		ON CONFLICT(item_id) DO UPDATE SET title=excluded.title, source_rev=excluded.source_rev, content_hash=excluded.content_hash, updated_at=excluded.updated_at`,
+		tagID, "tag", "tag", title, contentHash[:16], contentHash, "segments", "public", "active", nowUTC()); err != nil {
+		return fmt.Errorf("store: ensure tag item %s: %w", tagID, err)
+	}
+	return tx.Commit()
+}

@@ -52,6 +52,7 @@ type Item struct {
 	SQLiteTable string
 	DistClass   string
 	State       string
+	TagsJSON    string
 	UpdatedAt   string
 	// 归属缓存（治理册 §3.1）：权威在签名里，这两列是「入库时已验签通过」的本地缓存。
 	AuthorID  string
@@ -200,12 +201,13 @@ func (s *Store) UpsertArticle(a Article) error {
 	if updated == "" {
 		updated = nowUTC()
 	}
-	if _, err := tx.Exec(`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?)
+	if _, err := tx.Exec(`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,tags_json,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(item_id) DO UPDATE SET
 			title=excluded.title, source_rev=excluded.source_rev, content_hash=excluded.content_hash,
-			sqlite_table=excluded.sqlite_table, dist_class=excluded.dist_class, state=excluded.state, updated_at=excluded.updated_at`,
-		a.ItemID, "article", "article", a.Title, a.SourceRev, a.ContentHash, "articles", "public", "active", updated); err != nil {
+			sqlite_table=excluded.sqlite_table, dist_class=excluded.dist_class, state=excluded.state,
+			tags_json=excluded.tags_json, updated_at=excluded.updated_at`,
+		a.ItemID, "article", "article", a.Title, a.SourceRev, a.ContentHash, "articles", "public", "active", a.TagsJSON, updated); err != nil {
 		return fmt.Errorf("store: upsert item: %w", err)
 	}
 	bodyEnc, err := s.encText(a.BodyMD)
@@ -234,22 +236,23 @@ func (s *Store) UpsertQuiz(q Quiz, source ...string) error {
 	if len(source) > 0 {
 		src = source[0]
 	}
+	tags := q.TagsJSON
+	if tags == "" {
+		tags = "[]"
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?)
+	if _, err := tx.Exec(`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,tags_json,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(item_id) DO UPDATE SET
 			title=excluded.title, source_rev=excluded.source_rev, content_hash=excluded.content_hash,
-			sqlite_table=excluded.sqlite_table, dist_class=excluded.dist_class, state=excluded.state, updated_at=excluded.updated_at`,
-		q.ItemID, src, "quiz", q.Title, q.SourceRev, q.ContentHash, "quizzes", "public", "active", updated); err != nil {
+			sqlite_table=excluded.sqlite_table, dist_class=excluded.dist_class, state=excluded.state,
+			tags_json=excluded.tags_json, updated_at=excluded.updated_at`,
+		q.ItemID, src, "quiz", q.Title, q.SourceRev, q.ContentHash, "quizzes", "public", "active", tags, updated); err != nil {
 		return fmt.Errorf("store: upsert quiz item: %w", err)
-	}
-	tags := q.TagsJSON
-	if tags == "" {
-		tags = "[]"
 	}
 	if _, err := tx.Exec(`INSERT INTO quizzes(item_id,question_json,content_hash,tags_json,link_article)
 		VALUES(?,?,?,?,?)
@@ -416,7 +419,7 @@ func (s *Store) GetBlobBytes(blobID string) ([]byte, error) {
 
 // GetItem 读取目录条目。
 func (s *Store) GetItem(itemID string) (Item, bool, error) {
-	row := s.db.QueryRow(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at,author_id,author_sig
+	row := s.db.QueryRow(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,tags_json,updated_at,author_id,author_sig
 		FROM items WHERE item_id=?`, itemID)
 	it, err := scanItem(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -430,7 +433,7 @@ func (s *Store) GetItem(itemID string) (Item, bool, error) {
 
 // ListItems 按 item_id 升序返回指定状态的条目；state 为空表示全部。
 func (s *Store) ListItems(state string) ([]Item, error) {
-	q := `SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at,author_id,author_sig FROM items`
+	q := `SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,tags_json,updated_at,author_id,author_sig FROM items`
 	args := []any{}
 	if state != "" {
 		q += ` WHERE state=?`
@@ -450,7 +453,7 @@ func (s *Store) ListItemsPage(cursor string, limit int) ([]Item, string, error) 
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := s.db.Query(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at,author_id,author_sig
+	rows, err := s.db.Query(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,tags_json,updated_at,author_id,author_sig
 		FROM items WHERE item_id > ? ORDER BY item_id ASC LIMIT ?`, cursor, limit)
 	if err != nil {
 		return nil, "", err
@@ -470,7 +473,7 @@ func (s *Store) ListItemsPage(cursor string, limit int) ([]Item, string, error) 
 func scanItem(row interface{ Scan(...any) error }) (Item, error) {
 	var it Item
 	err := row.Scan(&it.ItemID, &it.Source, &it.Type, &it.Title, &it.SourceRev, &it.ContentHash,
-		&it.SQLiteTable, &it.DistClass, &it.State, &it.UpdatedAt, &it.AuthorID, &it.AuthorSig)
+		&it.SQLiteTable, &it.DistClass, &it.State, &it.TagsJSON, &it.UpdatedAt, &it.AuthorID, &it.AuthorSig)
 	return it, err
 }
 

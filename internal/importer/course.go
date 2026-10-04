@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -287,6 +288,102 @@ func rebuildCategories(st *store.Store, items []parsedMD) []string {
 			errs = append(errs, itemID+": "+err.Error())
 		}
 	}
+	return errs
+}
+
+// rebuildTagLinks 扫 items.tags_json → 按 tag 聚合关联集 → 重建 tag 容器（tag_links + segments）。
+// 语义与 rebuildContainers/rebuildCategories 不同：
+//   - 跳过 governance 管控的 tag item（author_id 非空 = UpsertTagSubmission/投票改过，导入器不覆盖）
+//   - 对 importer 自建的 tag（author_id 空）做全量替换
+//   - 对不存在的 tag item 创建新行（author_id/author_sig 空 = 可被 governance 认领）
+// 返回失败明细，不整批失败。
+func rebuildTagLinks(st *store.Store) []string {
+	type tagGroup struct {
+		links    []store.TagLink
+		title    string
+		authorID string // 空 = importer 可重建；非空 = governance 管控，跳过
+		hasItem  bool
+	}
+
+	// Phase 1: 扫所有 active items 有 tags_json 非空的 → 聚合
+	items, err := st.ListItems("active")
+	if err != nil {
+		return []string{"列出 items 失败: " + err.Error()}
+	}
+
+	groups := map[string]*tagGroup{}
+	for _, it := range items {
+		if it.Source == "tag" || it.Source == "category" {
+			continue // tag/category item 自己的 tags_json 不作为内容源
+		}
+		if it.TagsJSON == "" || it.TagsJSON == "[]" {
+			continue
+		}
+		var tags []string
+		if err := json.Unmarshal([]byte(it.TagsJSON), &tags); err != nil {
+			continue // 跳过脏数据
+		}
+		kind := protocol.TagKindOfTarget(it.ItemID)
+		if kind == "" {
+			continue // 非法形态，跳过
+		}
+		for _, t := range tags {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			tagID := "tag/" + t
+			g, ok := groups[tagID]
+			if !ok {
+				g = &tagGroup{}
+				groups[tagID] = g
+			}
+			// 检查是否已存在 tag item
+			if !g.hasItem {
+				tagItem, exists, _ := st.GetItem(tagID)
+				if exists {
+					g.hasItem = true
+					g.authorID = tagItem.AuthorID
+				}
+			}
+			// 跳过 governance 管控
+			if g.authorID != "" {
+				continue
+			}
+			// 去重
+			dup := false
+			for _, l := range g.links {
+				if l.TargetID == it.ItemID {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				g.links = append(g.links, store.TagLink{TagID: tagID, TargetID: it.ItemID, Kind: kind})
+			}
+		}
+	}
+
+	// Phase 2: 重建
+	errs := []string{}
+	for tagID, g := range groups {
+		if g.authorID != "" {
+			continue // governance 管控，跳过
+		}
+		if g.hasItem && len(g.links) == 0 {
+			continue // 有 tag item 但无有效关联 → 跳过（不删 segments）
+		}
+		title := strings.TrimPrefix(tagID, "tag/")
+		hash := store.SegmentsContentHash(store.MaterializeTagSegments(tagID, g.links))
+		if err := st.EnsureTagItem(tagID, title, hash); err != nil {
+			errs = append(errs, tagID+": 建条目失败: "+err.Error())
+			continue
+		}
+		if _, err := st.ReplaceTagLinks(tagID, g.links); err != nil {
+			errs = append(errs, tagID+": 重建关联失败: "+err.Error())
+		}
+	}
+
 	return errs
 }
 
