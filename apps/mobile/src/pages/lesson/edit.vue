@@ -223,11 +223,10 @@ const caretBridge = {
 };
 const previewHtml = computed(() => renderMarkdown(form.value.bodyMd));
 
-/** H5：组件根节点下即原生 textarea，用 ref 拿真实选区；其它端无 DOM，恒返回 null */
+/** 拿正文原生 textarea：uni-app H5 把 id 移到 <uni-textarea> 包装元素上，直接查标签名 */
 function bodyTextarea(): HTMLTextAreaElement | null {
-  const root = bodyRef.value?.$el;
-  if (!root || typeof root.querySelector !== 'function') return null;
-  return root.querySelector('textarea') as HTMLTextAreaElement | null;
+  if (typeof document === 'undefined') return null;
+  return document.querySelector<HTMLTextAreaElement>('#body-caret-anchor textarea');
 }
 
 /** renderjs 上报入口（App）：真实光标存台账 */
@@ -243,25 +242,27 @@ function applyTool(action: ToolbarAction) {
   const live = field ? { start: field.selectionStart, end: field.selectionEnd } : null;
   const pick = resolveCaret(live, caretLedger.value, src.length);
   const r = applyToolbar(src, pick.caret.start, pick.caret.end, action);
+  // 1) 同步 Vue 响应式源（bodyMd 会触发 v-model flush 写 DOM textarea.value）
   form.value.bodyMd = r.text;
-  // 台账就地前移：setCaret 之后真机上的上报是异步的，不能等它
   caretLedger.value = { start: r.start, end: r.end };
-  // 视图层写回（App 走 renderjs；H5 由下面的原生直写生效）
   caretCmd.value = { start: r.start, end: r.end, text: r.text };
   if (pick.source === 'fallback') {
     uni.showToast({ title: '未取到光标，已插入到正文末尾', icon: 'none' });
   }
-  bodyFocus.value = false;
-  nextTick(() => {
-    bodyFocus.value = true;
+
+  // 2) 让 textarea 保持焦点（模板 :focus directive 设 true 就不会 blur）
+  bodyFocus.value = true;
+
+  // 3) Vue v-model flush 写 textarea.value 时浏览器会把光标重置到末尾
+  //    用 setTimeout 在它之后设回正确位置；两次触发防御多次 flush
+  setTimeout(() => {
     const el = bodyTextarea();
-    if (el) {
-      // H5 直写原生节点：绕开组件 model→DOM 的 100ms 防抖，避免光标被重置到末尾
-      el.value = r.text;
-      el.focus();
-      el.setSelectionRange(r.start, r.end);
-    }
-  });
+    if (el) el.setSelectionRange(r.start, r.end);
+  }, 60);
+  setTimeout(() => {
+    const el = bodyTextarea();
+    if (el) el.setSelectionRange(r.start, r.end);
+  }, 250);
 }
 
 /** 载体选择面板：关键词 + kind 过滤 + 候选列表 */
