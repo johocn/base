@@ -1,18 +1,18 @@
 /**
  * 从 markdown 正文里提取所有被引用的 blobId（32+ hex 字符）。
- * 只认 `/v1/blob/{hash}` 路径段——不管 baseUrl 是什么，路径后缀一致：
- *   ![alt](https://base/v1/blob/abc123...)
- *   [链接也能引用](https://base/v1/blob/abc123...)
- * 正则不用硬编码 baseUrl，抓路径片段即可。
+ * 匹配两种格式：
+ *   新：![alt](blob:abc123...) — 协议引用（内容寻址，跨节点）
+ *   旧：![alt](https://base/v1/blob/abc123...) — 绝对 URL（历史数据）
  * 返回去重后的 blobId 列表。
  */
 export function extractBlobRefs(bodyMd: string): string[] {
   const found = new Set<string>();
-  // /v1/blob/ 后面至少 32 个 hex（sha256 内容寻址）
-  const re = /\/v1\/blob\/([a-f0-9]{32,})/g;
+  // 新格式：blob:{hex}
+  const reNew = /blob:([a-f0-9]{32,})/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(bodyMd)) !== null) {
-    found.add(m[1]!);
-  }
+  while ((m = reNew.exec(bodyMd)) !== null) found.add(m[1]!);
+  // 旧格式：/v1/blob/{hex}（绝对 URL 的路径段）
+  const reOld = /\/v1\/blob\/([a-f0-9]{32,})/g;
+  while ((m = reOld.exec(bodyMd)) !== null) found.add(m[1]!);
   return [...found];
 }

@@ -49,26 +49,26 @@ describe('buildItemLink：按 itemId 前缀选 SPA hash 路由', () => {
 });
 
 describe('buildBlobImage', () => {
-  it('标准：不带尾斜杠', () => {
-    expect(buildBlobImage('https://base.example.com', 'abc123', '示意图')).toBe(
-      '![示意图](https://base.example.com/v1/blob/abc123)',
-    );
-  });
-
-  it('baseUrl 带 1 个尾斜杠自动去掉', () => {
-    expect(buildBlobImage('https://base.example.com/', 'abc123', 'alt')).toBe(
-      '![alt](https://base.example.com/v1/blob/abc123)',
-    );
-  });
-
-  it('baseUrl 带多个尾斜杠只去掉一次（replace /\/+$/)', () => {
-    expect(buildBlobImage('https://base.example.com//', 'abc', 'x')).toBe(
-      '![x](https://base.example.com/v1/blob/abc)',
-    );
+  it('协议引用：只含 blob:{hash}，不硬编码节点 URL', () => {
+    expect(buildBlobImage('abc123', 'alt')).toBe('![alt](blob:abc123)');
   });
 
   it('空 alt 也正常产出', () => {
-    expect(buildBlobImage('https://b.io', 'xyz', '')).toBe('![](https://b.io/v1/blob/xyz)');
+    expect(buildBlobImage('xyz', '')).toBe('![](blob:xyz)');
+  });
+});
+
+describe('resolveBlobUrl', () => {
+  it('blob: 协议 → 当前节点 baseUrl 拼接', () => {
+    expect(resolveBlobUrl('https://base.com', 'blob:abc123')).toBe('https://base.com/v1/blob/abc123');
+  });
+  it('带尾斜杠的 baseUrl 自动去掉', () => {
+    expect(resolveBlobUrl('https://base.com/', 'blob:abc')).toBe('https://base.com/v1/blob/abc');
+  });
+  it('已经是绝对 URL → 直接返回（兼容老数据）', () => {
+    expect(resolveBlobUrl('https://new-node.com', 'https://old-node.com/v1/blob/abc')).toBe(
+      'https://old-node.com/v1/blob/abc',
+    );
   });
 });
 

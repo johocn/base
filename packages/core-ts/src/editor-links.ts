@@ -36,10 +36,28 @@ export function buildExternalLink(url: string, displayText: string): string {
   return `[${displayText}](${url})`;
 }
 
-/** 图片：`![alt](baseUrl/v1/blob/blobId)`；baseUrl 尾斜杠自动去掉。 */
-export function buildBlobImage(baseUrl: string, blobId: string, alt: string): string {
-  const cleanBase = baseUrl.replace(/\/+$/, '');
-  return `![${alt}](${cleanBase}/v1/blob/${blobId})`;
+/**
+ * 图片：`![alt](blob:{blobId})` — **协议引用，内容寻址**。
+ * markdown 里**不硬编码节点 baseUrl**，跨设备跨节点永久可移植。
+ * 渲染时由前端根据当前节点 baseUrl 解析成 `{baseUrl}/v1/blob/{blobId}`。
+ */
+export function buildBlobImage(blobId: string, alt: string): string {
+  return `![${alt}](blob:${blobId})`;
+}
+
+/**
+ * 把 blob: 协议引用解析成绝对 URL（图片显示用）。
+ * @param currentBaseUrl 当前节点的 baseUrl（尾部斜杠自动去掉）
+ * @param ref markdown 里的引用（blob:{blobId} 或旧的绝对 URL 都能解析）
+ */
+export function resolveBlobUrl(currentBaseUrl: string, ref: string): string {
+  const blobMatch = ref.match(/^blob:([a-f0-9]{32,})$/);
+  if (blobMatch) {
+    const clean = currentBaseUrl.replace(/\/+$/, '');
+    return `${clean}/v1/blob/${blobMatch[1]}`;
+  }
+  // 已经是绝对 URL（兼容老数据）
+  return ref;
 }
 
 /** 内部条目搜索的返回行（对应客户端 items 表）。 */

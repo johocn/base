@@ -158,11 +158,12 @@ import { computed, nextTick, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
 import {
-  composeBlobImg,
+  buildBlobImage,
   composeExternalLink,
   composeInternalLink,
   formatSize,
   insertMarkdown,
+  resolveBlobUrl,
   searchLocalBlobs,
   searchLocalItems,
   type BlobSearchRow,
@@ -422,17 +423,19 @@ async function pickAndUploadImage() {
 }
 function confirmUploadImage() {
   if (uploadedBlobId.value === '' || !editCtx) return;
-  const md = composeBlobImg(editCtx.opts.nodeBaseUrl, uploadedBlobId.value, uploadAlt.value);
+  // blob: 协议引用，不硬编码 baseUrl（内容寻址跨节点便携）
+  const md = buildBlobImage(uploadedBlobId.value, uploadAlt.value);
   insertMarkdownAtCursor(md);
   closeImageDialog();
 }
 function imageUrlOf(blobId: string): string {
+  // 渲染时用 resolveBlobUrl 把 blob:{hash} 转绝对 URL
   const base = editCtx?.opts.nodeBaseUrl ?? '';
-  return `${base.replace(/\/+$/, '')}/v1/blob/${blobId}`;
+  return resolveBlobUrl(base, `blob:${blobId}`);
 }
 function submitBlobImage(b: BlobSearchRow) {
   if (!editCtx) return;
-  const md = composeBlobImg(editCtx.opts.nodeBaseUrl, b.blobId, 'image');
+  const md = buildBlobImage(b.blobId, 'image');
   insertMarkdownAtCursor(md);
   closeImageDialog();
 }

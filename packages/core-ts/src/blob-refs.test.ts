@@ -37,6 +37,27 @@ describe('extractBlobRefs', () => {
 `;
     expect(extractBlobRefs(md).length).toBe(2);
   });
+
+  it('新格式 blob: 协议引用也能提取（内容寻址）', () => {
+    const md = `
+# 正文
+![封面](blob:aaaabbbbccccddddeeeeffffaaaabbbb)
+![插图](blob:11111111111111111111111111111111)
+`;
+    const ids = extractBlobRefs(md);
+    expect(ids.sort()).toEqual([
+      '11111111111111111111111111111111',
+      'aaaabbbbccccddddeeeeffffaaaabbbb',
+    ]);
+  });
+
+  it('新旧格式混排 → 去重合并', () => {
+    const md = `
+![a](blob:aaaabbbbccccddddeeeeffffaaaabbbb)
+![b](https://old.node.com/v1/blob/aaaabbbbccccddddeeeeffffaaaabbbb)
+`;
+    expect(extractBlobRefs(md)).toEqual(['aaaabbbbccccddddeeeeffffaaaabbbb']);
+  });
 });
 
 describe('blob_references 追踪', () => {

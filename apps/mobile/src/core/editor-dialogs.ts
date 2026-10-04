@@ -8,11 +8,12 @@ import {
   buildItemLink,
   searchLocalBlobs,
   searchLocalItems,
+  resolveBlobUrl,
   type BlobSearchRow,
   type ItemSearchRow,
 } from '@base/core-ts/editor-links';
 
-export { buildBlobImage, buildExternalLink, buildItemLink, searchLocalBlobs, searchLocalItems };
+export { buildBlobImage, buildExternalLink, buildItemLink, searchLocalBlobs, searchLocalItems, resolveBlobUrl };
 export type { BlobSearchRow, ItemSearchRow };
 
 /** 外部链接 Tab 的产出：`[displayText](url)`，插入后光标落在 `]` 之后。 */
@@ -25,9 +26,12 @@ export function composeInternalLink(baseUrl: string, itemId: string, displayTitl
   return buildItemLink(baseUrl, itemId, displayTitle.trim() || itemId);
 }
 
-/** 图片的产出：`![alt](baseUrl/v1/blob/blobId)`，插入后光标落在 `)` 之后。 */
-export function composeBlobImg(baseUrl: string, blobId: string, alt: string): string {
-  return buildBlobImage(baseUrl, blobId, alt.trim() || 'image');
+/**
+ * 图片产出：`![alt](blob:{blobId})` — blob: 协议引用，不硬编码节点 URL。
+ * @deprecated 直接用 buildBlobImage(blobId, alt)；保留此函数是为了 lesson/edit.vue 兼容。
+ */
+export function composeBlobImg(_baseUrl: string, blobId: string, alt: string): string {
+  return buildBlobImage(blobId, alt.trim() || 'image');
 }
 
 /** 字节 → 可读的 KB / MB 字符串。 */
