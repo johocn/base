@@ -96,6 +96,8 @@ export interface BlobSearchRow {
   size: number;
   /** 从 verified_at ISO 串解析得到的 ms 时间戳；解析失败回落 0 */
   createdAt: number;
+  /** 被多少条目正文引用（blob_references LEFT JOIN COUNT） */
+  refs: number;
 }
 
 /**
@@ -119,28 +121,31 @@ export async function searchLocalBlobs(opts: {
   const where: string[] = [];
   const params: unknown[] = [];
 
-  // owner 过滤：传了 ownerIdentityId 就只看这个用户的图片库；不传（空/undefined）看全部
-  // 单机固定 'me' 时，早期封面/附件老数据 owner_id='' 不会出现——这是对的，图库只显示用户上传的独立图片
+  // owner 过滤：传了 ownerIdentityId 就只看这个用户的图片库
   if (opts.ownerIdentityId && opts.ownerIdentityId.trim() !== '') {
-    where.push(`owner_id = ?`);
+    where.push(`b.owner_id = ?`);
     params.push(opts.ownerIdentityId.trim());
   }
 
   if (filter === 'image') {
-    // 只看图片；但 content_type='' 的老数据也不放过（sync 路径 / 早期上传）
-    where.push(`(content_type LIKE 'image/%' OR content_type = '')`);
+    // 只看图片；但 content_type='' 的老数据也不放过
+    where.push(`(b.content_type LIKE 'image/%' OR b.content_type = '')`);
   }
   if (opts.query && opts.query.trim() !== '') {
     const like = `%${opts.query.trim()}%`;
-    // 文件名 / 条目路径 / owner 三搜
-    where.push(`(original_name LIKE ? OR item_id LIKE ? OR owner_id LIKE ?)`);
+    // 文件名 / 条目路径 / owner 三搜（全部加 b. 前缀，因为 LEFT JOIN）
+    where.push(`(b.original_name LIKE ? OR b.item_id LIKE ? OR b.owner_id LIKE ?)`);
     params.push(like, like, like);
   }
 
   const sql =
-    `SELECT blob_id, owner_id, item_id, size, verified_at, original_name, content_type FROM blob_index` +
+    `SELECT b.blob_id, b.owner_id, b.item_id, b.size, b.verified_at, b.original_name, b.content_type,
+            COUNT(ref.item_id) AS refs
+     FROM blob_index b
+     LEFT JOIN blob_references ref ON ref.blob_id = b.blob_id` +
     (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '') +
-    ` ORDER BY verified_at DESC LIMIT ?`;
+    ` GROUP BY b.blob_id` +
+    ` ORDER BY b.verified_at DESC LIMIT ?`;
   params.push(limit);
 
   const rows = await opts.db.select(sql, params);
@@ -150,5 +155,6 @@ export async function searchLocalBlobs(opts: {
     contentType: String(r.content_type ?? ''),
     size: Number(r.size ?? 0),
     createdAt: Number(new Date(String(r.verified_at ?? '')).getTime()) || 0,
+    refs: Number((r as any).refs ?? 0),
   }));
 }

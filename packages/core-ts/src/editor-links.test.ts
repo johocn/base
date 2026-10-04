@@ -159,9 +159,11 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
       limit: 10,
     });
     expect(db.lastSql).toContain('FROM blob_index');
-    expect(db.lastSql).toContain('(content_type LIKE');
-    expect(db.lastSql).toContain('(original_name LIKE ? OR item_id LIKE ? OR owner_id LIKE ?)');
-    expect(db.lastSql).toContain('ORDER BY verified_at DESC');
+    expect(db.lastSql).toContain('(b.content_type LIKE');
+    expect(db.lastSql).toContain('(b.original_name LIKE ? OR b.item_id LIKE ? OR b.owner_id LIKE ?)');
+    expect(db.lastSql).toContain('ORDER BY b.verified_at DESC');
+    expect(db.lastSql).toContain('GROUP BY b.blob_id');
+    expect(db.lastSql).toContain('LEFT JOIN blob_references');
     // query 三搜 original_name/item_id/owner_id 各 1 param，最后 limit 共 4
     expect(db.lastParams).toEqual(['%rust%', '%rust%', '%rust%', 10]);
 
@@ -169,6 +171,7 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
     expect(rows[0]!.blobId).toBe('b1');
     expect(rows[0]!.name).toBe('cover.png');
     expect(rows[0]!.contentType).toBe('image/png');
+    expect(rows[0]!.refs).toBe(0);
   });
 
   it('无关键词 → 只 ORDER BY + LIMIT + 图片过滤', async () => {
@@ -178,7 +181,7 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
     ]);
     const rows = await searchLocalBlobs({ db });
     expect(rows).toHaveLength(1);
-    expect(db.lastSql).toContain('ORDER BY verified_at DESC');
+    expect(db.lastSql).toContain('ORDER BY b.verified_at DESC');
   });
 
   it('空关键词字符串也走「无关键词」分支（无 OR LIKE）', async () => {
@@ -200,6 +203,6 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
     db.setResponse('FROM blob_index', []);
     await searchLocalBlobs({ db, filter: 'all' });
     expect(db.lastSql).not.toContain('content_type LIKE');
-    expect(db.lastSql).toContain('ORDER BY verified_at DESC');
+    expect(db.lastSql).toContain('ORDER BY b.verified_at DESC');
   });
 });

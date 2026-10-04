@@ -91,12 +91,19 @@
           <block v-else>
             <input v-model="blobQuery" class="input" placeholder="搜索（可选）" @input="refreshBlobs" />
             <scroll-view scroll-y class="modal-scroll">
-              <view v-for="b in blobRows" :key="b.blobId" class="modal-row" @click="submitBlobImage(b)">
-                <image :src="imageUrlOf(b.blobId)" class="thumb" mode="aspectFill" />
-                <view class="thumb-meta">
-                  <text class="val">{{ b.blobId }}</text>
-                  <text class="hint">{{ formatSize(b.size) }}</text>
+              <view v-for="b in blobRows" :key="b.blobId" class="modal-row">
+                <view class="blob-cell" @click="submitBlobImage(b)">
+                  <image :src="imageUrlOf(b.blobId)" class="thumb" mode="aspectFill" />
+                  <view class="thumb-meta">
+                    <text class="val">{{ b.name || b.blobId.slice(0, 8) }}</text>
+                    <text class="hint">
+                      {{ formatSize(b.size) }}
+                      <text v-if="b.refs > 0" class="refs-yes">· {{ b.refs }} 条引用</text>
+                      <text v-else class="refs-no">· 无引用</text>
+                    </text>
+                  </view>
                 </view>
+                <text class="del-btn" @click.stop="handleDeleteBlob(b, $event)">删</text>
               </view>
               <text v-if="blobRows.length === 0" class="hint">本机还没有上传过图片</text>
             </scroll-view>
@@ -428,6 +435,42 @@ function submitBlobImage(b: BlobSearchRow) {
   const md = composeBlobImg(editCtx.opts.nodeBaseUrl, b.blobId, 'image');
   insertMarkdownAtCursor(md);
   closeImageDialog();
+}
+
+async function handleDeleteBlob(b: BlobSearchRow, _e: Event) {
+  if (!editCtx) return;
+  // 有引用 → 阻止删除（票选治理等多用户身份体系再接 govern.ts）
+  const refs = await editCtx.repo.countBlobRefs(b.blobId);
+  if (refs > 0) {
+    uni.showModal({
+      title: '无法删除',
+      content: `此图片被 ${refs} 篇文章正文引用，请先在引用方删除后再清理。票选治理功能待多用户身份上线。`,
+      showCancel: false,
+    });
+    return;
+  }
+  // 无引用 → 确认后删
+  uni.showModal({
+    title: '删除图片',
+    content: `确认删除「${b.name || b.blobId.slice(0, 8)}」？此操作不可恢复。`,
+    success: async (res) => {
+      if (!res.confirm) return;
+      try {
+        // 先查文件路径
+        const rows = await editCtx!.db.select(`SELECT path FROM blob_index WHERE blob_id=?`, [b.blobId]);
+        const path = rows.length > 0 ? String((rows[0] as any).path ?? '') : '';
+        await editCtx!.repo.removeBlob(b.blobId);
+        // 删本地文件（H5 localStorage 删对应 key；App plus.io fs.unlink）
+        if (path && editCtx!.opts.adapters.fs) {
+          try { await editCtx!.opts.adapters.fs.remove(path); } catch {}
+        }
+        uni.showToast({ title: '已删除', icon: 'success' });
+        await refreshBlobs();
+      } catch (e) {
+        uni.showToast({ title: `删除失败：${(e as Error).message}`, icon: 'none' });
+      }
+    },
+  });
 }
 
 const isUpdate = computed(() => itemId.value !== '');
