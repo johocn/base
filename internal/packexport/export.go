@@ -42,7 +42,9 @@ var packDDL = []string{
 	`CREATE TABLE IF NOT EXISTS quizzes(
 		item_id       TEXT PRIMARY KEY,
 		question_json TEXT NOT NULL,
-		content_hash  TEXT NOT NULL
+		content_hash  TEXT NOT NULL,
+		tags_json     TEXT NOT NULL DEFAULT '[]',
+		link_article  TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE TABLE IF NOT EXISTS media_meta(
 		item_id           TEXT PRIMARY KEY,
@@ -287,8 +289,12 @@ func writePackSQLite(path, packID string, version int64, merkle string, entries 
 				_ = db.Close()
 				return fmt.Errorf("packexport: 条目 %s 在 quizzes 表缺失", e.ItemID)
 			}
-			if _, err := tx.Exec(`INSERT INTO quizzes(item_id,question_json,content_hash) VALUES(?,?,?)`,
-				q.ItemID, q.QuestionJSON, q.ContentHash); err != nil {
+			tags := q.TagsJSON
+			if tags == "" {
+				tags = "[]"
+			}
+			if _, err := tx.Exec(`INSERT INTO quizzes(item_id,question_json,content_hash,tags_json,link_article) VALUES(?,?,?,?,?)`,
+				q.ItemID, q.QuestionJSON, q.ContentHash, tags, q.LinkArticle); err != nil {
 				_ = tx.Rollback()
 				_ = db.Close()
 				return err

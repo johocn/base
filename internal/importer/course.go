@@ -34,17 +34,22 @@ type placement struct {
 }
 
 // resolvePlacement 按 front-matter 算载体 item_id（册子 §2.1 / §4.2 规则 1–3）。
-// kind ∈ {article, video, quiz}；只有 article 允许无 course。
+// kind ∈ {article, video, quiz}；article / quiz 允许无 course（独立条目，article/{slug} / quiz/{slug}）。
 func resolvePlacement(meta map[string]string, kind, slug, filename string) (placement, error) {
 	course := strings.TrimSpace(meta["course"])
 	lesson := strings.TrimSpace(meta["lesson"])
 	p := placement{Course: course, Lesson: lesson, Order: strings.TrimSpace(meta["order"]), Filename: filename}
 	if course == "" {
-		if kind != "article" {
+		switch kind {
+		case "article":
+			p.ItemID = "article/" + slug
+			return p, nil
+		case "quiz":
+			p.ItemID = "quiz/" + slug
+			return p, nil
+		default:
 			return placement{}, fmt.Errorf("importer: %s 的 %s 缺少 front-matter `course`（无顶层 %s 命名空间）", filename, kind, kind)
 		}
-		p.ItemID = "article/" + slug
-		return p, nil
 	}
 	if lesson == "" {
 		return placement{}, fmt.Errorf("importer: %s 声明了 course=%s 但缺少 lesson（不允许只有课程没有课时的载体）", filename, course)

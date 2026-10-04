@@ -1,4 +1,4 @@
-package store
+﻿package store
 
 import (
 	"database/sql"
@@ -48,7 +48,9 @@ type PackEntry struct {
 	Segments []Segment
 
 	// SQLiteTable == "quizzes"
-	QuestionJSON string
+	QuestionJSON    string
+	QuizTagsJSON    string
+	QuizLinkArticle string
 }
 
 // ImportResult 是一次包入库的结果。
@@ -175,9 +177,9 @@ func (s *Store) ImportPack(version int64, entries []PackEntry, tombstones []prot
 				return res, fmt.Errorf("store: 入库 media_meta %s: %w", e.ItemID, err)
 			}
 		case "quizzes":
-			if _, err := tx.Exec(`INSERT INTO quizzes(item_id,question_json,content_hash) VALUES(?,?,?)
-				ON CONFLICT(item_id) DO UPDATE SET question_json=excluded.question_json, content_hash=excluded.content_hash`,
-				e.ItemID, e.QuestionJSON, e.ContentHash); err != nil {
+			if _, err := tx.Exec(`INSERT INTO quizzes(item_id,question_json,content_hash,tags_json,link_article) VALUES(?,?,?,?,?)
+				ON CONFLICT(item_id) DO UPDATE SET question_json=excluded.question_json, content_hash=excluded.content_hash, tags_json=excluded.tags_json, link_article=excluded.link_article`,
+				e.ItemID, e.QuestionJSON, e.ContentHash, e.QuizTagsJSON, e.QuizLinkArticle); err != nil {
 				return res, fmt.Errorf("store: 入库 quizzes %s: %w", e.ItemID, err)
 			}
 		default:
@@ -250,3 +252,7 @@ func revokedRevOfTx(tx *sql.Tx, itemID string) (int, error) {
 	}
 	return rev, err
 }
+
+
+
+

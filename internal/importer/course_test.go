@@ -256,10 +256,14 @@ func TestResolvePlacement(t *testing.T) {
 		t.Fatalf("placement = %+v", p)
 	}
 
-	for _, kind := range []string{"quiz", "video"} {
-		if _, err := resolvePlacement(map[string]string{}, kind, "x", kind+".md"); err == nil {
-			t.Fatalf("%s 缺 course 应报错（无顶层 %s 命名空间）", kind, kind)
-		}
+	// quiz 现在允许 standalone → quiz/{slug}
+	if _, err := resolvePlacement(map[string]string{}, "quiz", "q", "q.md"); err != nil {
+		t.Fatalf("quiz 缺 course 不应报错（standalone 用 quiz/ 命名空间）: %v", err)
+	}
+
+	// video 仍需 course
+	if _, err := resolvePlacement(map[string]string{}, "video", "v", "v.md"); err == nil {
+		t.Fatal("video 缺 course 应报错")
 	}
 
 	if _, err := resolvePlacement(map[string]string{"course": "c1"}, "article", "a", "a.md"); err == nil {

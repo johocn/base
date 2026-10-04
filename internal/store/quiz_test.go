@@ -15,7 +15,7 @@ func TestUpsertQuizRoundTrip(t *testing.T) {
 	err = st.UpsertQuiz(Quiz{
 		ItemID: "lesson:cid", Title: "内容寻址小测", QuestionJSON: qjson,
 		ContentHash: "hash-1", SourceRev: "rev-1",
-	})
+	}, "lesson")
 	if err != nil {
 		t.Fatalf("UpsertQuiz: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestUpsertQuizRoundTrip(t *testing.T) {
 	}
 
 	// 幂等：同 item_id 再写覆盖，不新增行
-	if err := st.UpsertQuiz(Quiz{ItemID: "lesson:cid", Title: "改了标题", QuestionJSON: qjson, ContentHash: "hash-2"}); err != nil {
+	if err := st.UpsertQuiz(Quiz{ItemID: "lesson:cid", Title: "改了标题", QuestionJSON: qjson, ContentHash: "hash-2"}, "lesson"); err != nil {
 		t.Fatalf("再次 UpsertQuiz: %v", err)
 	}
 	all, err := st.ListQuizzes(nil)

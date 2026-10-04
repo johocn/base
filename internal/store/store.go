@@ -79,6 +79,8 @@ type Quiz struct {
 	QuestionJSON string
 	ContentHash  string
 	SourceRev    string
+	TagsJSON     string
+	LinkArticle  string
 	UpdatedAt    string
 }
 
@@ -222,10 +224,15 @@ func (s *Store) UpsertArticle(a Article) error {
 }
 
 // UpsertQuiz 幂等写入题库（items + quizzes 同事务），口径与文章一致。
-func (s *Store) UpsertQuiz(q Quiz) error {
+// source 取 importer 来源：有 course → "lesson"（课时下的配套题），无 course → "article"（独立题）。
+func (s *Store) UpsertQuiz(q Quiz, source ...string) error {
 	updated := q.UpdatedAt
 	if updated == "" {
 		updated = nowUTC()
+	}
+	src := "article"
+	if len(source) > 0 {
+		src = source[0]
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -237,23 +244,36 @@ func (s *Store) UpsertQuiz(q Quiz) error {
 		ON CONFLICT(item_id) DO UPDATE SET
 			title=excluded.title, source_rev=excluded.source_rev, content_hash=excluded.content_hash,
 			sqlite_table=excluded.sqlite_table, dist_class=excluded.dist_class, state=excluded.state, updated_at=excluded.updated_at`,
-		q.ItemID, "lesson", "quiz", q.Title, q.SourceRev, q.ContentHash, "quizzes", "public", "active", updated); err != nil {
+		q.ItemID, src, "quiz", q.Title, q.SourceRev, q.ContentHash, "quizzes", "public", "active", updated); err != nil {
 		return fmt.Errorf("store: upsert quiz item: %w", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO quizzes(item_id,question_json,content_hash)
-		VALUES(?,?,?)
-		ON CONFLICT(item_id) DO UPDATE SET question_json=excluded.question_json, content_hash=excluded.content_hash`,
-		q.ItemID, q.QuestionJSON, q.ContentHash); err != nil {
+	tags := q.TagsJSON
+	if tags == "" {
+		tags = "[]"
+	}
+	if _, err := tx.Exec(`INSERT INTO quizzes(item_id,question_json,content_hash,tags_json,link_article)
+		VALUES(?,?,?,?,?)
+		ON CONFLICT(item_id) DO UPDATE SET
+			question_json=excluded.question_json, content_hash=excluded.content_hash,
+			tags_json=excluded.tags_json, link_article=excluded.link_article`,
+		q.ItemID, q.QuestionJSON, q.ContentHash, tags, q.LinkArticle); err != nil {
 		return fmt.Errorf("store: upsert quiz: %w", err)
 	}
 	return tx.Commit()
 }
 
+// AddTagLink 幂等插入一条 tag_links 行（INSERT OR IGNORE）。
+func (s *Store) AddTagLink(tagID, targetID, kind string) error {
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO tag_links(tag_id,target_id,kind,created_at) VALUES(?,?,?,?)`,
+		tagID, targetID, kind, nowUTC())
+	return err
+}
+
 // GetQuiz 读取题库。
 func (s *Store) GetQuiz(itemID string) (Quiz, bool, error) {
-	row := s.db.QueryRow(`SELECT item_id,question_json,content_hash FROM quizzes WHERE item_id=?`, itemID)
+	row := s.db.QueryRow(`SELECT item_id,question_json,content_hash,tags_json,link_article FROM quizzes WHERE item_id=?`, itemID)
 	var q Quiz
-	err := row.Scan(&q.ItemID, &q.QuestionJSON, &q.ContentHash)
+	err := row.Scan(&q.ItemID, &q.QuestionJSON, &q.ContentHash, &q.TagsJSON, &q.LinkArticle)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Quiz{}, false, nil
 	}
@@ -265,7 +285,7 @@ func (s *Store) GetQuiz(itemID string) (Quiz, bool, error) {
 
 // ListQuizzes 返回指定 id 的题库；ids 为空表示全部。
 func (s *Store) ListQuizzes(ids []string) (map[string]Quiz, error) {
-	q := `SELECT item_id,question_json,content_hash FROM quizzes`
+	q := `SELECT item_id,question_json,content_hash,tags_json,link_article FROM quizzes`
 	args := []any{}
 	if len(ids) > 0 {
 		q += ` WHERE item_id IN (` + placeholders(len(ids)) + `)`
@@ -281,7 +301,7 @@ func (s *Store) ListQuizzes(ids []string) (map[string]Quiz, error) {
 	out := map[string]Quiz{}
 	for rows.Next() {
 		var item Quiz
-		if err := rows.Scan(&item.ItemID, &item.QuestionJSON, &item.ContentHash); err != nil {
+		if err := rows.Scan(&item.ItemID, &item.QuestionJSON, &item.ContentHash, &item.TagsJSON, &item.LinkArticle); err != nil {
 			return nil, err
 		}
 		out[item.ItemID] = item

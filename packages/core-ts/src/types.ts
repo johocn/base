@@ -49,6 +49,8 @@ export interface QuizRow {
   itemId: string;
   questionJson: string;
   contentHash: string;
+  tagsJson?: string;
+  linkArticle?: string;
 }
 
 /** 容器条目的一行 segments（与节点侧 segments 表同形；seq=0 为简介，seq>=1 为子项 item_id） */

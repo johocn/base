@@ -146,6 +146,9 @@ type parsedMD struct {
 	doc                                                  Doc // kind == article 时有意义
 	courseTitle, courseDigest, lessonTitle, lessonDigest string
 	category, categoryTitle, categoryDigest              string
+	// quiz 专有（kind == quiz 时有意义）
+	quizTags      []string
+	quizLinkArticle string
 }
 
 // Run 导入目录下全部 *.md（按文件名升序），幂等覆盖同 slug 条目。
@@ -199,6 +202,15 @@ func Run(st *store.Store, dir string, opts Options) (Result, error) {
 				continue
 			}
 			it.kind, it.p = "quiz", p
+			// 解析 quiz 专有字段：tags + link_article
+			if t := meta["tags"]; t != "" {
+				for _, part := range strings.Split(t, ",") {
+					if p := strings.TrimSpace(part); p != "" {
+						it.quizTags = append(it.quizTags, p)
+					}
+				}
+			}
+			it.quizLinkArticle = strings.TrimSpace(meta["link_article"])
 		} else {
 			doc, err := ParseMD(name, raw)
 			if err != nil {
@@ -226,7 +238,11 @@ func Run(st *store.Store, dir string, opts Options) (Result, error) {
 	for _, it := range items {
 		var err error
 		if it.kind == "quiz" {
-			err = importQuiz(st, it.name, it.raw, it.p)
+			src := "lesson"
+			if it.p.Course == "" {
+				src = "article"
+			}
+			err = importQuiz(st, it.name, it.raw, it.p, it.quizTags, it.quizLinkArticle, src)
 		} else {
 			err = upsertArticleDoc(st, it.p.ItemID, it.doc)
 		}
@@ -390,7 +406,8 @@ func upsertArticleDoc(st *store.Store, itemID string, doc Doc) error {
 
 // importQuiz 把一份题库写进内容库：item_id 取归属解析结果、type = quiz。
 // content_hash 与 articles 同口径：hex(sha256(question_json 的 UTF-8 字节))，不走 canonicalize。
-func importQuiz(st *store.Store, filename string, raw []byte, p placement) error {
+// tags → 序列化到 quizzes.tags_json，同时写 tag_links 行（复用 importer Run 的 tag/ 容器重建）。
+func importQuiz(st *store.Store, filename string, raw []byte, p placement, tags []string, linkArticle, source string) error {
 	q, err := ParseQuiz(filename, raw)
 	if err != nil {
 		return err
@@ -401,11 +418,30 @@ func importQuiz(st *store.Store, filename string, raw []byte, p placement) error
 		return err
 	}
 	hash := protocol.SHA256Hex(questionJSON)
-	return st.UpsertQuiz(store.Quiz{
+	tagsJSON := "[]"
+	if len(tags) > 0 {
+		b, _ := json.Marshal(tags)
+		tagsJSON = string(b)
+	}
+	if err := st.UpsertQuiz(store.Quiz{
 		ItemID:       p.ItemID,
 		Title:        q.Title,
 		QuestionJSON: string(questionJSON),
 		ContentHash:  hash,
 		SourceRev:    hash[:16],
-	})
+		TagsJSON:     tagsJSON,
+		LinkArticle:  linkArticle,
+	}, source); err != nil {
+		return err
+	}
+	// tags → 写 tag_links（让 tag/ 容器在阶段 3.5 重建时能包含 quiz）
+	for _, t := range tags {
+		if t == "" {
+			continue
+		}
+		if err := st.AddTagLink("tag/"+t, p.ItemID, "quiz"); err != nil {
+			return err
+		}
+	}
+	return nil
 }

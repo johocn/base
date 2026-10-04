@@ -213,16 +213,16 @@ func readAndVerifyPack(packPath string, man protocol.Manifest) ([]store.PackEntr
 		return nil, err
 	}
 
-	type quizRow struct{ questionJSON, contentHash string }
+	type quizRow struct{ questionJSON, contentHash, tagsJSON, linkArticle string }
 	quizzes := map[string]quizRow{}
-	rows, err = db.Query(`SELECT item_id,question_json,content_hash FROM quizzes`)
+	rows, err = db.Query(`SELECT item_id,question_json,content_hash,tags_json,link_article FROM quizzes`)
 	if err != nil {
 		return nil, fmt.Errorf("读 pack quizzes: %w", err)
 	}
 	for rows.Next() {
 		var id string
 		var r quizRow
-		if err := rows.Scan(&id, &r.questionJSON, &r.contentHash); err != nil {
+		if err := rows.Scan(&id, &r.questionJSON, &r.contentHash, &r.tagsJSON, &r.linkArticle); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -307,6 +307,8 @@ func readAndVerifyPack(packPath string, man protocol.Manifest) ([]store.PackEntr
 				return nil, fmt.Errorf("pack 行级 hash 不符 %s", e.ItemID)
 			}
 			base.QuestionJSON = r.questionJSON
+			base.QuizTagsJSON = r.tagsJSON
+			base.QuizLinkArticle = r.linkArticle
 		case "segments":
 			rowsList, ok := segs[e.ItemID]
 			if !ok || len(rowsList) == 0 {

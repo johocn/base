@@ -92,8 +92,13 @@ describe("resolvePlacement", () => {
     expect(p.order).toBe("2");
   });
 
-  it("非 article 无 course ⇒ 抛错", () => {
-    expect(() => resolvePlacement({}, "quiz", "s1", "a.md")).toThrowError(/缺少 front-matter/);
+  it("quiz 无 course ⇒ standalone quiz/slug", () => {
+    const p = resolvePlacement({}, "quiz", "q1", "q.md");
+    expect(p.itemId).toBe("quiz/q1");
+  });
+
+  it("video 无 course ⇒ 抛错", () => {
+    expect(() => resolvePlacement({}, "video", "v1", "v.md")).toThrowError(/缺少 front-matter/);
   });
 
   it("有 course 无 lesson ⇒ 抛错", () => {

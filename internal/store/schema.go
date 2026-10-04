@@ -48,7 +48,9 @@ var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS quizzes(
 		item_id       TEXT PRIMARY KEY,
 		question_json TEXT NOT NULL,
-		content_hash  TEXT NOT NULL
+		content_hash  TEXT NOT NULL,
+		tags_json     TEXT NOT NULL DEFAULT '[]',
+		link_article  TEXT NOT NULL DEFAULT ''
 	)`,
 
 	`CREATE TABLE IF NOT EXISTS media_meta(

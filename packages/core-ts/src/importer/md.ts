@@ -84,7 +84,7 @@ export interface Placement {
 
 /**
  * 按 front-matter 算载体 item_id（册子 §2.1 / §4.2 规则 1–3）。
- * kind ∈ {article, video, quiz}；只有 article 允许无 course。
+ * kind ∈ {article, video, quiz}；article / quiz 允许无 course（独立条目）。
  */
 export function resolvePlacement(
   meta: Record<string, string>,
@@ -102,13 +102,18 @@ export function resolvePlacement(
     filename,
   };
   if (course === "") {
-    if (kind !== "article") {
-      throw new Error(
-        `importer: ${filename} 的 ${kind} 缺少 front-matter \`course\`（无顶层 ${kind} 命名空间）`,
-      );
+    switch (kind) {
+      case "article":
+        p.itemId = "article/" + slug;
+        return p;
+      case "quiz":
+        p.itemId = "quiz/" + slug;
+        return p;
+      default:
+        throw new Error(
+          `importer: ${filename} 的 ${kind} 缺少 front-matter \`course\`（无顶层 ${kind} 命名空间）`,
+        );
     }
-    p.itemId = "article/" + slug;
-    return p;
   }
   if (lesson === "") {
     throw new Error(

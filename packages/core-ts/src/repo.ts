@@ -167,7 +167,8 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS user_state(
      item_id TEXT PRIMARY KEY, favorited_at TEXT, read_at TEXT)`,
   `CREATE TABLE IF NOT EXISTS quizzes(
-     item_id TEXT PRIMARY KEY, question_json TEXT NOT NULL, content_hash TEXT NOT NULL)`,
+     item_id TEXT PRIMARY KEY, question_json TEXT NOT NULL, content_hash TEXT NOT NULL,
+     tags_json TEXT NOT NULL DEFAULT '[]', link_article TEXT NOT NULL DEFAULT '')`,
   `CREATE TABLE IF NOT EXISTS quiz_attempt(
      item_id TEXT NOT NULL, answered_at TEXT NOT NULL, correct INTEGER NOT NULL, total INTEGER NOT NULL,
      PRIMARY KEY(item_id, answered_at))`,
@@ -289,6 +290,20 @@ export async function ensureBlobColumns(db: LocalDb): Promise<void> {
   }
   if (!cols.has('owner_id')) {
     await db.execute(`ALTER TABLE blob_index ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''`);
+  }
+}
+
+/**
+ * 存量库幂等补列（quizzes.tags_json / quizzes.link_article）。
+ */
+export async function ensureQuizColumns(db: LocalDb): Promise<void> {
+  const cols = new Set((await db.select(`PRAGMA table_info(quizzes)`)).map((r) => String(r.name)));
+  if (cols.size === 0) return;
+  if (!cols.has('tags_json')) {
+    await db.execute(`ALTER TABLE quizzes ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'`);
+  }
+  if (!cols.has('link_article')) {
+    await db.execute(`ALTER TABLE quizzes ADD COLUMN link_article TEXT NOT NULL DEFAULT ''`);
   }
 }
 

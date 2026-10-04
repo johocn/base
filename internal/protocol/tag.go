@@ -123,10 +123,14 @@ func TagKindOfTarget(targetID string) string {
 		return "course"
 	case len(parts) == 2 && parts[0] == "article":
 		return "article"
+	case len(parts) == 2 && parts[0] == "quiz":
+		return "quiz"
 	case len(parts) == 4 && parts[0] == "course" && parts[2] == "lesson":
 		return "lesson"
 	case len(parts) == 6 && parts[0] == "course" && parts[2] == "lesson" && parts[4] == "article":
 		return "article"
+	case len(parts) == 6 && parts[0] == "course" && parts[2] == "lesson" && parts[4] == "quiz":
+		return "quiz"
 	case len(parts) == 2 && parts[0] == "comment" && isHex32(parts[1]):
 		// 只认 32 hex：group.v1 / dm.v1 的 event_id 由 §3.7 一律拒（② 类红线）。
 		return "comment"
