@@ -175,6 +175,7 @@ import { buildQuestionJSON, draftsFromQuestionJSON, emptyDraft, type QuestionDra
 import { enqueueOrSend, newItemID, type SubmitDraft } from '../../core/submit';
 import { bytesToBase64, pickLocalFile, type PickedFile } from '../../platform/uni';
 import { bootstrap, type AppContext } from '../../platform';
+import { syncOnce } from '../../core/sync';
 
 const itemId = ref('');
 const type = ref<'article' | 'quiz'>('article');
@@ -290,14 +291,27 @@ function applyTool(action: ToolbarAction) {
 }
 
 /** ============ 链接对话框 ============ */
-function openLinkDialog() {
+async function openLinkDialog() {
   linkTab.value = 'int';
   intQuery.value = '';
   extUrl.value = '';
   extText.value = '';
   linkOpen.value = true;
+
+  // 自动同步：items 表为空 → 跑一次 syncOnce（课程页手动点的那个）
+  if (editCtx) {
+    try {
+      const rows = await editCtx.db.select('SELECT COUNT(*) AS c FROM items');
+      const count = Number((rows[0] as any)?.c ?? 0);
+      if (count === 0 && editCtx.opts.nodeBaseUrl) {
+        await syncOnce(editCtx.opts);
+      }
+    } catch (e) {
+      console.warn('自动同步失败（不阻断链接弹窗）', e);
+    }
+  }
   // 打开即加载最近条目（空关键词 → ORDER BY updated_at DESC）
-  void refreshIntItems();
+  await refreshIntItems();
 }
 function closeLinkDialog() {
   linkOpen.value = false;

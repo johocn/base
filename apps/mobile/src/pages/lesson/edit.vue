@@ -271,6 +271,7 @@ import type { LocalRepo } from '../../core/repo';
 import { UNKNOWN_FLAGS, canPickFile, pickBlockedReason, type CapabilityFlags } from '../../core/selfcheck';
 import { bootstrap, type AppContext } from '../../platform';
 import { bytesToBase64, pickLocalFile, type PickedFile } from '../../platform/uni';
+import { syncOnce } from '../../core/sync';
 
 /** 课时可挂的载体类型（本册 §2.4；audio 登记在册但播放能力待后续版本） */
 const CARRIER_KINDS = ['article', 'quiz', 'video', 'audio'];
@@ -384,13 +385,25 @@ function applyTool(action: ToolbarAction) {
 }
 
 /** ============ 链接对话框 ============ */
-function openLinkDialog() {
+async function openLinkDialog() {
   linkTab.value = 'int';
   intQuery.value = '';
   extUrl.value = '';
   extText.value = '';
   linkOpen.value = true;
-  void refreshIntItems();
+
+  if (ctx) {
+    try {
+      const rows = await ctx.db.select('SELECT COUNT(*) AS c FROM items');
+      const count = Number((rows[0] as any)?.c ?? 0);
+      if (count === 0 && ctx.opts.nodeBaseUrl) {
+        await syncOnce(ctx.opts);
+      }
+    } catch (e) {
+      console.warn('自动同步失败（不阻断链接弹窗）', e);
+    }
+  }
+  await refreshIntItems();
 }
 function closeLinkDialog() {
   linkOpen.value = false;
