@@ -6,7 +6,6 @@ import type { Db } from "../db";
 import { encText } from "../host/aesgcm";
 import {
   directoryKindOfItemId,
-  filterRosterAtWatermarkSet,
   GOVERN_ACTION_DIRECTORY_ADD,
   GOVERN_ACTION_EDIT_BODY,
   GOVERN_ACTION_EDIT_CATEGORY,
@@ -18,16 +17,18 @@ import {
   GOVERN_ACTION_PIN,
   GOVERN_ACTION_REMOVE,
   GOVERN_ACTION_RECOMMEND,
-  governThresholdForRoster,
+  GovernQuorum,
+  GovernThreshold,
+  NetWeight,
   parseGoInt64,
-  restoredRosterAuthors,
+  placeholders,
+  shouldFreeExec,
   toStr,
 } from "../routes/derived";
 
 const META_CONTENT_VERSION = "content_version";
 const META_DIRECTORY_VERSION = "directory_version";
 const DIRECTORY_STATE_APPROVED = "approved";
-const FREE_REMOVE_EXECUTED_RESULT = "free_remove";
 const DIRECTORY_EXECUTED_RESULT = "directory_approved";
 
 /** GovernProposalEvent（govern_projection.go:19-32）。 */
@@ -619,9 +620,120 @@ export function freeRemoveEligible(db: Db, itemId: string, actor: string): boole
   return otherLearnerCount(db, targets, actor) === 0;
 }
 
+// =====================================================================
+// Spec v2 §6 governContextParams 系列（govern.go:976-1055）
+//   - category='circle' + circle_id != "" → 圈内活跃成员 + 圈内成员对该 item 的互动
+//   - 否则 → 节点级全局（默认）
+// =====================================================================
+
+/** countActiveInIDs（govern.go:1024-1039）：给定 id 列表内活跃的独立身份数。 */
+function countActiveInIDs(db: Db, ids: string[], cutoff: number): number {
+  if (ids.length === 0) return 0;
+  const rows = db.select(
+    `SELECT COUNT(DISTINCT id) AS c FROM identities WHERE last_seen_at > ? AND id IN (${placeholders(ids.length)})`,
+    [cutoff, ...ids],
+  );
+  return Number(rows[0]?.c ?? 0);
+}
+
+/** countItemInIDs（govern.go:1042-1055）：给定表 (progress / favorites) 中 item_id=? AND id!=proposer AND id IN (ids) 的去重 id 数。 */
+function countItemInIDs(
+  db: Db,
+  table: "progress" | "favorites",
+  itemId: string,
+  proposerID: string,
+  ids: string[],
+): number {
+  if (ids.length === 0) return 0;
+  const rows = db.select(
+    `SELECT COUNT(DISTINCT id) AS c FROM ${table} WHERE item_id=? AND id != ? AND id IN (${placeholders(ids.length)})`,
+    [itemId, proposerID, ...ids],
+  );
+  return Number(rows[0]?.c ?? 0);
+}
+
+/** governNodeParams（govern.go:1012-1021）：节点级默认口径。
+ * 容错：表不存在时 m/P/F 降级为 0（fail-closed，让上层正常走 quorum 判定）。 */
+function governNodeParams(db: Db, p: Proposal, now: number, sevenDaysMs: number): { m: number; P: number; F: number } {
+  let m = 0;
+  try {
+    m = Number(
+      db.select(`SELECT COUNT(DISTINCT id) AS c FROM identities WHERE last_seen_at > ?`, [
+        now - sevenDaysMs,
+      ])[0]?.c ?? 0,
+    );
+  } catch {
+    m = 0;
+  }
+  let P = 0;
+  let F = 0;
+  if (p.itemId !== "") {
+    try {
+      P = Number(
+        db.select(`SELECT COUNT(DISTINCT id) AS c FROM progress WHERE item_id=? AND id != ?`, [
+          p.itemId,
+          p.proposerId,
+        ])[0]?.c ?? 0,
+      );
+    } catch {
+      P = 0;
+    }
+    try {
+      F = Number(
+        db.select(`SELECT COUNT(DISTINCT id) AS c FROM favorites WHERE item_id=? AND id != ?`, [
+          p.itemId,
+          p.proposerId,
+        ])[0]?.c ?? 0,
+      );
+    } catch {
+      F = 0;
+    }
+  }
+  return { m, P, F };
+}
+
+/** governContextParams（govern.go:981-1008）：按提案语境查 V2 门槛公式的 m/P/F。 */
+function governContextParams(db: Db, p: Proposal, now: number): { m: number; P: number; F: number } {
+  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+  if (p.category === "circle" && p.circleId !== "") {
+    // 圈内：先查 member_ids_json，解析失败或组不存在 → fallback 到节点级
+    const gRows = db.select(`SELECT member_ids_json FROM groups WHERE group_id=?`, [p.circleId]);
+    if (gRows.length === 0) {
+      return governNodeParams(db, p, now, sevenDaysMs);
+    }
+    let members: string[] = [];
+    try {
+      const raw = toStr(gRows[0].member_ids_json);
+      if (raw !== "") {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) members = parsed.map((x) => String(x));
+      }
+    } catch {
+      return governNodeParams(db, p, now, sevenDaysMs);
+    }
+    if (members.length === 0) return governNodeParams(db, p, now, sevenDaysMs);
+    const m = countActiveInIDs(db, members, now - sevenDaysMs);
+    let P = 0;
+    let F = 0;
+    if (p.itemId !== "") {
+      P = countItemInIDs(db, "progress", p.itemId, p.proposerId, members);
+      F = countItemInIDs(db, "favorites", p.itemId, p.proposerId, members);
+    }
+    return { m, P, F };
+  }
+  return governNodeParams(db, p, now, sevenDaysMs);
+}
+
 /**
- * SettleGovernProposal（govern_projection.go:149-227）：名册 / restored / 免票选判定全在 BEGIN 之前
- * （单连接池下事务内再发查询会死锁）；BEGIN 后第一件事重读提案行做乐观锁。
+ * SettleGovernProposal（govern_projection.go:149-227，Spec v2 §4 重写）。
+ * 改造点：
+ *   - 从老名册门槛 + 容器免票选旁路 → V2 两阶段判定
+ *   - 实时算 m/P/F（governContextParams，category='circle' 时圈内口径）
+ *   - GovernThreshold + GovernQuorum 算门槛；阶段 1 quorum 达标 → 阶段 2 NetWeight > 0
+ *   - voter_count = COUNT(DISTINCT voter_id)（所有人都算，不再按 roster 过滤）
+ *   - approve_sum / reject_sum = SUM(vote_weight) GROUP BY vote_type
+ *   - roster / rosterReady 签名保留（兼容），但 V2 管线不再用于主流程
+ *   - shouldFreeExec 快速路径保留（事件投影也支持免票选）
  */
 export function settleGovernProposal(
   db: Db,
@@ -630,29 +742,53 @@ export function settleGovernProposal(
   roster: Set<string>,
   rosterReady: boolean,
 ): void {
+  // 前置检查：提案存在 / 已定案 → return（幂等）
   const p = getProposal(db, proposalId);
   if (p === null) return; // 乱序：vote 先到
   if (p.executedAt !== 0 || p.voidedAt !== 0) return; // 已定案：幂等
-  const voters = proposalVotersExec(db, proposalId);
-  const restored = restoredRosterAuthors(db, storeKey, p.revokedRev);
-  const effective = filterRosterAtWatermarkSet(voters, roster, restored);
-  let threshold = governThresholdForRoster(p.action, roster.size, rosterReady);
-  if (threshold === 1) threshold = 0; // 小节点豁免
-  let freeResult = "";
-  if (p.action === GOVERN_ACTION_REMOVE) {
-    try {
-      if (freeRemoveEligible(db, p.itemId, p.proposerId)) {
-        threshold = 0;
-        freeResult = FREE_REMOVE_EXECUTED_RESULT;
+
+  // 快速路径：shouldFreeExec（Spec v2 §3.5）——事件路径也支持免票选
+  if (p.action !== GOVERN_ACTION_DIRECTORY_ADD) {
+    const free = shouldFreeExec(db, p.itemId, p.proposerId, p.action);
+    if (free.err === null && free.free) {
+      db.execute("BEGIN");
+      try {
+        const rows = db.select(`SELECT ${PROPOSAL_COLUMNS} FROM govern_proposals WHERE proposal_id=?`, [
+          proposalId,
+        ]);
+        if (rows.length === 0) throw new Error(`store: 读提案 ${proposalId}: no rows`);
+        const cur = scanProposal(rows[0]);
+        if (cur.executedAt !== 0 || cur.voidedAt !== 0) {
+          db.execute("COMMIT");
+          return;
+        }
+        const now = Date.now();
+        const met = governPreconditionTx(db, cur);
+        if (!met) {
+          db.execute(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, [now, proposalId]);
+          db.execute("COMMIT");
+          return;
+        }
+        const result = governApplyTx(db, storeKey, cur);
+        db.execute(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`, [
+          now,
+          "free_exec:" + result,
+          proposalId,
+        ]);
+        db.execute("COMMIT");
+        return;
+      } catch (err) {
+        db.execute("ROLLBACK");
+        throw err;
       }
-    } catch {
-      // 判定异常按「不可免票选」处理（fail-closed），退回既有门槛。
     }
   }
-  if (effective.length < threshold) return; // 未达门槛
 
   db.execute("BEGIN");
   try {
+    const now = Date.now();
+
+    // Step A: 事务内重读提案（并发乐观锁）
     const rows = db.select(`SELECT ${PROPOSAL_COLUMNS} FROM govern_proposals WHERE proposal_id=?`, [
       proposalId,
     ]);
@@ -662,14 +798,62 @@ export function settleGovernProposal(
       db.execute("COMMIT");
       return;
     }
-    const now = Date.now();
+
+    // Step B/C: 按提案语境（category / circle_id）查 m/P/F
+    const { m, P, F } = governContextParams(db, cur, now);
+
+    // Step D: 门槛 + quorum
+    const gl = cur.governanceLevel || "base";
+    let threshold = GovernThreshold(gl, m, P, F);
+    // 小节点豁免（目录动作，名册 < DIRECTORY_SMALL_NODE_ROSTER_MAX）——老册 §65 逻辑保留
+    if (
+      rosterReady &&
+      cur.action === GOVERN_ACTION_DIRECTORY_ADD &&
+      roster.size < 10 /* DIRECTORY_SMALL_NODE_ROSTER_MAX */
+    ) {
+      threshold = 0;
+    }
+    const quorum = GovernQuorum(threshold, m);
+
+    // Step E: 独立 voter 数
+    const voterCount = Number(
+      db.select(`SELECT COUNT(DISTINCT voter_id) AS c FROM govern_votes WHERE proposal_id=?`, [
+        proposalId,
+      ])[0]?.c ?? 0,
+    );
+
+    // Step F: 阶段 1 — quorum 未达 → pending（直接 COMMIT）
+    if (voterCount < quorum) {
+      db.execute("COMMIT");
+      return;
+    }
+
+    // Step G: 阶段 2 — 净票权
+    const sumRow = db.select(
+      `SELECT
+        COALESCE(SUM(CASE WHEN vote_type='approve' THEN vote_weight ELSE 0 END),0) AS a,
+        COALESCE(SUM(CASE WHEN vote_type='reject' THEN vote_weight ELSE 0 END),0) AS r
+        FROM govern_votes WHERE proposal_id=?`,
+      [proposalId],
+    )[0];
+    const approveSum = Number(sumRow?.a ?? 0);
+    const rejectSum = Number(sumRow?.r ?? 0);
+    const net = NetWeight(approveSum, rejectSum);
+
+    if (net <= 0) {
+      // 净票权不达标 → void
+      db.execute(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, [now, proposalId]);
+      db.execute("COMMIT");
+      return;
+    }
+
+    // Step H: net > 0 — 跑前置条件 + 执行动作
     if (!governPreconditionTx(db, cur)) {
       db.execute(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, [now, proposalId]);
       db.execute("COMMIT");
       return;
     }
-    let result = governApplyTx(db, storeKey, cur);
-    if (freeResult !== "") result = freeResult;
+    const result = governApplyTx(db, storeKey, cur);
     db.execute(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`, [
       now,
       result,

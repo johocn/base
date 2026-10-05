@@ -17,10 +17,8 @@ import { getEventById, hasBlob, putBlob, putEvent, type EventRow } from "../stor
 import {
   deriveSeats,
   dissolveProposerQuorum,
-  dissolveVoteQuorum,
   dissolveVoteQuorumV2,
   groupBodyAction,
-  removeQuorum,
   removeQuorumV2,
   type SeatSnapshot,
 } from "../store/groupseats";

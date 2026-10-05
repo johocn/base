@@ -12,7 +12,11 @@ export function governorSeats(m: number): number {
   return k;
 }
 
-/** RemoveQuorum（groupseats.go:24）：⌈2k/3⌉；k=1 时自动为 1。 */
+/**
+ * RemoveQuorum（groupseats.go:24）：⌈2k/3⌉；k=1 时自动为 1。
+ * @deprecated Spec v2 §6 已用 removeQuorumV2(mCircle, pCircle, fCircle) 替代（动态门槛公式 + GovernQuorum 裁切）。
+ *   仅保留以对齐 vectors/v1/seats.json 黄金向量对拍。
+ */
 export function removeQuorum(k: number): number {
   return Math.trunc((2 * k + 2) / 3);
 }
@@ -23,7 +27,11 @@ export function dissolveProposerQuorum(k: number): number {
   return 2;
 }
 
-/** DissolveVoteQuorum（groupseats.go:35-41）：min(30, ⌊m/3⌋+1)。 */
+/**
+ * DissolveVoteQuorum（groupseats.go:35-41）：min(30, ⌊m/3⌋+1)。
+ * @deprecated Spec v2 §6 已用 dissolveVoteQuorumV2(mCircle, pCircle, fCircle) 替代（动态门槛公式 + GovernQuorum 裁切）。
+ *   仅保留以对齐 vectors/v1/seats.json 黄金向量对拍。
+ */
 export function dissolveVoteQuorum(m: number): number {
   const q = Math.trunc(m / 3) + 1;
   if (q > 30) return 30;
