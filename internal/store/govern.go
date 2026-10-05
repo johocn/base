@@ -92,6 +92,14 @@ func GovernThreshold(level string, m, P, F int) int {
 // quorum = min(max(threshold, ⌈m/2⌉), m)
 // ⌈m/2⌉ = (m+1)/2 在整数域（对正数）。
 func GovernQuorum(threshold, m int) int {
+	// threshold<=0 表示自动生效（免票选/小节点豁免），不需要任何投票
+	if threshold <= 0 {
+		return 0
+	}
+	// m=0（无活跃身份）时，quorum 不得降为 0——至少需要 threshold 票才能生效
+	if m <= 0 {
+		return threshold
+	}
 	half := (m + 1) / 2 // ⌈m/2⌉
 	if threshold > half {
 		if threshold > m {

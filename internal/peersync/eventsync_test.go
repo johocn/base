@@ -93,7 +93,8 @@ func TestSyncEventsGovernProposalSettlesOnPeer(t *testing.T) {
 	dst := openTemp(t)
 
 	// 接收侧先具备两样东西：受审条目（active + 已知内容哈希）与 3 名达质量门槛的治者。
-	targetHash := seedGovernArticle(t, dst, "article/gb", "")
+	// V2 改动：article/gb 的 author 设为 govs[0]（proposer），让 shouldFreeExec 走通
+	targetHash := seedGovernArticle(t, dst, "article/gb", "a1111111111111111111111111111111")
 	govs := []string{
 		"a1111111111111111111111111111111",
 		"b2222222222222222222222222222222",
@@ -101,6 +102,19 @@ func TestSyncEventsGovernProposalSettlesOnPeer(t *testing.T) {
 	}
 	for i, id := range govs {
 		seedGovernArticle(t, dst, fmt.Sprintf("article/gov%d", i), id)
+	}
+	// 给 3 个 gov 插 identities（last_seen_at 在 7 天内）——V2 用 identities COUNT 算 m
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(dst.DataDir(), "base.db"))+"?mode=rw")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	now := time.Now().UnixMilli()
+	for _, id := range govs {
+		if _, err := db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`,
+			id, "ed25519", "00", now, now); err != nil {
+			t.Fatalf("insert identity %s: %v", id, err)
+		}
 	}
 
 	// 源节点：提案事件（提案人自投第 1 票）+ 2 条投票事件 = remove 门槛 3 票。

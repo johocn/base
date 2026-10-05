@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -113,7 +114,9 @@ func existingProposalWatermarkTx(tx *sql.Tx, proposalID int64) (createdAt int64,
 
 // ProjectGovernVote 把投票事件投影进 govern_votes（册子 §4.4）。
 // 同 (proposal_id, voter_id) 取**最早**的 (created_at, event_id)；后来的不覆盖（幂等重放也不报错）。
+// Choice 字段映射到 vote_type（"yes"/"approve" → approve, "no"/"reject" → reject）。
 func (s *Store) ProjectGovernVote(e GovernVoteEvent) error {
+	voteType := mapGovernChoice(e.Choice)
 	// 「最早」按 **事件的 created_at** 比较，而不是到达顺序：先到的可能是较晚的事件，
 	// 故不能只靠 PRIMARY KEY + DO NOTHING，要在占位更晚时替换。
 	var prevCreated int64
@@ -122,8 +125,8 @@ func (s *Store) ProjectGovernVote(e GovernVoteEvent) error {
 		e.ProposalID, e.Actor).Scan(&prevCreated, &prevEventID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if _, err := s.db.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,created_at,source_event_id) VALUES(?,?,?,?)`,
-			e.ProposalID, e.Actor, e.CreatedAt, e.EventID); err != nil {
+		if _, err := s.db.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,created_at,source_event_id,vote_type) VALUES(?,?,?,?,?)`,
+			e.ProposalID, e.Actor, e.CreatedAt, e.EventID, voteType); err != nil {
 			return fmt.Errorf("store: 投影投票: %w", err)
 		}
 		return nil
@@ -134,60 +137,84 @@ func (s *Store) ProjectGovernVote(e GovernVoteEvent) error {
 		return nil // 同一事件重放
 	}
 	if e.CreatedAt < prevCreated || (e.CreatedAt == prevCreated && e.EventID < prevEventID) {
-		if _, err := s.db.Exec(`UPDATE govern_votes SET created_at=?, source_event_id=? WHERE proposal_id=? AND voter_id=?`,
-			e.CreatedAt, e.EventID, e.ProposalID, e.Actor); err != nil {
+		if _, err := s.db.Exec(`UPDATE govern_votes SET created_at=?, source_event_id=?, vote_type=? WHERE proposal_id=? AND voter_id=?`,
+			e.CreatedAt, e.EventID, voteType, e.ProposalID, e.Actor); err != nil {
 			return fmt.Errorf("store: 收敛投票: %w", err)
 		}
 	}
 	return nil
 }
 
-// SettleGovernProposal 对一条已投影的提案做一次生效判定并落地受审动作（册子 §4.3 / §4.4）。
-// 与老路径 addVoteTx 的判定同源同口径，区别只在**票权按提案快照水位**判定、且可由事件路径反复调用（幂等）。
-// 提案行不存在或已定案（executed_at / voided_at 非 0）时直接返回 nil。
+// mapGovernChoice 把 govern.v1 的 Choice 字段归一到 vote_type。
+func mapGovernChoice(choice string) string {
+	switch strings.ToLower(strings.TrimSpace(choice)) {
+	case "yes", "approve", "赞成", "同意":
+		return "approve"
+	case "no", "reject", "反对", "驳回":
+		return "reject"
+	default:
+		return "approve"
+	}
+}
+
+// SettleGovernProposal 对一条已投影的提案做一次生效判定并落地受审动作。
 //
-// 名册（roster）与「水位加回集合」（restored）都在**事务外**派生：本库为纯 Go SQLite 且
-// SetMaxOpenConns(1)，在事务里调用 s.ListXxx / s.restoredRosterAuthors 必然死锁（拿不到连接）。
-// 事务内只调用已知的 exec 版本函数（governPreconditionTx / governApplyTx / proposalVotersExec）。
+// 改造点（对比老册 §4.3/§4.4）：
+//  - 从老名册门槛 + 容器免票选旁路，切换到 Spec v2 §4 两阶段判定
+//  - 实时算 m（活跃身份 7 天）、P（他人 progress）、F（他人 favorites）
+//  - 用 GovernThreshold + GovernQuorum 算门槛；阶段 1 quorum 达标 → 阶段 2 净票权 > 0
+//  - voter_count = COUNT(DISTINCT voter_id)（V2 管线里所有人都算，不再按 roster 过滤）
+//  - approve_sum / reject_sum = SUM(vote_weight) GROUP BY vote_type
+//
+// roster / rosterReady 入参保留（签名兼容），但 V2 管线不再使用（有效票 = 所有 voter_id）。
 func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool, rosterReady bool) error {
+	// 前置检查：提案存在 / 已定案 → return nil（幂等）
 	p, ok, err := s.GetProposal(proposalID)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return nil // 提案行尚未投影（乱序：vote 先到）——由后续的 proposal 事件触发 settle
+		return nil
 	}
 	if p.ExecutedAt != 0 || p.VoidedAt != 0 {
-		return nil // 已定案：反熵每轮重拉同一事件，这里必须幂等
+		return nil
 	}
-	voters, err := proposalVotersExec(s.db, proposalID)
-	if err != nil {
-		return err
-	}
-	restored, err := s.restoredRosterAuthors(p.RevokedRev)
-	if err != nil {
-		return err
-	}
-	effective := filterRosterAtWatermarkSet(voters, roster, restored)
-	// 门槛按名册语境分档（册子 #58 §3.2）；remove 另加免票选旁路（本册 §5）。
-	threshold := GovernThresholdForRoster(p.Action, len(roster), rosterReady)
-	// 小节点豁免（册子 #65 §2）：门槛恰为 1 只可能由 directory_add 命中
-	// （rosterReady && rosterLen < DirectorySmallNodeRosterMax，见 govern.go:53-58）⇒ 提交即达门槛。
-	// 与签名路径 CreateDirectoryProposal(auto=true) 的「提交即 approved」对齐；写法照本函数 remove 旁路。
-	if threshold == 1 {
-		threshold = 0
-	}
-	freeResult := ""
-	if p.Action == GovernActionRemove {
-		// 在 Begin 之前用 s.db 判定：单连接池下事务内再发查询会死锁。
-		// 判定异常按「不可免票选」处理（fail-closed），退回既有 3 票。
-		if free, ferr := freeRemoveEligible(s.db, p.ItemID, p.ProposerID); ferr == nil && free {
-			threshold = 0
-			freeResult = freeRemoveExecutedResult
+
+	// 快速路径：shouldFreeExec（Spec v2 §3.5）——事件路径也支持免票选
+	// 在 Begin 之前用 s.db 判定（单连接池下事务内再发查询会死锁）
+	if free, ferr := shouldFreeExec(s.db, p.ItemID, p.ProposerID, p.Action); ferr == nil && free {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
 		}
-	}
-	if len(effective) < threshold {
-		return nil // 未达门槛
+		defer func() { _ = tx.Rollback() }()
+		cur, err := scanProposal(tx.QueryRow(`SELECT `+proposalColumns+` FROM govern_proposals WHERE proposal_id=?`, proposalID))
+		if err != nil {
+			return fmt.Errorf("store: 读提案 %d: %w", proposalID, err)
+		}
+		if cur.ExecutedAt != 0 || cur.VoidedAt != 0 {
+			return tx.Commit()
+		}
+		now := time.Now().UnixMilli()
+		met, err := governPreconditionTx(tx, cur)
+		if err != nil {
+			return err
+		}
+		if !met {
+			if _, err := tx.Exec(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, now, proposalID); err != nil {
+				return fmt.Errorf("mark void: %w", err)
+			}
+			return tx.Commit()
+		}
+		result, err := governApplyTx(tx, s, cur)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`,
+			now, "free_exec:"+result, proposalID); err != nil {
+			return fmt.Errorf("mark free_exec: %w", err)
+		}
+		return tx.Commit()
 	}
 
 	tx, err := s.db.Begin()
@@ -195,8 +222,10 @@ func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool, r
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	// 步 1：事务内**第一件事就重读提案行**（并发乐观锁，与 addVoteTx 同强度）：
-	// 另一路径可能已把本提案定案，此处读到非 0 即退出。
+
+	now := time.Now().UnixMilli()
+
+	// Step A: 事务内重读提案（并发乐观锁）
 	cur, err := scanProposal(tx.QueryRow(`SELECT `+proposalColumns+` FROM govern_proposals WHERE proposal_id=?`, proposalID))
 	if err != nil {
 		return fmt.Errorf("store: 读提案 %d: %w", proposalID, err)
@@ -204,27 +233,80 @@ func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool, r
 	if cur.ExecutedAt != 0 || cur.VoidedAt != 0 {
 		return tx.Commit()
 	}
-	now := time.Now().UnixMilli()
+
+	// Step B: 实时算 m（7 天活跃身份数）
+	var m int
+	sevenDaysMs := int64(7 * 24 * 60 * 60 * 1000)
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ?`, now-sevenDaysMs).Scan(&m); err != nil {
+		return fmt.Errorf("count active users: %w", err)
+	}
+
+	// Step C: 实时算 P + F（排除 proposer）
+	var P, F int
+	if cur.ItemID != "" {
+		if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM progress WHERE item_id=? AND id != ?`, cur.ItemID, cur.ProposerID).Scan(&P); err != nil {
+			return fmt.Errorf("count progress: %w", err)
+		}
+		if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM favorites WHERE item_id=? AND id != ?`, cur.ItemID, cur.ProposerID).Scan(&F); err != nil {
+			return fmt.Errorf("count favorites: %w", err)
+		}
+	}
+
+	// Step D: 门槛 + quorum
+	threshold := GovernThreshold(cur.GovernanceLevel, m, P, F)
+	// 小节点豁免（目录动作，名册 < DirectorySmallNodeRosterMax）——老册 §65 逻辑保留
+	if rosterReady && cur.Action == GovernActionDirectoryAdd && len(roster) < DirectorySmallNodeRosterMax {
+		threshold = 0
+	}
+	quorum := GovernQuorum(threshold, m)
+
+	// Step E: 独立 voter 数
+	var voterCount int
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT voter_id) FROM govern_votes WHERE proposal_id=?`, proposalID).Scan(&voterCount); err != nil {
+		return fmt.Errorf("count voters: %w", err)
+	}
+
+	// Step F: 阶段 1 — quorum 未达 → pending
+	if voterCount < quorum {
+		return tx.Commit()
+	}
+
+	// Step G: 阶段 2 — 净票权
+	var approveSum, rejectSum int
+	if err := tx.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN vote_type='approve' THEN vote_weight ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN vote_type='reject' THEN vote_weight ELSE 0 END),0)
+		FROM govern_votes WHERE proposal_id=?`, proposalID).Scan(&approveSum, &rejectSum); err != nil {
+		return fmt.Errorf("sum vote weights: %w", err)
+	}
+	net := NetWeight(approveSum, rejectSum)
+
+	if net <= 0 {
+		// 净票权不达标 → void
+		if _, err := tx.Exec(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, now, proposalID); err != nil {
+			return fmt.Errorf("mark void: %w", err)
+		}
+		return tx.Commit()
+	}
+
+	// Step H: 净票权 > 0 — 跑前置条件 + 执行动作
 	met, err := governPreconditionTx(tx, cur)
 	if err != nil {
 		return err
 	}
 	if !met {
 		if _, err := tx.Exec(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, now, proposalID); err != nil {
-			return fmt.Errorf("store: 记 voided_at: %w", err)
+			return fmt.Errorf("mark void (precondition): %w", err)
 		}
 		return tx.Commit()
 	}
+
 	result, err := governApplyTx(tx, s, cur)
 	if err != nil {
 		return err
 	}
-	if freeResult != "" {
-		result = freeResult // 免票选删除：executed_result 记 'free_remove'（仅诊断，不影响读路径）
-	}
-	if _, err := tx.Exec(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`,
-		now, result, proposalID); err != nil {
-		return fmt.Errorf("store: 记 executed_at: %w", err)
+	if _, err := tx.Exec(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`, now, result, proposalID); err != nil {
+		return fmt.Errorf("mark executed: %w", err)
 	}
 	return tx.Commit()
 }

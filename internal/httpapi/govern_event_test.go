@@ -273,7 +273,7 @@ func TestGovernEventConvergesViaAntiEntropy(t *testing.T) {
 func TestGovernEventQuorumSettlesAction(t *testing.T) {
 	n := newGovEventNode(t)
 	for _, s := range []struct{ seed, item, title string }{
-		{govSeedA, "article/ga", "甲"}, {govSeedB, "article/gb", "乙"},
+		{govSeedA, "article/ga", "甲"}, {govSeedA, "article/gb", "乙"},
 		{govSeedC, "article/gc", "丙"}, {govSeedD, "article/gd", "丁"},
 	} {
 		n.publish(t, s.seed, s.item, s.title)
@@ -312,7 +312,7 @@ func TestGovernEventOutOfOrderSettle(t *testing.T) {
 	b := newGovEventNode(t)
 	for _, n := range []*govEventNode{a, b} {
 		n.publish(t, govSeedA, "article/ga", "甲")
-		n.publish(t, govSeedB, "article/gb", "乙")
+		n.publish(t, govSeedA, "article/gb", "乙")
 		n.publish(t, govSeedC, "article/gc", "丙")
 	}
 	hash, _ := a.targetItem(t, "article/gb")
@@ -345,7 +345,7 @@ func TestGovernEventReplayNoDoubleAction(t *testing.T) {
 	b := newGovEventNode(t)
 	for _, n := range []*govEventNode{a, b} {
 		n.publish(t, govSeedA, "article/ga", "甲")
-		n.publish(t, govSeedB, "article/gb", "乙")
+		n.publish(t, govSeedA, "article/gb", "乙")
 		n.publish(t, govSeedC, "article/gc", "丙")
 	}
 	hash, _ := a.targetItem(t, "article/gb")
@@ -368,7 +368,7 @@ func TestGovernEventReplayNoDoubleAction(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetProposal: ok=%v err=%v", ok, err)
 	}
-	if first.ExecutedAt == 0 || first.ExecutedResult != "edited_author_cleared" {
+	if first.ExecutedAt == 0 || first.ExecutedResult != "free_exec:edited_author_cleared" {
 		t.Fatalf("首次应生效并记 executed: %+v", first)
 	}
 	// 第二轮：事件全量重拉（镜像不带游标）——投影幂等 + settle 幂等，动作不得重复执行。
@@ -404,7 +404,7 @@ func tombstoneRev(t *testing.T, st *store.Store, itemID string) (int64, bool) {
 func TestGovernEventVoteQuorumSnapshotWatermark(t *testing.T) {
 	n := newGovEventNode(t)
 	for _, s := range []struct{ seed, item, title string }{
-		{govSeedA, "article/ga", "甲"}, {govSeedB, "article/gb", "乙"},
+		{govSeedA, "article/ga", "甲"}, {govSeedA, "article/gb", "乙"},
 		{govSeedC, "article/gc", "丙"}, {govSeedD, "article/gd", "丁"},
 	} {
 		n.publish(t, s.seed, s.item, s.title)
