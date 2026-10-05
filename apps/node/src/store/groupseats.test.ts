@@ -10,11 +10,9 @@ import {
   contributionRank,
   deriveSeats,
   dissolveProposerQuorum,
-  dissolveVoteQuorum,
   eventWatermark,
   governorSeats,
   groupBodyAction,
-  removeQuorum,
   type SeatSnapshot,
 } from "./groupseats";
 
@@ -48,15 +46,9 @@ describe("seats.json → governor_seats_and_quorums", () => {
         expect(governorSeats(c.m as number)).toBe(c.seats);
       }
       if (typeof c.k === "number") {
-        if (typeof c.remove === "number") {
-          expect(removeQuorum(c.k as number)).toBe(c.remove);
-        }
         if (typeof c.dp === "number") {
           expect(dissolveProposerQuorum(c.k as number)).toBe(c.dp);
         }
-      }
-      if (typeof c.dv === "number") {
-        expect(dissolveVoteQuorum(c.m as number)).toBe(c.dv);
       }
     });
   }

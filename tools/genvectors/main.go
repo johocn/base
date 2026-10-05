@@ -340,15 +340,9 @@ func writeSeats(out string) error {
 		{Name: "m30_k5", M: 30, Seats: store.GovernorSeats(30)},
 		{Name: "m100_k10_cap", M: 100, Seats: store.GovernorSeats(100)},
 		{Name: "m101_k10_cap", M: 101, Seats: store.GovernorSeats(101)},
-		{Name: "quorum_remove_k1", K: 1, Remove: store.RemoveQuorum(1)},
-		{Name: "quorum_remove_k3", K: 3, Remove: store.RemoveQuorum(3)},
-		{Name: "quorum_remove_k10", K: 10, Remove: store.RemoveQuorum(10)},
 		{Name: "quorum_dissolve_proposer_k1", K: 1, DP: store.DissolveProposerQuorum(1)},
 		{Name: "quorum_dissolve_proposer_k2", K: 2, DP: store.DissolveProposerQuorum(2)},
 		{Name: "quorum_dissolve_proposer_k10", K: 10, DP: store.DissolveProposerQuorum(10)},
-		{Name: "quorum_dissolve_vote_m1", M: 1, DV: store.DissolveVoteQuorum(1)},
-		{Name: "quorum_dissolve_vote_m30", M: 30, DV: store.DissolveVoteQuorum(30)},
-		{Name: "quorum_dissolve_vote_m90", M: 90, DV: store.DissolveVoteQuorum(90)},
 	}
 
 	// — Section 2: EventWatermark —

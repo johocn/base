@@ -571,21 +571,6 @@
         "seats": 10
       },
       {
-        "name": "quorum_remove_k1",
-        "k": 1,
-        "remove": 1
-      },
-      {
-        "name": "quorum_remove_k3",
-        "k": 3,
-        "remove": 2
-      },
-      {
-        "name": "quorum_remove_k10",
-        "k": 10,
-        "remove": 7
-      },
-      {
         "name": "quorum_dissolve_proposer_k1",
         "k": 1,
         "dp": 1
@@ -599,21 +584,6 @@
         "name": "quorum_dissolve_proposer_k10",
         "k": 10,
         "dp": 2
-      },
-      {
-        "name": "quorum_dissolve_vote_m1",
-        "m": 1,
-        "dv": 1
-      },
-      {
-        "name": "quorum_dissolve_vote_m30",
-        "m": 30,
-        "dv": 11
-      },
-      {
-        "name": "quorum_dissolve_vote_m90",
-        "m": 90,
-        "dv": 30
       }
     ],
     "group_body_action": [

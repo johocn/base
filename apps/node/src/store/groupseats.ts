@@ -1,6 +1,4 @@
-// 圈子席位的只读派生：逐行对齐 internal/store/groupseats.go（GovernorSeats / RemoveQuorum /
-// DissolveProposerQuorum / DissolveVoteQuorum / ContributionRank / EventWatermark / DeriveSeats /
-// groupBodyAction）。只读、不落表。
+// 圈子席位的只读派生：逐行对齐 internal/store/groupseats.go（GovernorSeats / DissolveProposerQuorum / ContributionRank / EventWatermark / DeriveSeats / groupBodyAction）。只读、不落表。
 import { sha256Hex, utf8 } from "@base/protocol-ts";
 import type { EventRow } from "./events";
 
@@ -12,33 +10,13 @@ export function governorSeats(m: number): number {
   return k;
 }
 
-/**
- * RemoveQuorum（groupseats.go:24）：⌈2k/3⌉；k=1 时自动为 1。
- * @deprecated Spec v2 §6 已用 removeQuorumV2(mCircle, pCircle, fCircle) 替代（动态门槛公式 + GovernQuorum 裁切）。
- *   仅保留以对齐 vectors/v1/seats.json 黄金向量对拍。
- */
-export function removeQuorum(k: number): number {
-  return Math.trunc((2 * k + 2) / 3);
-}
+// ============ Spec v2 §4 / §6 V2 纯函数 ============
 
-/** DissolveProposerQuorum（groupseats.go:27-32）：min(2, k)。 */
+/** DissolveProposerQuorum（groupseats.go:31-38）：min(2, k)。Spec v2 §6 明确不动。 */
 export function dissolveProposerQuorum(k: number): number {
   if (k < 2) return k;
   return 2;
 }
-
-/**
- * DissolveVoteQuorum（groupseats.go:35-41）：min(30, ⌊m/3⌋+1)。
- * @deprecated Spec v2 §6 已用 dissolveVoteQuorumV2(mCircle, pCircle, fCircle) 替代（动态门槛公式 + GovernQuorum 裁切）。
- *   仅保留以对齐 vectors/v1/seats.json 黄金向量对拍。
- */
-export function dissolveVoteQuorum(m: number): number {
-  const q = Math.trunc(m / 3) + 1;
-  if (q > 30) return 30;
-  return q;
-}
-
-// ============ Spec v2 §4 / §6 V2 纯函数 ============
 
 /**
  * governThreshold（govern.go:82-89）：门槛公式。

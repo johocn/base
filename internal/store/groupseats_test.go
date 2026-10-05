@@ -21,24 +21,10 @@ func TestGovernorSeats(t *testing.T) {
 }
 
 func TestQuorums(t *testing.T) {
-	// 移出成员：治者 ≥ ⌈2k/3⌉（AC 6）
-	for _, c := range []struct{ k, want int }{{1, 1}, {3, 2}, {4, 3}, {6, 4}, {10, 7}} {
-		if got := RemoveQuorum(c.k); got != c.want {
-			t.Errorf("RemoveQuorum(%d) = %d, want %d", c.k, got, c.want)
-		}
-	}
 	// 解散发起：治者 ≥ min(2, k)（AC 7）
 	for _, c := range []struct{ k, want int }{{1, 1}, {3, 2}, {10, 2}} {
 		if got := DissolveProposerQuorum(c.k); got != c.want {
 			t.Errorf("DissolveProposerQuorum(%d) = %d, want %d", c.k, got, c.want)
-		}
-	}
-	// 解散通过：成员 ≥ min(30, ⌊m/3⌋+1)，上限 30（AC 7 算例）
-	for _, c := range []struct{ m, want int }{
-		{3, 2}, {11, 4}, {30, 11}, {89, 30}, {90, 30}, {200, 30},
-	} {
-		if got := DissolveVoteQuorum(c.m); got != c.want {
-			t.Errorf("DissolveVoteQuorum(%d) = %d, want %d", c.m, got, c.want)
 		}
 	}
 }
