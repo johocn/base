@@ -36,7 +36,7 @@
 		<div class="bar"><i style="width:{{.Percent}}%"></i></div>
 
 		{{/* 净票权信息行：赞成 vs 反对 vs 净票权 */}}
-		{{if or (gt .ApproveWeight 0) (gt .RejectWeight 0)}}
+		{{if .HasVoteWeight}}
 		<div class="bar2">
 			{{if gt .ApproveWeight 0}}<span class="bar-approve" style="width:{{.ApproveBar}}%"></span>{{end}}
 			{{if gt .RejectWeight 0}}<span class="bar-reject" style="width:{{.RejectBar}}%"></span>{{end}}
@@ -45,7 +45,7 @@
 
 		<div class="small">
 			{{.VoteCount}} / {{.Quorum}} voter ·
-			{{if eq .NetWeight 0}}<span class="net-zero">净票权 0</span>{{else if gt .NetWeight 0}}<span class="net-pos">净票权 +{{.NetWeight}}</span>{{else}}<span class="net-neg">净票权 {{.NetWeight}}</span>{{end}}
+			{{if eq .NetSign "zero"}}<span class="net-zero">净票权 0</span>{{else}}{{if eq .NetSign "pos"}}<span class="net-pos">净票权 +{{.NetWeight}}</span>{{else}}<span class="net-neg">净票权 {{.NetWeight}}</span>{{end}}{{end}}
 			· 赞成 {{.ApproveWeight}} · 反对 {{.RejectWeight}} ·
 			{{.StatusLabel}} · {{.CreatedAt}}
 		</div>
@@ -72,7 +72,7 @@
 {{range .Roster}}
 	<li>
 		{{.Name}}
-		{{if index $.RosterSeedIDs .ID}}<span class="seed-tag">种子</span>{{end}}
+		{{if .IsSeed}}<span class="seed-tag">种子</span>{{end}}
 		<span class="small">{{.ID}}</span>
 	</li>
 {{end}}

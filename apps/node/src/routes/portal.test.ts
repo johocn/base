@@ -362,11 +362,10 @@ describe("governancePageData", () => {
     expect(data.ThresholdEnhancedExample).toBe(20);
     // 贡献者名册 = c1/c2/c3（identities 表缺失 → 无种子补齐），Count 恒 0（V2 名册不展示 count）
     expect(data.Roster).toEqual([
-      { ID: "c1", Name: "甲", Count: 0 },
-      { ID: "c2", Name: "c2", Count: 0 },
-      { ID: "c3", Name: "c3", Count: 0 },
+      { ID: "c1", Name: "甲", Count: 0, IsSeed: false },
+      { ID: "c2", Name: "c2", Count: 0, IsSeed: false },
+      { ID: "c3", Name: "c3", Count: 0, IsSeed: false },
     ]);
-    expect(data.RosterSeedIDs).toEqual({});
   });
 
   it("CreatedAt：非零按本地时区格式化（只断言形状），零值渲染空串", () => {

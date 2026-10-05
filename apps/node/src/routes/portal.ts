@@ -58,6 +58,7 @@ export interface PageContributor {
   ID: string;
   Name: string;
   Count: number;
+  IsSeed?: boolean;
 }
 
 export interface PageProposalEdit {
@@ -85,6 +86,8 @@ export interface PageProposal {
   ApproveWeight: number;
   RejectWeight: number;
   NetWeight: number;
+  HasVoteWeight?: boolean;
+  NetSign?: "zero" | "pos" | "neg";
   GovernanceLevel: string;
   Status: string;
   StatusLabel: string;
@@ -103,7 +106,6 @@ export interface PageData {
   Proposals?: PageProposal[];
   Roster?: PageContributor[];
   RosterReady?: boolean;
-  RosterSeedIDs?: Record<string, boolean>;
   ActiveUsersM?: number;
   ThresholdBaseExample?: number;
   ThresholdEnhancedExample?: number;
@@ -1210,6 +1212,8 @@ function proposalPageRow(db: Db, v: ProposalView, names: Map<string, string>): P
     ApproveWeight: v.approveWeight,
     RejectWeight: v.rejectWeight,
     NetWeight: v.netWeight,
+    HasVoteWeight: v.approveWeight > 0 || v.rejectWeight > 0,
+    NetSign: v.netWeight === 0 ? "zero" : v.netWeight > 0 ? "pos" : "neg",
     GovernanceLevel: v.governanceLevel || "base",
     Status: v.status,
     StatusLabel: governStatusLabel(v.status),
@@ -1277,7 +1281,6 @@ export function governancePageData(db: Db, deps: PortalDeps): PageData {
     ThresholdBaseExample: thresholdBase,
     ThresholdEnhancedExample: thresholdEnhanced,
     Roster: [],
-    RosterSeedIDs: {},
     Proposals: [],
   };
 
@@ -1286,8 +1289,12 @@ export function governancePageData(db: Db, deps: PortalDeps): PageData {
     const { ids: roster10, contribSet } = deriveContributionRoster(db, deps.storeKey);
     for (const id of roster10) {
       const seed = !contribSet.has(id);
-      if (seed) data.RosterSeedIDs![id] = true;
-      data.Roster!.push({ ID: id, Name: nameOrShortID(names.get(id) ?? "", id), Count: 0 });
+      data.Roster!.push({
+        ID: id,
+        Name: nameOrShortID(names.get(id) ?? "", id),
+        Count: 0,
+        IsSeed: seed,
+      });
     }
   } catch {
     // 名册派生失败跳过（保持空数组），与接口侧降级口径一致（web.go:334-338）。
