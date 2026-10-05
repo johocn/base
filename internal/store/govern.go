@@ -118,6 +118,40 @@ func NetWeight(approveSum, rejectSum int) int {
 	return approveSum - rejectSum
 }
 
+// ProposalV2Metrics 实时算提案的 V2 动态门槛值（handler 层展示用，只读查询）。
+// 返回 threshold / quorum / netWeight / voterCount。
+func (s *Store) ProposalV2Metrics(proposalID int64) (threshold, quorum, netWeight, voterCount int, err error) {
+	var level, itemID, proposerID string
+	if err := s.db.QueryRow(`SELECT governance_level, item_id, proposer_id FROM govern_proposals WHERE proposal_id=?`,
+		proposalID).Scan(&level, &itemID, &proposerID); err != nil {
+		return 0, 0, 0, 0, err
+	}
+	if level == "" {
+		level = "base"
+	}
+	now := time.Now().UnixMilli()
+	sevenDaysMs := int64(7 * 24 * 60 * 60 * 1000)
+	var m int
+	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ?`, now-sevenDaysMs).Scan(&m); err != nil {
+		return 0, 0, 0, 0, err
+	}
+	var P, F int
+	if itemID != "" {
+		s.db.QueryRow(`SELECT COUNT(DISTINCT id) FROM progress WHERE item_id=? AND id != ?`, itemID, proposerID).Scan(&P)
+		s.db.QueryRow(`SELECT COUNT(DISTINCT id) FROM favorites WHERE item_id=? AND id != ?`, itemID, proposerID).Scan(&F)
+	}
+	threshold = GovernThreshold(level, m, P, F)
+	quorum = GovernQuorum(threshold, m)
+	s.db.QueryRow(`SELECT COUNT(DISTINCT voter_id) FROM govern_votes WHERE proposal_id=?`, proposalID).Scan(&voterCount)
+	var approveSum, rejectSum int
+	s.db.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN vote_type='approve' THEN vote_weight ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN vote_type='reject' THEN vote_weight ELSE 0 END),0)
+		FROM govern_votes WHERE proposal_id=?`, proposalID).Scan(&approveSum, &rejectSum)
+	netWeight = NetWeight(approveSum, rejectSum)
+	return
+}
+
 // GovernThresholdForRoster 在名册语境下给出门槛：directory_add 且「名册就绪且 < DirectorySmallNodeRosterMax」⇒ 1（小节点豁免）。
 // 名册派生失败（rosterReady=false）**不豁免**（fail-closed，册子 #58 §9 风险 1）——否则名册抖动会把词条批量误批为公开可见。
 func GovernThresholdForRoster(action string, rosterLen int, rosterReady bool) int {
@@ -1023,24 +1057,24 @@ func (s *Store) addVoteTxV2(proposalID int64, voterID string, voteWeight int, vo
 		return VoteResultV2{}, fmt.Errorf("count voters: %w", err)
 	}
 
+	// 提前算净票权（quorum 未达也返回当前值供客户端展示）
+	var approveSum, rejectSum int
+	tx.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN vote_type='approve' THEN vote_weight ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN vote_type='reject' THEN vote_weight ELSE 0 END),0)
+		FROM govern_votes WHERE proposal_id=?`, proposalID).Scan(&approveSum, &rejectSum)
+	net := NetWeight(approveSum, rejectSum)
+
 	// Step G: 阶段 1 — quorum 未达 → pending
 	if voterCount < quorum {
 		tx.Commit()
 		return VoteResultV2{
 			ProposalID: proposalID, VoterCount: voterCount,
-			Quorum: quorum, Threshold: threshold, Status: "pending",
+			Quorum: quorum, Threshold: threshold,
+			ApproveWeight: approveSum, RejectWeight: rejectSum, NetWeight: net,
+			Status: "pending",
 		}, nil
 	}
-
-	// Step H: 进入阶段 2 — 净票权
-	var approveSum, rejectSum int
-	if err := tx.QueryRow(`SELECT
-		COALESCE(SUM(CASE WHEN vote_type='approve' THEN vote_weight ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN vote_type='reject' THEN vote_weight ELSE 0 END),0)
-		FROM govern_votes WHERE proposal_id=?`, proposalID).Scan(&approveSum, &rejectSum); err != nil {
-		return VoteResultV2{}, fmt.Errorf("sum vote weights: %w", err)
-	}
-	net := NetWeight(approveSum, rejectSum)
 
 	out := VoteResultV2{
 		ProposalID: proposalID, VoterCount: voterCount,

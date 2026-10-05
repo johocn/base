@@ -38,6 +38,16 @@ func validProposalAction(a string) bool {
 	return false
 }
 
+// governanceLevelForAction 按 Spec v2 §4：pin 系列（highlight/pin/recommend/feature）= enhanced，其他 = base。
+func governanceLevelForAction(action string) string {
+	switch action {
+	case store.GovernActionHighlight, store.GovernActionPin,
+		store.GovernActionRecommend, store.GovernActionFeature:
+		return "enhanced"
+	}
+	return "base"
+}
+
 // validDirectoryKind 判目录词条 kind ∈ 三值（册子 #58 §2.1）。
 func validDirectoryKind(k string) bool {
 	switch k {
@@ -258,33 +268,40 @@ func (s *Server) handleProposalPost(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthErr(w, http.StatusForbidden, "proposer_not_governor")
 		return
 	}
+	govLevel := governanceLevelForAction(req.Action)
 	id, err := s.st.CreateProposal(store.Proposal{
 		Action: req.Action, ItemID: req.ItemID, ProposerID: actor,
 		Reason: reason, Title: title, BodyMD: bodyMD, LinksJSON: linksJSON,
 		BaseContentHash: it.ContentHash, CreatedAt: time.Now().UnixMilli(),
+		GovernanceLevel: govLevel,
 	})
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, map[string]any{
-		"proposal_id": strconv.FormatInt(id, 10),
-		"action":      req.Action,
-		"item_id":     req.ItemID,
-		"vote_count":  1,
-		"threshold":   store.GovernThresholdLegacy(req.Action),
-		"status":      store.GovernStatusPending,
+		"proposal_id":      strconv.FormatInt(id, 10),
+		"action":           req.Action,
+		"item_id":          req.ItemID,
+		"vote_count":       1,
+		"governance_level": govLevel,
+		"threshold":        store.GovernThresholdLegacy(req.Action),
+		"status":           store.GovernStatusPending,
 	})
 }
 
 type voteReq struct {
-	VoterID  json.RawMessage `json:"voter_id"`
-	AuthorID json.RawMessage `json:"author_id"`
-	ID       json.RawMessage `json:"id"`
+	VoterID   json.RawMessage `json:"voter_id"`
+	AuthorID  json.RawMessage `json:"author_id"`
+	ID        json.RawMessage `json:"id"`
+	VoteType  string          `json:"vote_type"`  // "approve" | "reject"（可选，默认 approve）
+	VoteWeight int            `json:"vote_weight"` // 1~10（可选，默认 1；普通用户强制 1）
 }
 
 // handleVotePost 是签名写路径 POST /v1/proposal/{proposal_id}/vote（册子 §3.2）。
-// 投票请求**可能带副作用**：这一票把有效票推到该动作门槛时，在同一事务内执行动作。
+//
+// V2 改动：从老 AddVote 切到 AddVoteV2（Spec v2 §4 两阶段投票管线）。
+// vote_type 默认 "approve"，vote_weight 默认 1；贡献层用户可传 1~10。
 func (s *Server) handleVotePost(w http.ResponseWriter, r *http.Request) {
 	actor := identityFrom(r)
 	// 请求体可空（册子 §3.2）：空体与 {} 等价，故不能直接用 decodeJSON。
@@ -294,6 +311,8 @@ func (s *Server) handleVotePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.Body.Close()
+	voteType := "approve"
+	voteWeight := 1
 	if len(bytes.TrimSpace(raw)) > 0 {
 		var req voteReq
 		if err := json.Unmarshal(raw, &req); err != nil {
@@ -304,6 +323,12 @@ func (s *Server) handleVotePost(w http.ResponseWriter, r *http.Request) {
 		if len(req.VoterID) > 0 || len(req.AuthorID) > 0 || len(req.ID) > 0 {
 			s.writeAuthErr(w, http.StatusBadRequest, "author_id_forbidden")
 			return
+		}
+		if req.VoteType != "" {
+			voteType = req.VoteType
+		}
+		if req.VoteWeight > 0 {
+			voteWeight = req.VoteWeight
 		}
 	}
 	pid, ok := parseProposalID(r.PathValue("proposal_id"))
@@ -327,7 +352,8 @@ func (s *Server) handleVotePost(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthErr(w, http.StatusForbidden, "voter_not_governor")
 		return
 	}
-	res, err := s.st.AddVote(pid, actor, roster)
+	// V2: AddVoteV2 内部自行处理投票逻辑（不需要 roster 参数）
+	res, err := s.st.AddVoteV2(pid, actor, voteWeight, voteType)
 	if errors.Is(err, store.ErrAlreadyVoted) {
 		s.writeAuthErr(w, http.StatusConflict, "already_voted")
 		return
@@ -336,29 +362,40 @@ func (s *Server) handleVotePost(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 取老口径 threshold（从 proposal 行拿 action）
+	p, _, _ := s.st.GetProposal(pid)
+	legacyThreshold := store.GovernThresholdLegacy(p.Action)
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"proposal_id": strconv.FormatInt(res.ProposalID, 10),
-		"vote_count":  res.VoteCount,
-		"threshold":   res.Threshold,
-		"status":      res.Status,
+		"proposal_id":    strconv.FormatInt(res.ProposalID, 10),
+		"vote_count":     res.VoterCount,
+		"voter_count":    res.VoterCount,
+		"quorum":         res.Quorum,
+		"threshold":      legacyThreshold,
+		"approve_weight": res.ApproveWeight,
+		"reject_weight":  res.RejectWeight,
+		"net_weight":     res.NetWeight,
+		"status":         res.Status,
 	})
 }
 
 type proposalDTO struct {
-	ProposalID string   `json:"proposal_id"`
-	Action     string   `json:"action"`
-	ItemID     string   `json:"item_id"`
-	ProposerID string   `json:"proposer_id"`
-	Reason     string   `json:"reason"`
-	Title      string   `json:"title"`
-	BodyMD     string   `json:"body_md"`
-	Status     string   `json:"status"`
-	Votes      []string `json:"votes"`
-	VoteCount  int      `json:"vote_count"`
-	Threshold  int      `json:"threshold"`
-	CreatedAt  int64    `json:"created_at"`
-	ExecutedAt int64    `json:"executed_at"`
-	VoidedAt   int64    `json:"voided_at"`
+	ProposalID      string   `json:"proposal_id"`
+	Action          string   `json:"action"`
+	ItemID          string   `json:"item_id"`
+	ProposerID      string   `json:"proposer_id"`
+	Reason          string   `json:"reason"`
+	Title           string   `json:"title"`
+	BodyMD          string   `json:"body_md"`
+	Status          string   `json:"status"`
+	Votes           []string `json:"votes"`
+	VoteCount       int      `json:"vote_count"`
+	GovernanceLevel string   `json:"governance_level"`
+	Threshold       int      `json:"threshold"`
+	Quorum          int      `json:"quorum"`
+	NetWeight       int      `json:"net_weight"`
+	CreatedAt       int64    `json:"created_at"`
+	ExecutedAt      int64    `json:"executed_at"`
+	VoidedAt        int64    `json:"voided_at"`
 	// 提案快照水位（册子 §4.3）：客户端据此展示「票权按此判定」，同提案行上的 content_version / revoked_rev。
 	ContentVersion int64 `json:"content_version"`
 	RevokedRev     int64 `json:"revoked_rev"`
@@ -381,24 +418,32 @@ func (s *Server) handleProposalList(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := proposalsResponse{Proposals: []proposalDTO{}}
 	for _, v := range views {
+		// V2: 实时算 quorum/netWeight（threshold 用老口径 v.Threshold 兼容）
+		_, quorum, netWeight, _, _ := s.st.ProposalV2Metrics(v.ProposalID)
+		level := v.GovernanceLevel
+		if level == "" {
+			level = "base"
+		}
 		resp.Proposals = append(resp.Proposals, proposalDTO{
-			ProposalID: strconv.FormatInt(v.ProposalID, 10),
-			Action:     v.Action,
-			ItemID:     v.ItemID,
-			ProposerID: v.ProposerID,
-			Reason:     v.Reason,
-			Title:      v.Title,
-			BodyMD:     v.BodyMD,
-			Status:     v.Status,
-			Votes:      v.Votes,
-			VoteCount:  len(v.Votes),
-			Threshold:  v.Threshold,
-			CreatedAt:  v.CreatedAt,
-			ExecutedAt: v.ExecutedAt,
-			VoidedAt:   v.VoidedAt,
-			// 快照水位直接透传提案行的两列（ProposalView 内嵌 Proposal，已带上）。
-			ContentVersion: v.ContentVersion,
-			RevokedRev:     v.RevokedRev,
+			ProposalID:      strconv.FormatInt(v.ProposalID, 10),
+			Action:          v.Action,
+			ItemID:          v.ItemID,
+			ProposerID:      v.ProposerID,
+			Reason:          v.Reason,
+			Title:           v.Title,
+			BodyMD:          v.BodyMD,
+			Status:          v.Status,
+			Votes:           v.Votes,
+			VoteCount:       len(v.Votes),
+			GovernanceLevel: level,
+			Threshold:       v.Threshold, // 老口径兼容
+			Quorum:          quorum,
+			NetWeight:       netWeight,
+			CreatedAt:       v.CreatedAt,
+			ExecutedAt:      v.ExecutedAt,
+			VoidedAt:        v.VoidedAt,
+			ContentVersion:  v.ContentVersion,
+			RevokedRev:      v.RevokedRev,
 		})
 	}
 	s.writeJSON(w, http.StatusOK, resp)
