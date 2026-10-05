@@ -131,7 +131,7 @@ func TestFreeRemoveNotAppliedWhenOthersLearned(t *testing.T) {
 	if p.ExecutedAt != 0 || p.VoidedAt != 0 {
 		t.Fatalf("有他人学习不应定案（门槛仍 3、票不足）: %+v", p)
 	}
-	if got := GovernThreshold(GovernActionRemove); got != 3 {
+	if got := governThresholdLegacy(GovernActionRemove); got != 3 {
 		t.Fatalf("remove 门槛应仍为 3，得 %d", got)
 	}
 }

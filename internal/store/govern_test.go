@@ -35,11 +35,11 @@ func TestGovernTablesExist(t *testing.T) {
 }
 
 func TestGovernThresholdAndStatusDerivation(t *testing.T) {
-	if got := GovernThreshold(GovernActionRemove); got != 3 {
+	if got := governThresholdLegacy(GovernActionRemove); got != 3 {
 		t.Fatalf("remove 门槛=%d want 3", got)
 	}
 	for _, a := range []string{GovernActionEdit, GovernActionRevive} {
-		if got := GovernThreshold(a); got != 2 {
+		if got := governThresholdLegacy(a); got != 2 {
 			t.Fatalf("%s 门槛=%d want 2", a, got)
 		}
 	}
@@ -442,6 +442,98 @@ func TestAddVoteParallelProposalsSecondVoids(t *testing.T) {
 }
 
 // 名册派生失败的降级口径（册子 §6.2）：有效票 = 0 ⇒ 停在 pending、不动目标。
+// ===== Task 4 新增：三个纯函数的单元测试 =====
+
+func TestGovernThreshold_BaseCases(t *testing.T) {
+	cases := []struct {
+		name string
+		m    int
+		P    int
+		F    int
+		want int
+	}{
+		{"基础-小节点-无人互动", 5, 0, 0, 11},    // 10+⌊5/3⌋+0 = 10+1+0 = 11
+		{"基础-小节点-热门", 5, 12, 9, 18},        // 10+1+⌊21/3⌋ = 10+1+7 = 18
+		{"基础-大节点-冷门", 1000, 0, 0, 343},     // 10+333+0 = 343
+		{"基础-中节点-热门", 50, 30, 20, 42},      // 10+16+⌊50/3⌋=10+16+16 = 42
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := GovernThreshold("base", c.m, c.P, c.F)
+			if got != c.want {
+				t.Fatalf("threshold(base,m=%d,P=%d,F=%d)=%d, want %d",
+					c.m, c.P, c.F, got, c.want)
+			}
+		})
+	}
+}
+
+func TestGovernThreshold_EnhancedCases(t *testing.T) {
+	cases := []struct {
+		name string
+		m    int
+		P    int
+		F    int
+		want int
+	}{
+		{"强化-小节点-无人互动", 5, 0, 0, 21},  // 20+1+0 = 21
+		{"强化-小节点-热门", 5, 12, 9, 35},     // 20+1+⌊42/3⌋ = 20+1+14 = 35
+		{"强化-大节点-热门", 100, 50, 30, 106}, // 20+33+⌊160/3⌋ = 20+33+53 = 106
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := GovernThreshold("enhanced", c.m, c.P, c.F)
+			if got != c.want {
+				t.Fatalf("threshold(enhanced,m=%d,P=%d,F=%d)=%d, want %d",
+					c.m, c.P, c.F, got, c.want)
+			}
+		})
+	}
+}
+
+func TestGovernQuorum_MinMaxClamp(t *testing.T) {
+	cases := []struct {
+		name      string
+		threshold int
+		m         int
+		want      int
+	}{
+		{"小节点-超上限", 11, 5, 5},         // min(max(11,3),5) = 5
+		{"中节点-门槛主导", 42, 50, 42},     // min(max(42,25),50) = 42
+		{"大节点-半数主导", 343, 1000, 500}, // min(max(343,500),1000) = 500
+		{"单用户-卡死保护", 11, 1, 1},       // min(max(11,1),1) = 1
+		{"刚好等于半数", 25, 50, 25},        // min(max(25,25),50) = 25
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := GovernQuorum(c.threshold, c.m)
+			if got != c.want {
+				t.Fatalf("quorum(th=%d,m=%d)=%d, want %d", c.threshold, c.m, got, c.want)
+			}
+		})
+	}
+}
+
+func TestNetWeight_ApproveMinusReject(t *testing.T) {
+	cases := []struct {
+		approve int
+		reject  int
+		want    int
+	}{
+		{45, 30, 15},
+		{20, 35, -15},
+		{0, 0, 0},
+		{100, 0, 100},
+		{0, 50, -50},
+	}
+	for _, c := range cases {
+		got := NetWeight(c.approve, c.reject)
+		if got != c.want {
+			t.Fatalf("net(%d,%d)=%d, want %d", c.approve, c.reject, got, c.want)
+		}
+	}
+}
+
 func TestAddVoteEmptyRosterDegrades(t *testing.T) {
 	st := openTemp(t)
 	sub := govItem(t, st, "article/gd1", "标题", "癸")

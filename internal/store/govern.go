@@ -38,8 +38,9 @@ const (
 	GovernStatusVoid      = "void"
 )
 
-// GovernThreshold 返回某动作的授权门槛：remove 3 票，edit / revive / directory_add 2 票（册子 §2.1 / #58 §3.2）。
-func GovernThreshold(action string) int {
+// governThresholdLegacy 返回某动作的硬编码授权门槛（册子 §2.1 / #58 §3.2）。
+// Deprecated: Task 4 后应由调用方按 Spec v2 第四节自行算动态门槛，本函数暂留以兼容旧路径。
+func governThresholdLegacy(action string) int {
 	if action == GovernActionRemove {
 		return governRemoveThreshold
 	}
@@ -49,13 +50,53 @@ func GovernThreshold(action string) int {
 	return governDefaultThreshold
 }
 
+// GovernThreshold 计算门槛公式值（Spec v2 §4）。
+// level: "base" | "enhanced"
+// m = 活跃 7 天用户数，P = 他人学习去重数，F = 他人收藏去重数。
+// 公式：
+//
+//	base:     10 + ⌊m/3⌋ + ⌊(P+F)/3⌋
+//	enhanced: 20 + ⌊m/3⌋ + ⌊2*(P+F)/3⌋
+//
+// Go 整数除法对正数向零截断等于 ⌊x⌋。
+func GovernThreshold(level string, m, P, F int) int {
+	mPrime := m / 3 // ⌊m/3⌋
+	if level == "enhanced" {
+		return 20 + mPrime + 2*(P+F)/3
+	}
+	// base / default
+	return 10 + mPrime + (P+F)/3
+}
+
+// GovernQuorum 计算法定人数（Spec v2 §4）。
+// quorum = min(max(threshold, ⌈m/2⌉), m)
+// ⌈m/2⌉ = (m+1)/2 在整数域（对正数）。
+func GovernQuorum(threshold, m int) int {
+	half := (m + 1) / 2 // ⌈m/2⌉
+	if threshold > half {
+		if threshold > m {
+			return m
+		}
+		return threshold
+	}
+	if half > m {
+		return m
+	}
+	return half
+}
+
+// NetWeight 净票权 = 赞成票权总和 − 反对票权总和（Spec v2 §4）。
+func NetWeight(approveSum, rejectSum int) int {
+	return approveSum - rejectSum
+}
+
 // GovernThresholdForRoster 在名册语境下给出门槛：directory_add 且「名册就绪且 < DirectorySmallNodeRosterMax」⇒ 1（小节点豁免）。
 // 名册派生失败（rosterReady=false）**不豁免**（fail-closed，册子 #58 §9 风险 1）——否则名册抖动会把词条批量误批为公开可见。
 func GovernThresholdForRoster(action string, rosterLen int, rosterReady bool) int {
 	if action == GovernActionDirectoryAdd && rosterReady && rosterLen < DirectorySmallNodeRosterMax {
 		return 1
 	}
-	return GovernThreshold(action)
+	return governThresholdLegacy(action)
 }
 
 // GovernRequiredState 返回某动作要求的目标 state（册子 §2.1）。
@@ -419,7 +460,7 @@ func (s *Store) ListProposalViews(roster map[string]bool) ([]ProposalView, error
 		out = append(out, ProposalView{
 			Proposal:  p,
 			Votes:     effective,
-			Threshold: GovernThreshold(p.Action),
+			Threshold: governThresholdLegacy(p.Action),
 			Status:    ProposalStatus(p.ExecutedAt, p.VoidedAt),
 		})
 	}

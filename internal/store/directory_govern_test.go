@@ -84,8 +84,8 @@ func TestGovernThresholdForRoster(t *testing.T) {
 		}
 	}
 	// 无名册语境下 directory_add 的门槛供展示用（= DirectoryAddQuorum）。
-	if got := GovernThreshold(GovernActionDirectoryAdd); got != DirectoryAddQuorum {
-		t.Fatalf("GovernThreshold(directory_add)=%d, want %d", got, DirectoryAddQuorum)
+	if got := governThresholdLegacy(GovernActionDirectoryAdd); got != DirectoryAddQuorum {
+		t.Fatalf("governThresholdLegacy(directory_add)=%d, want %d", got, DirectoryAddQuorum)
 	}
 }
 
