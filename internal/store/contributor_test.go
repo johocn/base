@@ -500,3 +500,107 @@ func TestContributorRosterExpansionCanLoseSmallNodeExemption(t *testing.T) {
 		t.Fatalf("改前模拟 threshold = %d, want 1（豁免）", got)
 	}
 }
+
+// —— Task 3: 贡献层资格派生（补齐算法）——
+
+func newTestStoreForContributor(t *testing.T) *Store {
+	t.Helper()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// seedContributorItems 写入 N 个作者（authorIDs）各 1 条达标的 article，让他们进贡献者集合。
+// 不注册 identities——测试补齐逻辑时 identities 由 seedIdentities 单独控制。
+func seedContributorItems(t *testing.T, st *Store, authorIDs []string) {
+	t.Helper()
+	for _, id := range authorIDs {
+		body := longBody()
+		itemID := "article/" + id
+		if err := st.UpsertArticle(Article{
+			ItemID: itemID, Title: itemID, BodyMD: body,
+			ContentHash: protocol.SHA256Hex([]byte(body)), UpdatedAt: "2026-01-02T00:00:00Z",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.db.Exec(`UPDATE items SET author_id=?, author_sig='00' WHERE item_id=?`, id, itemID); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// seedIdentities 批量注册身份，created_at 按传入顺序递增（先传的更早注册）。
+func seedIdentities(t *testing.T, st *Store, ids []string) {
+	t.Helper()
+	for i, id := range ids {
+		if _, err := st.RegisterIdentity(id, "ed25519", "pub_"+id, int64(1000+i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestDeriveContributionRoster_PaddingWithEarliestIDs(t *testing.T) {
+	// 贡献者只有 3 人 → 初创期 ID 补齐到 10
+	st := newTestStoreForContributor(t)
+	defer func() { _ = st.Close() }()
+	seedContributorItems(t, st, []string{"A", "B", "C"})
+	seedIdentities(t, st, []string{"EARLIEST_0", "EARLIEST_1", "EARLIEST_2", "EARLIEST_3", "EARLIEST_4", "EARLIEST_5", "EARLIEST_6", "EARLIEST_7", "EARLIEST_8", "EARLIEST_9"})
+
+	roster, err := st.DeriveContributionRoster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roster) != 10 {
+		t.Fatalf("期望恒 10 人，实际 %d: %v", len(roster), roster)
+	}
+	if roster[0] != "A" || roster[1] != "B" || roster[2] != "C" {
+		t.Fatalf("前 3 应为贡献者 A/B/C，实际 %v", roster[:3])
+	}
+	if roster[3] != "EARLIEST_0" {
+		t.Fatalf("补齐应从 EARLIEST_0 开始，实际 %v", roster)
+	}
+}
+
+func TestDeriveContributionRoster_EmptyContributors_AllEarliestIDs(t *testing.T) {
+	// 零贡献者 → 前 10 注册 ID 全额生效
+	st := newTestStoreForContributor(t)
+	defer func() { _ = st.Close() }()
+	seedIdentities(t, st, []string{"ID_0", "ID_1", "ID_2", "ID_3", "ID_4", "ID_5", "ID_6", "ID_7", "ID_8", "ID_9", "ID_10"})
+
+	roster, err := st.DeriveContributionRoster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roster) != 10 {
+		t.Fatalf("期望恒 10 人，实际 %d", len(roster))
+	}
+	for i, id := range roster {
+		expected := fmt.Sprintf("ID_%d", i)
+		if id != expected {
+			t.Fatalf("位置 %d 应为 %s，实际 %s (全部: %v)", i, expected, id, roster)
+		}
+	}
+}
+
+func TestDeriveContributionRoster_MoreThan10Contributors_Top10Only(t *testing.T) {
+	// 贡献者 12 人 → 初创期 ID 不出现
+	st := newTestStoreForContributor(t)
+	defer func() { _ = st.Close() }()
+	seedContributorItems(t, st, []string{"A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11"})
+	seedIdentities(t, st, []string{"EARLIEST_0", "EARLIEST_1", "EARLIEST_2"})
+
+	roster, err := st.DeriveContributionRoster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roster) != 10 {
+		t.Fatalf("期望恒 10 人，实际 %d", len(roster))
+	}
+	for _, id := range roster {
+		if strings.HasPrefix(id, "EARLIEST_") {
+			t.Fatalf("贡献者已满 10 时不应出现初创期 ID，实际 %v", roster)
+		}
+	}
+}

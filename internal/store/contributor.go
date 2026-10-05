@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"unicode"
 )
@@ -491,4 +492,166 @@ func (s *Store) GetProfile(id string) (name string, found bool, err error) {
 		return "", false, err
 	}
 	return name, true, nil
+}
+
+// DeriveContributionRoster 返回贡献层恒 10 人（治理重构 Spec v2 §2.4）：
+// 贡献者前 N（N ≤ 10，按贡献数降序 + author_id tiebreak）+ 初创期 ID 补齐到 10。
+// 零贡献者时前 10 注册身份全额生效；贡献者 ≥ 10 时初创期 ID 不出现。
+func (s *Store) DeriveContributionRoster() ([]string, error) {
+	// 步骤 1：贡献者前 RosterTopN。复用现有 ContributorRoster 的核心逻辑，
+	// 空名册（返回空切片）不报错——由补齐逻辑接手。
+	contributors, err := s.contributorTopN(RosterTopN)
+	if err != nil {
+		return nil, fmt.Errorf("贡献者派生: %w", err)
+	}
+
+	// 步骤 2：不足 10 人用初创期 ID（identities 表里最早注册的）补齐。
+	if len(contributors) < RosterTopN {
+		need := RosterTopN - len(contributors)
+		earliest, err := s.earliestRegisteredIDs(need, contributors)
+		if err != nil {
+			return nil, fmt.Errorf("初创期 ID 查询: %w", err)
+		}
+		contributors = append(contributors, earliest...)
+	}
+
+	return contributors[:RosterTopN], nil
+}
+
+// contributorTopN 返回前 n 名贡献者的 ID 列表（按贡献数降序 + author_id 升序 tiebreak）。
+// 空候选时返回空切片（不 fail-closed）。核心逻辑复用 ContributorRoster。
+func (s *Store) contributorTopN(n int) ([]string, error) {
+	rows, err := s.db.Query(`SELECT item_id,author_id,type FROM items
+		WHERE state='active' AND author_id<>'' ORDER BY item_id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cands []Candidate
+	articleIDs, videoIDs, quizIDs := []string{}, []string{}, []string{}
+	courseIDs, lessonIDs := []string{}, []string{}
+	index := map[string]int{}
+	for rows.Next() {
+		var c Candidate
+		if err := rows.Scan(&c.ItemID, &c.AuthorID, &c.Type); err != nil {
+			return nil, err
+		}
+		index[c.ItemID] = len(cands)
+		cands = append(cands, c)
+		switch c.Type {
+		case "article":
+			articleIDs = append(articleIDs, c.ItemID)
+		case "video":
+			videoIDs = append(videoIDs, c.ItemID)
+		case "quiz":
+			quizIDs = append(quizIDs, c.ItemID)
+		case "course":
+			courseIDs = append(courseIDs, c.ItemID)
+		case "lesson":
+			lessonIDs = append(lessonIDs, c.ItemID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(articleIDs) > 0 {
+		articles, err := s.ListArticles(articleIDs)
+		if err != nil {
+			return nil, err
+		}
+		for id, a := range articles {
+			if i, ok := index[id]; ok {
+				cands[i].BodyMD = a.BodyMD
+			}
+		}
+	}
+	if len(quizIDs) > 0 {
+		quizzes, err := s.ListQuizzes(quizIDs)
+		if err != nil {
+			return nil, err
+		}
+		for id, q := range quizzes {
+			i, ok := index[id]
+			if !ok {
+				continue
+			}
+			var doc struct {
+				Questions []json.RawMessage `json:"questions"`
+			}
+			if err := json.Unmarshal([]byte(q.QuestionJSON), &doc); err == nil {
+				cands[i].QuestionCount = len(doc.Questions)
+			}
+		}
+	}
+	if len(videoIDs) > 0 {
+		durations, err := s.ListMediaDurations(videoIDs)
+		if err != nil {
+			return nil, err
+		}
+		for id, d := range durations {
+			if i, ok := index[id]; ok {
+				cands[i].DurationSeconds = d
+			}
+		}
+	}
+
+	if len(courseIDs) > 0 || len(lessonIDs) > 0 {
+		if _, _, err := s.computeContainerPassed(courseIDs, lessonIDs, cands, index); err != nil {
+			return nil, err
+		}
+	}
+
+	counts := s.accumulateCounts(cands)
+	out := make([]Contributor, 0, len(counts))
+	for id, n2 := range counts {
+		out = append(out, Contributor{ID: id, Count: n2})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].ID < out[j].ID
+	})
+	if len(out) > n {
+		out = out[:n]
+	}
+	ids := make([]string, len(out))
+	for i, c := range out {
+		ids[i] = c.ID
+	}
+	return ids, nil
+}
+
+// earliestRegisteredIDs 取 identities 表里最早注册的 n 个身份 ID，排除 exclude 集合。
+// exclude 中的 ID 不会出现在返回值里；返回数量可能 < n（identities 总数不足）。
+func (s *Store) earliestRegisteredIDs(n int, exclude []string) ([]string, error) {
+	excludeSet := make(map[string]bool, len(exclude))
+	for _, id := range exclude {
+		excludeSet[id] = true
+	}
+	q := `SELECT id FROM identities`
+	if len(exclude) > 0 {
+		q += ` WHERE id NOT IN (` + placeholders(len(exclude)) + `)`
+	}
+	q += ` ORDER BY created_at ASC LIMIT ?`
+	args := make([]any, 0, len(exclude)+1)
+	for _, id := range exclude {
+		args = append(args, id)
+	}
+	args = append(args, n)
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
