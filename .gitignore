@@ -6,3 +6,12 @@ node_modules/
 *.tmp.sqlite
 apps/mobile/unpackage/
 apps/mobile/dist/
+# 构建残留与工具缓存
+.tmp/
+.superpowers/
+based-linux-amd64
+# 部署辅助脚本（含硬编码 sha256 与本地路径，不入库）
+deploy_p6.sh
+verify_p6.sh
+# H5 反代 nginx 模板（本地部署参考，每次部署复制用）
+deploy_h5.conf
