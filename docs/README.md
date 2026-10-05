@@ -103,6 +103,50 @@
 | 77 | `plans/2026-10-03-base-node-tls-identity-plan.md` | **节点 TLS 身份面收敛（任务级计划）**：P5 退役后 GAP-B 欠账的收口册，把「TLS 身份」一整面收敛干净——**B-① 身份加载判定**（登记的 GAP-B：Go ⟺ `tls-cert≠off` 或 `-peer-addr`；Node ⟺ `-peer-addr` 或 `-peers`）、**B-② 主监听从不 TLS**（本轮新发现：`main.ts` 从不给 `startServer` 传 `opts.tls` ⇒ `BASE_TLS_CERT=<路径>` 在 Node 上完全无效、主监听恒明文）、**B-③ 对端监听不校验对端证书**（本轮新发现、**安全面**：`TlsConfig.peerFingerprints`/`trustPeerByFingerprint` 只被生产只被单测断言、**无任何消费者**，Go 却是 `ClientAuth=RequireAnyClientCert` + `VerifyPeerCertificate` 指纹固定 ⇒ 线上 `base-cache` 的 `127.0.0.1:8082` 入站身份零校验；P5 双影子只验过「Node 作出站客户端连 Go」，G 向从未取证）。**两条定案（用户 2026-10-03 拍板）**：① 修复范围 = **三层全修**，不拆批留尾；② `tls-cert=off` + `-peers` 非空 + 无 `-peer-addr` 一格取**超集语义**（Node 在「主监听要 TLS」或「对端监听要身份」或「出站要身份」任一成立时加载身份）——该格 Go 因 `serve.go` 漏了 `-peers` 判据致出站每轮失败、与其 `peerconfig.go` 的 `tlsInfo()` 自身文档矛盾，**不复制该缺陷**。**六个 Task**：T1 加载判定 + 主监听 TLS 接线（**首步探针硬门**：https 200 / http 失败 / 指纹一致 / 门户身份行非空）/ T2 对端监听 mTLS 指纹固定（抽**单一实现** `verifyPeerFingerprint` 供 `TlsAdapter.verifyPeer` 与 `host/http.ts` 共用；`requestCert:true` + `rejectUnauthorized:false` + **`secureConnection` 钩子即刻校验 `getPeerCertificate().raw`**，漏钩子即 fail-open）/ T3 本机双影子补验 **G 向**（白名单通过 / 错指纹拒绝 / **无证书拒绝** 三格）+ F 向回归 + B-① 五格判定矩阵 / T4 门禁 + 全量对拍回归 / T5 重打包部署 `base-cache` + 线上 `openssl` 双向取证（留 `.bak`，回退 = 一次 restart）/ T6 回填 + 提交。**七道门禁 G1–G7**（G4 = 判定矩阵全过；G5 = 主监听 TLS 探针四项；G6 = 三格 mTLS 拒绝缺一不可；G7 = 全量对拍 0 分歧 + 仓库纪律） | 不改任何 Go 文件、**不删 Go 实现**（`internal/`/`cmd/`/`web/`/`based-linux-amd64` 全留）、**不退役 `base` 单元**（源节点仍 Go，含签名私钥与权威写）、**不切客户端**（APK / 落地页 / `/v1/release` 指向与 `min_version` 全不动）、不在生产节点执行任何写操作、不动 `base.service` 与 nginx、不改 `#72` 冻结的 `Adapters`/`ServerAdapters`、不做 P6、不为兼容复制双份核心、不做 iOS | 计划 #76（§5 残留风险 2 / §8 GAP-B 登记）、路线 #70（§6 判据 2 / 4）、Go 参照实现 `cmd/based/serve.go:61-76` + `cmd/based/peerconfig.go:61-92` + `internal/httpapi/tlscfg.go:151-199` | **已收口**（2026-10-03：T1–T6 全过、G1–G7 逐条通过；线上 `base-cache` 已部署新 bundle（sha256 `08d6319a…`）并复验三格 fail-closed 成立（无证书拒绝 / `base` 证书通过 / 自身证书拒绝）、`base`（Go）反熵零失败；Go 零改动、`base` 单元未退役、客户端零改动；回退 = `cp` 回 `.bak-20261003-1210` + 一次 restart） |
 | 78 | `plans/2026-10-03-base-p6-fusion-governance-plan.md` | **P6 融合治理实现轨（任务级计划）**：把 #74 已定稿的 P4 提案落地——① **`circle.v1` 事件类型**（单类型双 `action`：`assign` 归属声明 / `form` 成圈）② **`groups.origin` 列**（`user`\|`fusion`）③ **`circle_assignments` 表**（节点侧独立数据面，只插不删）④ **`meetsQualityGate` 扩 `course`/`lesson`**（`LessonMinItems=1` / `CourseMinLessons=3`，课程与达标课时**合并计 1**）⑤ 补 `vectors/v1/seats.json`（跨实现同解）。**四条定案（用户 2026-10-03 拍板）**：Go+Node **两侧同修** / 融合动作挂**内容导入时判定** / **本册补 `seats.json`** / **含线上部署**（先升节点、后开事件） | **已收口**（2026-10-03：T1–T7 全过；G1 Go 10 包全绿、G3 TS 单测 1211/2 workspace 守恒、G5 seats.json 黄金向量 28 cases 跨实现同解、G6/G7 PASS；G2 mobile 子包两处 vue-tsc 错误属既有非 P6 回归、G4 对拍 P6 不碰路由层可接受。线上 base-cache 已部署 bundle sha256 `1548ad5dc23412b271157206ed9df4e4ba296028e7f8bc049f5c8167d6067d67`（527956 bytes，含 T1–T6 全部改动）、8 观察点全 PASS（base-cache active / base 未重启 / mTLS fail-closed / 端点全 200 / 反熵双向正常 / journald 零 event_type_unknown / 无 item_not_found / 回退 `/opt/base-node/based-node.mjs.bak-p6`） |
 
+---
+
+## P7 治理权重构 V2 已收口（2026-10-05）
+
+**commit 范围**：`bd9db42 → 88949d8`（20+ commit）。
+
+### 核心规则
+
+- **双层票权**：
+  - **基础层**（所有注册用户）：只能投 1 权/投票，无配额，全部豁免贡献门槛
+  - **贡献层**（恒 10 人：贡献者优先 + 初创期 ID 补齐）：1~10 权/投票，每日 20 票权配额（投 2~10 权时消耗），可投反对票
+- **动态门槛公式**：
+  - 基础门槛（`remove`/`revive`/`edit_x5`/`directory_add`）：`threshold_base = 10 + ⌊m/3⌋ + ⌊(P+F)/3⌋`
+  - 强化门槛（`highlight`/`pin`/`recommend`/`feature`）：`threshold_enhanced = 20 + ⌊m/3⌋ + ⌊2×(P+F)/3⌋`
+  - 法定人数裁切：`quorum = min(max(threshold, ⌈m/2⌉), m)`
+- **两阶段投票判定**：① `voter_count ≥ quorum` → ② `净票权 = SUM(approve) − SUM(reject) > 0`
+- **反对票**：`vote_type='reject'`，同样消耗贡献层配额
+- **初创期 ID 兜底**：节点无贡献者（N=0）→ 前 10 注册 ID 自动获得贡献层资格
+- **降级免票选**：`feature → recommend → pin → highlight → normal` 任意降级直接执行
+
+### 12 种治理 action
+
+基础治理（门槛公式 base）：`remove`（下架）/ `revive`（恢复）/ `edit_title`（改标题）/ `edit_body`（改正文）/ `edit_category`（改分类）/ `edit_tags`（改标签）/ `edit_instructor`（改讲师）/ `directory_add`（新增目录词）
+强化治理（门槛公式 enhanced）：`highlight`（高亮）/ `pin`（置顶）/ `recommend`（推荐）/ `feature`（精华）
+
+### 已覆盖层
+
+| 层 | 文件 | 覆盖内容 |
+|---|---|---|
+| Go store | `internal/store/govern.go` / `contributor.go` / `groupseats.go` / `free_remove.go` / `govern_projection.go` | 贡献层资格派生 + 门槛/quorum/净票权纯函数 + `addVoteTx` 两阶段管线 + 12 种 action + 反对票 + 每日配额 + `GovernThresholdLegacy` → V2 迁移 |
+| Go httpapi | `internal/httpapi/govern.go` / `govern_event.go` | vote handler 支持 `vote_type`/`vote_weight` + 响应扩展 `quorum`/`net_weight`/`threshold` |
+| Go projection | `internal/store/govern_projection.go` | `SettleGovernProposal` 同步 V2 门槛/quorum/净票权逻辑 |
+| Node store | `apps/node/src/store/govern.ts` / `governProjection.ts` / `groupseats.ts` | 全量对齐 Go V2 逻辑 |
+| Node routes | `apps/node/src/routes/proposal.ts` / `governEvent.ts` | handler 同步 V2 字段 |
+| TS core-ts | `packages/core-ts/src/govern.ts` | `GovernAction` 12 值 + `vote_type` + 投票响应扩展 |
+| Mobile | `apps/mobile/src/pages/governance/governance.vue` | Spec v2 动态门槛 / 12 种 action / 反对票 / 加权票 / 两阶段净票权展示 |
+| H5 治理看板 | `web/templates/governance.html` | Node 模板引擎兼容（Go html/template → truthy 判断降级） |
+| 公网部署 | `118.190.217.242` | `/v1/proposal` V2 字段 `voterCount`/`quorum`/`netWeight`/`governanceLevel`/`category` 已在线 |
+
+### 相关文档
+
+- 设计册：`docs/superpowers/specs/2026-10-05-base-governance-reconstruction-design.md`
+- 实施计划：`docs/superpowers/plans/2026-10-05-base-governance-reconstruction-plan.md`
+
 ## 4. 依赖顺序
 
 ```
