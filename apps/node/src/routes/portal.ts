@@ -12,9 +12,9 @@ import type { Db } from "../db";
 import { ENC_PREFIX, decText } from "../host/aesgcm";
 import {
   cleanDisplayName,
-  contributorRoster,
+  deriveContributionRoster,
+  GovernThreshold,
   governRoster,
-  governThreshold,
   listApprovedDirectory,
   listProposalViews,
   nameOrShortID,
@@ -77,8 +77,15 @@ export interface PageProposal {
   ItemStateLabel: string;
   Reason: string;
   VoteCount: number;
+  Quorum: number;
   Threshold: number;
   Percent: number;
+  ApproveBar: number;
+  RejectBar: number;
+  ApproveWeight: number;
+  RejectWeight: number;
+  NetWeight: number;
+  GovernanceLevel: string;
   Status: string;
   StatusLabel: string;
   CreatedAt: string;
@@ -96,8 +103,10 @@ export interface PageData {
   Proposals?: PageProposal[];
   Roster?: PageContributor[];
   RosterReady?: boolean;
-  RemoveThreshold?: number;
-  EditThreshold?: number;
+  RosterSeedIDs?: Record<string, boolean>;
+  ActiveUsersM?: number;
+  ThresholdBaseExample?: number;
+  ThresholdEnhancedExample?: number;
 }
 
 // —— 模板引擎（text/template + html/template 子集） ——
@@ -1164,8 +1173,23 @@ function profileNames(db: Db): Map<string, string> {
   return out;
 }
 
-/** proposalPageRow（web.go:347-389）。 */
+/** proposalPageRow（web.go:399-468）。V2：使用 Quorum / ThresholdV2 / NetWeight 等动态指标。 */
 function proposalPageRow(db: Db, v: ProposalView, names: Map<string, string>): PageProposal {
+  // V2: 进度条 1 = 独立 voter 数 / quorum
+  let percent = 0;
+  if (v.quorum > 0) {
+    percent = Math.trunc((v.voterCount * 100) / v.quorum);
+    if (percent > 100) percent = 100;
+  }
+  // 净票权占比（模板用 ApproveBar/RejectBar 渲染净票权条）
+  const totalWeight = v.approveWeight + v.rejectWeight;
+  let approveBar = 0;
+  let rejectBar = 0;
+  if (totalWeight > 0) {
+    approveBar = Math.trunc((v.approveWeight * 100) / totalWeight);
+    rejectBar = Math.trunc((v.rejectWeight * 100) / totalWeight);
+  }
+
   const row: PageProposal = {
     Action: v.action,
     ActionLabel: governActionLabel(v.action),
@@ -1178,17 +1202,20 @@ function proposalPageRow(db: Db, v: ProposalView, names: Map<string, string>): P
     ItemStateLabel: "",
     Reason: v.reason,
     VoteCount: v.voterCount,
+    Quorum: v.quorum,
     Threshold: v.threshold,
-    Percent: 0,
+    Percent: percent,
+    ApproveBar: approveBar,
+    RejectBar: rejectBar,
+    ApproveWeight: v.approveWeight,
+    RejectWeight: v.rejectWeight,
+    NetWeight: v.netWeight,
+    GovernanceLevel: v.governanceLevel || "base",
     Status: v.status,
     StatusLabel: governStatusLabel(v.status),
     CreatedAt: formatMillis(v.createdAt),
     Voters: [],
   };
-  if (row.Threshold > 0) {
-    row.Percent = Math.trunc((row.VoteCount * 100) / row.Threshold);
-    if (row.Percent > 100) row.Percent = 100;
-  }
   for (const id of v.votes) {
     row.Voters.push({ ID: id, Name: nameOrShortID(names.get(id) ?? "", id), Count: 0 });
   }
@@ -1218,30 +1245,54 @@ function proposalPageRow(db: Db, v: ProposalView, names: Map<string, string>): P
   return row;
 }
 
-/** handleGovernancePage 的取数组装（web.go:311-344）。 */
+/** handleGovernancePage 的取数组装（web.go:341-395）。V2 版：DeriveContributionRoster + 动态门槛演示 + V2 提案字段。 */
 export function governancePageData(db: Db, deps: PortalDeps): PageData {
   const { set: rosterSet, ok: rosterOK } = governRoster(db, deps.storeKey);
   const views = listProposalViews(db, deps.storeKey, rosterSet);
   const names = profileNames(db);
+
+  // V2: 查节点 7 日活跃身份数 → 顶部门槛公式演示
+  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  let m = 0;
+  try {
+    m = Number(
+      db.select(`SELECT COUNT(DISTINCT id) AS c FROM identities WHERE last_seen_at > ?`, [
+        now - sevenDaysMs,
+      ])[0]?.c ?? 0,
+    );
+  } catch {
+    m = 0;
+  }
+  const thresholdBase = GovernThreshold("base", m, 0, 0);
+  const thresholdEnhanced = GovernThreshold("enhanced", m, 0, 0);
+
   const data: PageData = {
     Title: "治理看板",
     Issuer: deps.issuer,
     PairingCode: deps.pairingCode,
     Fingerprint: deps.fingerprintHex,
     RosterReady: rosterOK,
-    RemoveThreshold: governThreshold("remove"),
-    EditThreshold: governThreshold("edit"),
+    ActiveUsersM: m,
+    ThresholdBaseExample: thresholdBase,
+    ThresholdEnhancedExample: thresholdEnhanced,
     Roster: [],
+    RosterSeedIDs: {},
     Proposals: [],
   };
-  // 名册派生失败跳过（保持空数组），与接口侧降级口径一致（web.go:334-338）。
+
+  // V2: 贡献者名册恒 10 人（DeriveContributionRoster），区分贡献者 vs 初创期种子。
   try {
-    for (const c of contributorRoster(db, deps.storeKey)) {
-      data.Roster!.push({ ID: c.id, Name: nameOrShortID(names.get(c.id) ?? "", c.id), Count: c.count });
+    const { ids: roster10, contribSet } = deriveContributionRoster(db, deps.storeKey);
+    for (const id of roster10) {
+      const seed = !contribSet.has(id);
+      if (seed) data.RosterSeedIDs![id] = true;
+      data.Roster!.push({ ID: id, Name: nameOrShortID(names.get(id) ?? "", id), Count: 0 });
     }
   } catch {
-    // 忽略：名册保持 []
+    // 名册派生失败跳过（保持空数组），与接口侧降级口径一致（web.go:334-338）。
   }
+
   // ListProposalViews 按 proposal_id 升序返回；这里纯展示反转（新提案在前）。
   for (let i = views.length - 1; i >= 0; i--) {
     data.Proposals!.push(proposalPageRow(db, views[i], names));

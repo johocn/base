@@ -45,12 +45,25 @@ const GOLDEN_KEYS = [
   "index-url",
   "article",
   "article-url",
-  "governance",
-  "governance-roster",
 ];
 
 describe("门户黄金字节对拍", () => {
   for (const key of GOLDEN_KEYS) {
+    it(key, () => {
+      const rendered = renderPortalPage(pageOf(key), toPageData(PAGEDATA[key]));
+      const got = Buffer.from(rendered, "utf8");
+      const want = readFileSync(new URL(`${key}.html`, FIXTURES));
+      expect(got.equals(want)).toBe(true);
+    });
+  }
+});
+
+// governance / governance-roster 的 pagedata.json + .html fixture 均为 V1 Go 预言机输出，
+// 但 web/templates/governance.html 已升级为 V2（使用 ActiveUsersM / ThresholdBaseExample /
+// Quorum / NetWeight / RosterSeedIDs 等 V2 字段）。这两个 fixture 需要 Go 侧重新生成
+// V2 版预言机数据后再对拍；Node 侧仅验证 db→pagedata 映射（见下文 governancePageData 测试）。
+describe.skip("门户黄金字节对拍（governance V2 fixture 待 Go 侧重生成）", () => {
+  for (const key of ["governance", "governance-roster"]) {
     it(key, () => {
       const rendered = renderPortalPage(pageOf(key), toPageData(PAGEDATA[key]));
       const got = Buffer.from(rendered, "utf8");
@@ -282,13 +295,25 @@ describe("governancePageData", () => {
     expect(reasons).toEqual(["p7", "p6", "p5", "p4", "p3", "p2", "p1"]);
   });
 
-  it("Percent 整数截断并封顶 100；Threshold 用 Spec v2 动态公式（m=0,P=0,F=0 → base=10）", () => {
+  it("Percent 整数截断并封顶 100；Threshold/Quorum 用 Spec v2 动态公式 + V2 字段齐全", () => {
     const props = governancePageData(db, deps).Proposals!;
     const byReason = new Map(props.map((p) => [p.Reason, p]));
-    // db 无 identities/progress/favorites → V2 动态公式 m=0,P=0,F=0 → GovernThreshold("base") = 10
-    expect(byReason.get("p1")).toMatchObject({ VoteCount: 3, Threshold: 10, Percent: 30 });
-    expect(byReason.get("p2")).toMatchObject({ VoteCount: 3, Threshold: 10, Percent: 30 });
-    expect(byReason.get("p7")).toMatchObject({ VoteCount: 1, Threshold: 10, Percent: 10 });
+    // db 无 identities/progress/favorites → V2 动态公式 m=0,P=0,F=0 → GovernThreshold("base")=10, GovernQuorum(10,0)=10
+    // 测试插入的 vote 默认 vote_type='approve', vote_weight=1 → p1 approveWeight=3
+    expect(byReason.get("p1")).toMatchObject({
+      VoteCount: 3,
+      Threshold: 10,
+      Quorum: 10,
+      Percent: 30,
+      GovernanceLevel: "base",
+      ApproveWeight: 3,
+      RejectWeight: 0,
+      NetWeight: 3,
+      ApproveBar: 100,
+      RejectBar: 0,
+    });
+    expect(byReason.get("p2")).toMatchObject({ VoteCount: 3, Threshold: 10, Quorum: 10, Percent: 30 });
+    expect(byReason.get("p7")).toMatchObject({ VoteCount: 1, Threshold: 10, Quorum: 10, Percent: 10 });
   });
 
   it("directory_add 渲染 TermName / TermPending", () => {
@@ -328,16 +353,20 @@ describe("governancePageData", () => {
     expect(byReason.get("p6")).toMatchObject({ ItemState: "", ItemStateLabel: "", Title: "ghost" });
   });
 
-  it("名册：按派生序，缺昵称回退 id", () => {
+  it("名册：DeriveContributionRoster 恒 10 人（不足用 earliestRegisteredIDs 补齐；测试无 identities 数据 → 仅贡献者 c1/c2/c3），缺昵称回退 id；顶部门槛演示字段齐全", () => {
     const data = governancePageData(db, deps);
     expect(data.RosterReady).toBe(true);
-    expect(data.RemoveThreshold).toBe(3);
-    expect(data.EditThreshold).toBe(2);
+    // V2 顶部门槛演示：db 无 identities → m=0 → base=10, enhanced=20
+    expect(data.ActiveUsersM).toBe(0);
+    expect(data.ThresholdBaseExample).toBe(10);
+    expect(data.ThresholdEnhancedExample).toBe(20);
+    // 贡献者名册 = c1/c2/c3（identities 表缺失 → 无种子补齐），Count 恒 0（V2 名册不展示 count）
     expect(data.Roster).toEqual([
-      { ID: "c1", Name: "甲", Count: 1 },
-      { ID: "c2", Name: "c2", Count: 1 },
-      { ID: "c3", Name: "c3", Count: 1 },
+      { ID: "c1", Name: "甲", Count: 0 },
+      { ID: "c2", Name: "c2", Count: 0 },
+      { ID: "c3", Name: "c3", Count: 0 },
     ]);
+    expect(data.RosterSeedIDs).toEqual({});
   });
 
   it("CreatedAt：非零按本地时区格式化（只断言形状），零值渲染空串", () => {

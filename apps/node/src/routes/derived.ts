@@ -527,6 +527,53 @@ function accumulateCountsTs(db: Db, cands: Candidate[]): Map<string, number> {
   return counts;
 }
 
+// ========= Spec v2 §2.4 DeriveContributionRoster（contributor.go:497-524） =========
+
+/**
+ * earliestRegisteredIDs（contributor.go:631-662）：取 identities 表里最早注册的 n 个身份 ID，排除 exclude 集合。
+ * 返回数量可能 < n（identities 总数不足或表不存在）。
+ */
+export function earliestRegisteredIDs(db: Db, n: number, exclude: string[]): string[] {
+  if (n <= 0) return [];
+  const excludeSet = new Set(exclude);
+  let q = `SELECT id FROM identities`;
+  const args: unknown[] = [];
+  if (excludeSet.size > 0) {
+    q += ` WHERE id NOT IN (${placeholders(excludeSet.size)})`;
+    args.push(...excludeSet);
+  }
+  q += ` ORDER BY created_at ASC LIMIT ?`;
+  args.push(n);
+  let rows: Record<string, unknown>[];
+  try {
+    rows = db.select(q, args);
+  } catch {
+    // identities 表不存在 → 返回空（与 Go 侧「零贡献者时前 10 注册身份全额生效」一致）
+    return [];
+  }
+  return rows.map((r) => toStr(r.id));
+}
+
+/**
+ * deriveContributionRoster 返回贡献层恒 10 人（治理重构 Spec v2 §2.4）：
+ * 贡献者前 N（N ≤ 10，按贡献数降序 + author_id tiebreak）+ 初创期 ID 补齐到 10。
+ * 零贡献者时前 10 注册身份全额生效；贡献者 ≥ 10 时初创期 ID 不出现。
+ */
+export function deriveContributionRoster(db: Db, storeKey: Uint8Array | null): { ids: string[]; contribSet: Set<string> } {
+  const topN = contributorRoster(db, storeKey);
+  const ids = topN.map((c) => c.id);
+  const contribSet = new Set<string>(ids);
+
+  if (ids.length < ROSTER_TOP_N) {
+    const earliest = earliestRegisteredIDs(db, ROSTER_TOP_N - ids.length, ids);
+    ids.push(...earliest);
+  }
+
+  const end = ids.length > ROSTER_TOP_N ? ROSTER_TOP_N : ids.length;
+  ids.length = end;
+  return { ids, contribSet };
+}
+
 /** restoredRosterAuthors（govern.go:179-258）：水位之后才退役且当前仍达门槛的作者集合。 */
 export function restoredRosterAuthors(
   db: Db,
