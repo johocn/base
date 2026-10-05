@@ -21,9 +21,12 @@ var schemaStatements = []string{
 		content_hash TEXT NOT NULL,
 		sqlite_table TEXT NOT NULL,
 		dist_class   TEXT NOT NULL DEFAULT 'public',
-		state        TEXT NOT NULL DEFAULT 'active',
-		tags_json    TEXT NOT NULL DEFAULT '[]',
-		updated_at   TEXT NOT NULL
+		state              TEXT    NOT NULL DEFAULT 'active',
+		pin_level          INTEGER NOT NULL DEFAULT 0,
+		pinned_at          INTEGER,
+		highlight_until    INTEGER,
+		tags_json          TEXT    NOT NULL DEFAULT '[]',
+		updated_at         TEXT    NOT NULL
 	)`,
 
 	`CREATE TABLE IF NOT EXISTS articles(
@@ -201,6 +204,9 @@ var schemaStatements = []string{
 		voided_at         INTEGER NOT NULL DEFAULT 0,
 		executed_result   TEXT    NOT NULL DEFAULT '',
 		source_event_id   TEXT,
+		governance_level  TEXT    NOT NULL DEFAULT 'base',
+		category          TEXT,
+		circle_id         TEXT,
 		content_version   INTEGER NOT NULL DEFAULT 0,
 		revoked_rev       INTEGER NOT NULL DEFAULT 0
 	)`,
@@ -208,12 +214,19 @@ var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS govern_votes(
 		proposal_id INTEGER NOT NULL,
 		voter_id    TEXT    NOT NULL,
+		vote_weight INTEGER NOT NULL DEFAULT 1,
+		vote_type   TEXT    NOT NULL DEFAULT 'approve',
+		date        TEXT    NOT NULL DEFAULT '',
 		created_at  INTEGER NOT NULL,
 		source_event_id TEXT,
 		PRIMARY KEY(proposal_id, voter_id)
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_govern_proposals_item ON govern_proposals(item_id, action)`,
+
+	// govern_votes 的 V2 新索引（idx_gv_voter_date_weight / idx_gv_proposal_type）
+	// 必须等 vote_weight/vote_type/date 三列补完后才能建，否则老库会 no such column。
+	// 故放在 MigrateSchemaV2 里，不进 schemaStatements。
 
 	// tag_links：统一标签与内容的关联（#37 册子 §3.2）。**节点侧唯一权威**——
 	// 内容包不加表，导出靠同一次写入物化出的 segments 行传播（§3.3）。
@@ -247,6 +260,15 @@ var schemaStatements = []string{
 	)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_progress_item ON progress(item_id)`,
+
+	// favorites：条目收藏（治理重构 V2）。主键 (id, item_id)——同一用户可收藏多条目。
+	`CREATE TABLE IF NOT EXISTS favorites(
+		id         TEXT    NOT NULL,
+		item_id    TEXT    NOT NULL,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY(id, item_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_favorites_item ON favorites(item_id)`,
 
 	`CREATE TABLE IF NOT EXISTS checkin_days(
 		id             TEXT    NOT NULL,
