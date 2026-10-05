@@ -18,7 +18,10 @@ import {
   deriveSeats,
   dissolveProposerQuorum,
   dissolveVoteQuorum,
+  dissolveVoteQuorumV2,
+  groupBodyAction,
   removeQuorum,
+  removeQuorumV2,
   type SeatSnapshot,
 } from "../store/groupseats";
 import { writeAuthErr } from "./authmw";
@@ -519,6 +522,14 @@ function handleGroupRosterV2(
     return errResponse(err);
   }
   const seats = deriveSeats(memberIds, creatorId, rosterRev, r.epoch, events);
+  // Spec v2 §6: 圈内 V2 动态门槛参数。
+  const mCircle = memberIds.length;
+  const pCircleSet = new Set<string>();
+  for (const ev of events) {
+    if (groupBodyAction(ev.bodyJson) === "msg") pCircleSet.add(ev.id);
+  }
+  const pCircle = pCircleSet.size;
+  const fCircle = 0; // 圈 msg 事件不进 items 表，没有 progress / favorites
   const code = rosterQuorumError(
     actor,
     r,
@@ -526,6 +537,9 @@ function handleGroupRosterV2(
     new Set(memberIds),
     new Set(seats.governors),
     seats,
+    mCircle,
+    pCircle,
+    fCircle,
   );
   if (code !== "") return writeAuthErr(403, code);
   const membersJSON = JSON.stringify(r.memberIds);
@@ -669,8 +683,9 @@ function subsetOf(signers: Set<string>, set: Set<string>): boolean {
 }
 
 /**
- * rosterQuorumError（group.go:605-645）：按 sub 判定门槛，返回要回的错误码；"" 表示通过。
+ * rosterQuorumError（group.go:605-648 + Spec v2 §6）：按 sub 判定门槛，返回要回的错误码；"" 表示通过。
  * actor 是本次事件的发起者（join 档要求签名者集合恒等于 {actor}）。
+ * mCircle / pCircle / fCircle 是圈内 V2 动态门槛参数（成员数 / msg 独立 actor 数 / 收藏数=0）。
  */
 function rosterQuorumError(
   actor: string,
@@ -679,6 +694,9 @@ function rosterQuorumError(
   members: Set<string>,
   governors: Set<string>,
   seats: SeatSnapshot,
+  mCircle: number,
+  pCircle: number,
+  fCircle: number,
 ): string {
   const k = seats.seatCount;
   switch (r.sub) {
@@ -698,7 +716,11 @@ function rosterQuorumError(
       return "";
     case SUB_REMOVE:
       if (!seats.decidable) return "group_roster_quorum_missing"; // 不可判定 ⇒ 拒写重大动作
-      if (!subsetOf(signers, governors) || countIn(signers, governors) < removeQuorum(k)) {
+      // Spec v2 §6: V2 base 门槛公式，再按治者数裁切——治者是唯一能签名的池，
+      // quorum 不可能超过 k。GovernQuorum 有 ⌈m/2⌉ 下限，大圈时可能 > k，需要裁切。
+      let q = removeQuorumV2(mCircle, pCircle, fCircle);
+      if (q > k) q = k;
+      if (!subsetOf(signers, governors) || countIn(signers, governors) < q) {
         return "group_roster_quorum_missing";
       }
       return "";
@@ -708,8 +730,10 @@ function rosterQuorumError(
       if (countIn(signers, governors) < dissolveProposerQuorum(k)) {
         return "group_proposal_proposer_missing"; // 发起段不足（册子 §6）
       }
-      // 投票段用**变更前**的名单人数：解散事件本身把名单清空（补充 11）。
-      if (countIn(signers, members) < dissolveVoteQuorum(members.size)) {
+      // Spec v2 §6: V2 enhanced 动态门槛。签名池是**全成员**（dissolve 允许非治者成员签名），
+      // GovernQuorum 已经裁切到 mCircle，不需要额外裁切。
+      const dq = dissolveVoteQuorumV2(mCircle, pCircle, fCircle);
+      if (countIn(signers, members) < dq) {
         return "group_roster_quorum_missing";
       }
       return "";

@@ -30,6 +30,63 @@ export function dissolveVoteQuorum(m: number): number {
   return q;
 }
 
+// ============ Spec v2 §4 / §6 V2 纯函数 ============
+
+/**
+ * governThreshold（govern.go:82-89）：门槛公式。
+ * level: "base" | "enhanced"。
+ * m = 活跃 7 天用户数，P = 他人学习去重数，F = 他人收藏去重数。
+ * Go 整数除法向零截断等于 ⌊x⌋，Node Math.trunc 同口径。
+ */
+export function governThreshold(level: string, m: number, P: number, F: number): number {
+  const mPrime = Math.trunc(m / 3); // ⌊m/3⌋
+  if (level === "enhanced") {
+    return 20 + mPrime + Math.trunc((2 * (P + F)) / 3);
+  }
+  // base / default
+  return 10 + mPrime + Math.trunc((P + F) / 3);
+}
+
+/**
+ * governQuorum（govern.go:94-114）：法定人数裁切。
+ * quorum = min(max(threshold, ⌈m/2⌉), m)。
+ * ⌈m/2⌉ = Math.trunc((m + 1) / 2) 在整数域（对正数）。
+ */
+export function governQuorum(threshold: number, m: number): number {
+  if (threshold <= 0) return 0;
+  if (m <= 0) return threshold;
+  const half = Math.trunc((m + 1) / 2); // ⌈m/2⌉
+  if (threshold > half) {
+    if (threshold > m) return m;
+    return threshold;
+  }
+  if (half > m) return m;
+  return half;
+}
+
+/** netWeight（govern.go:117-119）：净票权 = 赞成 - 反对。 */
+export function netWeight(approveSum: number, rejectSum: number): number {
+  return approveSum - rejectSum;
+}
+
+/**
+ * removeQuorumV2（groupseats.go:30-33，Spec v2 §6）：
+ * base 门槛公式 + GovernQuorum 裁切。
+ */
+export function removeQuorumV2(mCircle: number, pCircle: number, fCircle: number): number {
+  const threshold = governThreshold("base", mCircle, pCircle, fCircle);
+  return governQuorum(threshold, mCircle);
+}
+
+/**
+ * dissolveVoteQuorumV2（groupseats.go:56-59，Spec v2 §6）：
+ * enhanced 门槛公式 + GovernQuorum 裁切。
+ */
+export function dissolveVoteQuorumV2(mCircle: number, pCircle: number, fCircle: number): number {
+  const threshold = governThreshold("enhanced", mCircle, pCircle, fCircle);
+  return governQuorum(threshold, mCircle);
+}
+
 /** brushWindowMs（groupseats.go:44）：防刷窗口 = 任意滚动 24h。 */
 const BRUSH_WINDOW_MS = 24 * 60 * 60 * 1000;
 
