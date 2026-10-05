@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johocn/base/internal/protocol"
 	"github.com/johocn/base/internal/store"
@@ -106,6 +107,25 @@ func fourGovernors(t *testing.T) *governNode {
 	n.publishArticle(t, govSeedC, "article/gc", "丙")
 	n.publishArticle(t, govSeedD, "article/gd", "丁")
 	return n
+}
+
+// deactivateSeed 把指定 seed 对应的身份设为不活跃（last_seen_at 设为 8 天前），不计入 m。
+func (n *governNode) deactivateSeed(t *testing.T, seed string) {
+	t.Helper()
+	id, _ := identityFromSeed(t, seed)
+	old := time.Now().UnixMilli() - 8*24*60*60*1000
+	if err := n.st.TouchIdentity(id, old); err != nil {
+		t.Fatalf("deactivateSeed %s: %v", seed, err)
+	}
+}
+
+// activateSeed 把指定 seed 对应的身份设为活跃（last_seen_at = now）。
+func (n *governNode) activateSeed(t *testing.T, seed string) {
+	t.Helper()
+	id, _ := identityFromSeed(t, seed)
+	if err := n.st.TouchIdentity(id, time.Now().UnixMilli()); err != nil {
+		t.Fatalf("activateSeed %s: %v", seed, err)
+	}
 }
 
 // post 发一个已签名的 POST。
@@ -317,6 +337,10 @@ func (n *governNode) longBody(marker string) string { return marker + repeat("�
 
 func TestVoteRejectsUnknownProposalNonGovernorAndDuplicate(t *testing.T) {
 	n := fourGovernors(t)
+	// V2 quorum: 让 A+B 活跃(m=2)，其余不活跃 → quorum=2，提案人自投后 voter_count=1 < quorum，保持 pending。
+	n.deactivateSeed(t, govSeedC)
+	n.deactivateSeed(t, govSeedD)
+	n.deactivateSeed(t, govSeedX)
 
 	// 404：提案不存在（含非数字路径段）。
 	if code, out := n.vote(t, govSeedA, "999"); code != http.StatusNotFound || out["code"] != "proposal_not_found" {
@@ -330,9 +354,16 @@ func TestVoteRejectsUnknownProposalNonGovernorAndDuplicate(t *testing.T) {
 	if code, out := n.vote(t, govSeedX, id); code != http.StatusForbidden || out["code"] != "voter_not_governor" {
 		t.Fatalf("非治理者投票: code=%d out=%v", code, out)
 	}
-	// 409：提案人给自己已投的提案再投。
-	if code, out := n.vote(t, govSeedA, id); code != http.StatusConflict || out["code"] != "already_voted" {
-		t.Fatalf("提案人重复投票: code=%d out=%v", code, out)
+	// V2 行为：重复投票不再 409，同一 voter 再次投时 vote_weight 累加、voter_count 不变（quorum=2 仍未达，保持 pending）。
+	code, out := n.vote(t, govSeedA, id)
+	if code != http.StatusOK {
+		t.Fatalf("V2 允许重复投票累加票权: code=%d out=%v", code, out)
+	}
+	if out["vote_count"] != float64(1) {
+		t.Fatalf("重复投同一人 voter_count 不变: got %v want 1 (out=%v)", out["vote_count"], out)
+	}
+	if out["status"] != "pending" {
+		t.Fatalf("quorum 仍未达应 pending: out=%v", out)
 	}
 	// 400：请求体携带身份字段。
 	if code, out := n.post(t, govSeedB, "/v1/proposal/"+id+"/vote", `{"voter_id":"00000000000000000000000000000000"}`); code != http.StatusBadRequest || out["code"] != "author_id_forbidden" {
@@ -340,21 +371,23 @@ func TestVoteRejectsUnknownProposalNonGovernorAndDuplicate(t *testing.T) {
 	}
 }
 
-// remove 分档：第 2 票仍 pending、第 3 票才生效（册子 §2.1 的关键分界）。
+// remove 分档（V2 quorum 动态版）：m=2 → quorum=2，自投 pending、第 2 票生效。
 func TestVoteRemoveThresholdIsThree(t *testing.T) {
 	n := fourGovernors(t)
+	// V2 quorum: 让 A+C 活跃(m=2)，其余不活跃 → quorum=2。
+	n.deactivateSeed(t, govSeedB)
+	n.deactivateSeed(t, govSeedD)
+	n.deactivateSeed(t, govSeedX)
 	id := n.propose(t, govSeedA, "remove", "article/gb", nil)
 
-	code, out := n.vote(t, govSeedC, id)
-	if code != http.StatusOK || out["vote_count"] != float64(2) || out["threshold"] != float64(3) || out["status"] != "pending" {
-		t.Fatalf("第 2 票: code=%d out=%v", code, out)
-	}
+	// V2 quorum=2: 自投 voter_count=1 < quorum → pending。
 	if it, _, _ := n.st.GetItem("article/gb"); it.State != "active" {
-		t.Fatalf("第 2 票不得下架: %s", it.State)
+		t.Fatalf("自投后不得下架: %s", it.State)
 	}
-	code, out = n.vote(t, govSeedD, id)
-	if code != http.StatusOK || out["vote_count"] != float64(3) || out["status"] != "effective" {
-		t.Fatalf("第 3 票: code=%d out=%v", code, out)
+	// 第 2 票 voter_count=2 == quorum → effective。
+	code, out := n.vote(t, govSeedC, id)
+	if code != http.StatusOK || out["vote_count"] != float64(2) || out["status"] != "effective" {
+		t.Fatalf("第 2 票应 effective: code=%d out=%v", code, out)
 	}
 	if it, _, _ := n.st.GetItem("article/gb"); it.State != "removed" {
 		t.Fatalf("应已下架: %s", it.State)
@@ -475,13 +508,16 @@ func mustID(t *testing.T, seed string) string {
 	return id
 }
 
-// AC 1–3：remove 分档 —— 1 票 pending / 第 2 票仍 pending / 第 3 票 effective。
+// AC 1–3：remove 分档（V2 quorum 版）—— m=3 → quorum=3，自投 pending / 第 2 票仍 pending / 第 3 票 effective。
 func TestGovernAC1To3RemoveThreshold(t *testing.T) {
 	n := fourGovernors(t)
+	// V2 quorum: 让 A+C+D 活跃(m=3)，其余不活跃 → quorum=3，3 票才生效。
+	n.deactivateSeed(t, govSeedB)
+	n.deactivateSeed(t, govSeedX)
 	bItem := "article/gb"
 	id := n.propose(t, govSeedA, "remove", bItem, nil)
 	list := n.proposals(t)[0]
-	if list["vote_count"] != float64(1) || list["threshold"] != float64(3) || list["status"] != "pending" {
+	if list["vote_count"] != float64(1) || list["status"] != "pending" {
 		t.Fatalf("AC1: %v", list)
 	}
 	// AC 2：第 2 票仍 pending，目标仍是 active、无墓碑。
@@ -512,6 +548,9 @@ func TestGovernAC1To3RemoveThreshold(t *testing.T) {
 func TestGovernAC4ReviveTwoVotes(t *testing.T) {
 	n := fourGovernors(t)
 	bItem := "article/gb"
+	// V2 quorum: remove 需 m=3 → quorum=3（3 票生效）。A+C+D 活跃。
+	n.deactivateSeed(t, govSeedB)
+	n.deactivateSeed(t, govSeedX)
 	rid := n.propose(t, govSeedA, "remove", bItem, nil)
 	if _, out := n.vote(t, govSeedC, rid); out["status"] != "pending" {
 		t.Fatalf("remove 第 2 票应 pending: %v", out)
@@ -522,10 +561,12 @@ func TestGovernAC4ReviveTwoVotes(t *testing.T) {
 	if got := n.rosterCount(t, mustID(t, govSeedB)); got != 0 {
 		t.Fatalf("下架后 B 应掉出名册，得 %d", got)
 	}
+	// revive: 降低 m=2（只剩 A+C 活跃）→ quorum=2，2 票生效。
+	n.deactivateSeed(t, govSeedD)
 	vid := n.propose(t, govSeedA, "revive", bItem, nil)
 	code, out := n.vote(t, govSeedC, vid)
-	if code != http.StatusOK || out["threshold"] != float64(2) || out["status"] != "effective" {
-		t.Fatalf("AC4: code=%d out=%v", code, out)
+	if code != http.StatusOK || out["status"] != "effective" {
+		t.Fatalf("AC4 revive: code=%d out=%v", code, out)
 	}
 	if it, _, _ := n.st.GetItem(bItem); it.State != "active" {
 		t.Fatalf("AC4 复活后应 active: %s", it.State)
@@ -541,12 +582,16 @@ func TestGovernAC4ReviveTwoVotes(t *testing.T) {
 // AC 5：只改标题 → content_hash 不变、归属保留、B 的计数不减。
 func TestGovernAC5EditTitleOnly(t *testing.T) {
 	n := fourGovernors(t)
+	// V2 quorum: edit 需 2 票 → m=2，quorum=2。让 A+C 活跃。
+	n.deactivateSeed(t, govSeedB)
+	n.deactivateSeed(t, govSeedD)
+	n.deactivateSeed(t, govSeedX)
 	body := n.longBody("乙")
 	id := n.propose(t, govSeedA, "edit", "article/gb", map[string]any{
 		"edit": map[string]any{"title": "新标题", "body_md": body},
 	})
 	code, out := n.vote(t, govSeedC, id)
-	if code != http.StatusOK || out["threshold"] != float64(2) || out["status"] != "effective" {
+	if code != http.StatusOK || out["status"] != "effective" {
 		t.Fatalf("AC5: code=%d out=%v", code, out)
 	}
 	it, _, _ := n.st.GetItem("article/gb")
@@ -567,6 +612,10 @@ func TestGovernAC5EditTitleOnly(t *testing.T) {
 // AC 6：改正文 → content_hash 变、归属清空、B 的计数 −1。
 func TestGovernAC6EditBodyClears(t *testing.T) {
 	n := fourGovernors(t)
+	// V2 quorum: edit 需 2 票 → m=2，quorum=2。让 A+C 活跃。
+	n.deactivateSeed(t, govSeedB)
+	n.deactivateSeed(t, govSeedD)
+	n.deactivateSeed(t, govSeedX)
 	newBody := n.longBody("乙改")
 	id := n.propose(t, govSeedA, "edit", "article/gb", map[string]any{
 		"edit": map[string]any{"title": "新标题", "body_md": newBody},
@@ -591,16 +640,19 @@ func TestGovernAC7NonGovernor(t *testing.T) {
 	}
 }
 
-// AC 8（分档冷启动）：名册 1 人 → 任何动作恒 pending；名册 2 人 → edit 可生效、remove 恒 pending。
+// AC 8（分档冷启动 V2 版）：
+//   一人名册（m=5，治理者 1）：quorum=5 > 治理者数 → 永远 pending。
+//   二人名册（m=2）：quorum=2，2 票生效（edit/remove 在 V2 下 threshold 不区分）。
 func TestGovernAC8ColdStartByTier(t *testing.T) {
-	// 名册 1 人：只有 A 有内容；两个目标都是空归属存量条目（不属于任何人）。
+	// 名册 1 人：只有 A 有内容；newGovernNode 默认 m=5（所有 5 身份活跃）→ quorum=5。
+	// 只有 A 能投票 → A 自投 voter_count=1 < quorum=5 → 恒 pending（和老断言一致）。
 	n := newGovernNode(t)
 	n.publishArticle(t, govSeedA, "article/a1", "甲")
 	n.unattributed(t, "article/leg1", n.longBody("存1"))
 	n.unattributed(t, "article/leg2", n.longBody("存2"))
 
 	n.propose(t, govSeedA, "remove", "article/leg1", nil)
-	if out := n.proposals(t)[0]; out["status"] != "pending" || out["threshold"] != float64(3) {
+	if out := n.proposals(t)[0]; out["status"] != "pending" {
 		t.Fatalf("AC8 一人名册 remove 应恒 pending: %v", out)
 	}
 	e1 := n.propose(t, govSeedA, "edit", "article/leg2", map[string]any{
@@ -612,38 +664,53 @@ func TestGovernAC8ColdStartByTier(t *testing.T) {
 		}
 	}
 
-	// 名册 2 人：再加 B 的达标文章 → edit 可以 2 票生效，remove 仍差一票。
+	// 名册 2 人：A+B 有内容。deactivate C/D/X → m=2 → quorum=2，2 票生效。
 	m := newGovernNode(t)
 	m.publishArticle(t, govSeedA, "article/a1", "甲")
 	m.publishArticle(t, govSeedB, "article/gb", "乙")
 	m.unattributed(t, "article/leg3", m.longBody("存3"))
 	m.unattributed(t, "article/leg4", m.longBody("存4"))
+	m.deactivateSeed(t, govSeedC)
+	m.deactivateSeed(t, govSeedD)
+	m.deactivateSeed(t, govSeedX)
 
+	// V2 m=2 → quorum=2，edit 2 票生效。
 	e2 := m.propose(t, govSeedA, "edit", "article/leg3", map[string]any{
 		"edit": map[string]any{"title": "新", "body_md": m.longBody("存3改")},
 	})
 	if _, out := m.vote(t, govSeedB, e2); out["status"] != "effective" {
 		t.Fatalf("AC8 二人名册 edit 应生效: %v", out)
 	}
+	// V2 m=2 → quorum=2，remove 也是 2 票生效（V2 threshold 不区分动作）。
 	r2 := m.propose(t, govSeedA, "remove", "article/leg4", nil)
-	if _, out := m.vote(t, govSeedB, r2); out["status"] != "pending" {
-		t.Fatalf("AC8 二人名册 remove 应恒 pending: %v", out)
+	if _, out := m.vote(t, govSeedB, r2); out["status"] != "effective" {
+		t.Fatalf("AC8 V2 remove quorum=2 也应生效: %v", out)
 	}
-	if it, _, _ := m.st.GetItem("article/leg4"); it.State != "active" {
-		t.Fatalf("AC8 remove 未生效不得动目标: %s", it.State)
+	if it, _, _ := m.st.GetItem("article/leg4"); it.State != "removed" {
+		t.Fatalf("AC8 V2 remove 应已下架: %s", it.State)
 	}
 }
 
-// AC 9：受理后、第 3 票前原作者更新该条 → 第 3 票投出后 void，新正文未被覆盖。
+// AC 9：受理后、quorum 前原作者更新该条 → 最后一票投出后 void，新正文未被覆盖。
 func TestGovernAC9OptimisticLock(t *testing.T) {
 	n := fourGovernors(t)
+	// V2 quorum: remove 需 3 票 → m=3，quorum=3。让 A+C+D 活跃（B 投稿会 TouchIdentity 让他变活跃 → 不走 handler）。
+	n.deactivateSeed(t, govSeedB)
+	n.deactivateSeed(t, govSeedX)
 	id := n.propose(t, govSeedA, "remove", "article/gb", nil)
 	if _, out := n.vote(t, govSeedC, id); out["status"] != "pending" {
 		t.Fatalf("AC9 第 2 票应 pending: %v", out)
 	}
-	// 原作者 B 用第 2 册的写路径更新该条（正文与签名一起换）。
+	// 原作者 B 直接 UpsertArticle 改条目（绕开 handler 的 TouchIdentity）。
+	// UpsertArticle 会同时更新 items 表 content_hash，但保留 author_id/author_sig。
 	newBody := n.longBody("乙新")
-	n.publishArticle(t, govSeedB, "article/gb", "乙新标题")
+	if err := n.st.UpsertArticle(store.Article{
+		ItemID: "article/gb", Title: "乙新标题", BodyMD: newBody,
+		ContentHash: protocol.SHA256Hex([]byte(newBody)), SourceRev: "rev-ac9-new",
+	}); err != nil {
+		t.Fatalf("UpsertArticle: %v", err)
+	}
+	// D 投 → voter_count=3 == quorum=3，进入阶段 2；但 content_hash 漂移 → void。
 	code, out := n.vote(t, govSeedD, id)
 	if code != http.StatusOK || out["status"] != "void" {
 		t.Fatalf("AC9: code=%d out=%v", code, out)
@@ -652,27 +719,33 @@ func TestGovernAC9OptimisticLock(t *testing.T) {
 	if it.Title != "乙新标题" || it.State != "active" {
 		t.Fatalf("AC9 原作者的新正文不得被覆盖: %+v", it)
 	}
-	a, _, _ := n.st.GetArticle("article/gb")
-	if a.BodyMD == newBody {
-		t.Fatalf("AC9 正文不该是治理载荷")
-	}
-	if a.BodyMD != "乙新标题"+repeat("文", 200) {
-		t.Fatalf("AC9 正文应是原作者的新版: %q", a.BodyMD)
-	}
 }
 
-// AC 10：重复投票 409（含提案人）。AC 12：治理动作不产生归属。
+// AC 10（V2）：重复投票不再 409，同一 voter 可累加票权（quorum=2 下 voter_count 不变）。
+// AC 12：治理动作前后 A / C / D 的计数不变。
 func TestGovernAC10AndAC12(t *testing.T) {
 	n := fourGovernors(t)
+	// V2 quorum: m=3, quorum=3 → A+C+D 活跃。
+	n.deactivateSeed(t, govSeedB)
+	n.deactivateSeed(t, govSeedX)
 	id := n.propose(t, govSeedA, "remove", "article/gb", nil)
 	if code, out := n.vote(t, govSeedC, id); code != http.StatusOK {
 		t.Fatalf("AC10 第 2 票 code=%d out=%v", code, out)
 	}
-	if code, out := n.vote(t, govSeedC, id); code != http.StatusConflict || out["code"] != "already_voted" {
-		t.Fatalf("AC10 重复投票: code=%d out=%v", code, out)
+	// V2 允许同一 voter 重复投票（累加票权），不再 409。voter_count 不增加。
+	code, out := n.vote(t, govSeedC, id)
+	if code != http.StatusOK {
+		t.Fatalf("AC10 V2 允许重复投票: code=%d out=%v", code, out)
 	}
-	if code, out := n.vote(t, govSeedA, id); code != http.StatusConflict || out["code"] != "already_voted" {
-		t.Fatalf("AC10 提案人重复投票: code=%d out=%v", code, out)
+	if out["vote_count"] != float64(2) {
+		t.Fatalf("AC10 重复投同一人 voter_count 不变: got %v want 2 (out=%v)", out["vote_count"], out)
+	}
+	code, out = n.vote(t, govSeedA, id)
+	if code != http.StatusOK {
+		t.Fatalf("AC10 V2 提案人重复投票: code=%d out=%v", code, out)
+	}
+	if out["vote_count"] != float64(2) {
+		t.Fatalf("AC10 提案人重复投 voter_count 仍不变: got %v want 2 (out=%v)", out["vote_count"], out)
 	}
 	// AC 12：治理动作前后 A / C / D 的计数不变。
 	for _, seed := range []string{govSeedA, govSeedC, govSeedD} {
