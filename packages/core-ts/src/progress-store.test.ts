@@ -174,6 +174,7 @@ describe('pullProgress（#8 册子 §5.5）', () => {
     broken.o.adapters.http = {
       get: () => Promise.reject(new Error('断网')),
       post: () => Promise.reject(new Error('断网')),
+      put: () => Promise.reject(new Error('断网')),
     };
     await expect(pullProgress(broken.o)).resolves.toBeUndefined();
 

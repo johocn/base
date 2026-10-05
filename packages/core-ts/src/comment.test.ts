@@ -195,8 +195,9 @@ describe('comment', () => {
     broken.o.adapters.http = {
       get: () => Promise.reject(new Error('断网')),
       post: () => Promise.reject(new Error('断网')),
+      put: () => Promise.reject(new Error('断网')),
     };
-    expect(await fetchCommentText(broken.o, 'c1')).toBeNull();
+    expect(await fetchCommentText(broken.o, 'missing')).toBeNull();
   });
 
   it('失败映射：节点错误码与网络异常都转成用户可读提示', async () => {
@@ -230,6 +231,7 @@ describe('comment', () => {
     off.o.adapters.http = {
       get: () => Promise.reject(new Error('断网')),
       post: () => Promise.reject(new Error('断网')),
+      put: () => Promise.reject(new Error('断网')),
     };
     const offRes = await postComment(off.o, { targetId: 'article/a', text: 'x' });
     expect(offRes.queued).toBe(true);

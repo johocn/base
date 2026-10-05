@@ -44,6 +44,7 @@ function gateOffline(o: DmOptions): { offline: boolean } {
   o.adapters.http = {
     get: (url, headers) => (state.offline ? Promise.reject(new Error('断网')) : real.get(url, headers)),
     post: (url, body, headers) => (state.offline ? Promise.reject(new Error('断网')) : real.post(url, body, headers)),
+    put: (url, body, headers) => (state.offline ? Promise.reject(new Error('断网')) : real.put(url, body, headers)),
   };
   return state;
 }
@@ -306,7 +307,7 @@ describe('dm', () => {
     ]);
 
     // 节点不可达 → 静默回落为仅本地好友，不抛错
-    a.o.adapters.http = { get: () => Promise.reject(new Error('断网')), post: () => Promise.reject(new Error('断网')) };
+    a.o.adapters.http = { get: () => Promise.reject(new Error('断网')), post: () => Promise.reject(new Error('断网')), put: () => Promise.reject(new Error('断网')) };
     expect(await listFriends(a.o)).toEqual([{ peerId: idB, hasKey: true }]);
   });
 });

@@ -30,7 +30,7 @@ describe('contribution', () => {
 
   it('名册：断网 → ContributionError(network)', async () => {
     const { o } = fixture();
-    o.adapters.http = { get: () => Promise.reject(new Error('断网')), post: () => Promise.reject(new Error('断网')) };
+    o.adapters.http = { get: () => Promise.reject(new Error('断网')), post: () => Promise.reject(new Error('断网')), put: () => Promise.reject(new Error('断网')) };
     const err = (await roster(o).catch((e: unknown) => e)) as ContributionError;
     expect(err.code).toBe('network');
     expect(err.message).toBe('需要联网才能查看名册');

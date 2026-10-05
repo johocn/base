@@ -72,6 +72,7 @@ function gateOffline(o: GroupOptions): { offline: boolean } {
   o.adapters.http = {
     get: (url, headers) => (state.offline ? Promise.reject(new Error('断网')) : real.get(url, headers)),
     post: (url, body, headers) => (state.offline ? Promise.reject(new Error('断网')) : real.post(url, body, headers)),
+    put: (url, body, headers) => (state.offline ? Promise.reject(new Error('断网')) : real.put(url, body, headers)),
   };
   return state;
 }

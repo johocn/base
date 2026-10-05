@@ -85,7 +85,7 @@ describe('govern', () => {
 
   it('列表：断网 → GovernError(network)，不做离线兜底（本册 §9.1）', async () => {
     const { o } = fixture();
-    o.adapters.http = { get: () => Promise.reject(new Error('断网')), post: () => Promise.reject(new Error('断网')) };
+    o.adapters.http = { get: () => Promise.reject(new Error('断网')), post: () => Promise.reject(new Error('断网')), put: () => Promise.reject(new Error('断网')) };
     const err = (await listProposals(o).catch((e: unknown) => e)) as GovernError;
     expect(err).toBeInstanceOf(GovernError);
     expect(err.code).toBe('network');
