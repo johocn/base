@@ -418,8 +418,7 @@ func (s *Server) handleProposalList(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := proposalsResponse{Proposals: []proposalDTO{}}
 	for _, v := range views {
-		// V2: 实时算 quorum/netWeight（threshold 用老口径 v.Threshold 兼容）
-		_, quorum, netWeight, _, _ := s.st.ProposalV2Metrics(v.ProposalID)
+		// V2: ListProposalViews 已实时算好全部动态指标，直接取。
 		level := v.GovernanceLevel
 		if level == "" {
 			level = "base"
@@ -434,11 +433,11 @@ func (s *Server) handleProposalList(w http.ResponseWriter, r *http.Request) {
 			BodyMD:          v.BodyMD,
 			Status:          v.Status,
 			Votes:           v.Votes,
-			VoteCount:       len(v.Votes),
+			VoteCount:       v.VoterCount,
 			GovernanceLevel: level,
-			Threshold:       v.Threshold, // 老口径兼容
-			Quorum:          quorum,
-			NetWeight:       netWeight,
+			Threshold:       v.ThresholdV2,
+			Quorum:          v.Quorum,
+			NetWeight:       v.NetWeight,
 			CreatedAt:       v.CreatedAt,
 			ExecutedAt:      v.ExecutedAt,
 			VoidedAt:        v.VoidedAt,

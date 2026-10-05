@@ -204,8 +204,12 @@ func TestGovernanceBoardRendersProposal(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("看板状态 = %d", code)
 	}
-	// 动作徽章 / 理由 / 门槛（remove 3 票）/ 状态 / 公开条目的文章页链接
-	for _, want := range []string{"治理看板", "下架", "内容不准确", "0 / 3 票", "待决", `href="/a/article/aaa"`} {
+	// V2: 顶部门槛公式演示 + 动作徽章 + 理由 + 净票权 + 状态 + 公开条目的文章页链接
+	for _, want := range []string{
+		"治理看板", "下架", "内容不准确",
+		"基础门槛 ≈", "净票权 +1", "赞成 1 · 反对 0",
+		"待决", `href="/a/article/aaa"`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("看板缺少 %q\n页面内容：\n%s", want, body)
 		}
@@ -243,7 +247,7 @@ func TestGovernanceBoardEmptyState(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("看板状态 = %d", code)
 	}
-	for _, want := range []string{"本节点暂无提案。", "暂无贡献者。"} {
+	for _, want := range []string{"本节点暂无提案。", "贡献层未建立。"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("空态缺少 %q\n%s", want, body)
 		}

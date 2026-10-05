@@ -31,11 +31,13 @@ type pageData struct {
 	Items       []pageItem
 	Article     *pageArticle
 
-	Proposals       []pageProposal
-	Roster          []pageContributor
-	RosterReady     bool
-	RemoveThreshold int
-	EditThreshold   int
+	Proposals            []pageProposal
+	Roster               []pageContributor
+	RosterReady          bool
+	RosterSeedIDs        map[string]bool // 种子用户 ID 集（贡献者名册里标记「种子」角标用）
+	ActiveUsersM         int             // 节点 7 日活跃身份数（顶部门槛公式演示）
+	ThresholdBaseExample int             // 基础门槛演示值（P=F=0 的 node 级口径）
+	ThresholdEnhancedExample int        // 强化门槛演示值
 }
 
 // pageProposal 是看板的一行提案卡片（册子 §7.4）。
@@ -50,9 +52,17 @@ type pageProposal struct {
 	ItemState      string
 	ItemStateLabel string
 	Reason         string
-	VoteCount      int
-	Threshold      int
-	Percent        int
+	VoteCount      int // V2: COUNT(DISTINCT voter_id)
+	Quorum         int
+	Threshold      int // V2: ThresholdV2
+	Percent        int // 第一条进度条：VoterCount * 100 / Quorum
+	Percent2       int // 第二条进度条：净票权条 NetWeight / (ApproveWeight+RejectWeight)
+	ApproveBar     int // 赞成票权占比（0~100），用于净票权条渲染
+	RejectBar      int // 反对票权占比（0~100）
+	ApproveWeight  int
+	RejectWeight   int
+	NetWeight      int
+	GovernanceLevel string // "base" | "enhanced"
 	Status         string
 	StatusLabel    string
 	CreatedAt      string
@@ -230,7 +240,7 @@ func decodeTags(tagsJSON string) []string {
 	return tags
 }
 
-// governActionLabel 是动作徽章的中文（看板不显示英文码）。
+// governActionLabel 是动作徽章的中文（看板不显示英文码）。V2 覆盖全部 13 种治理动作。
 func governActionLabel(action string) string {
 	switch action {
 	case store.GovernActionRemove:
@@ -241,6 +251,25 @@ func governActionLabel(action string) string {
 		return "复活"
 	case store.GovernActionDirectoryAdd:
 		return "新增词条"
+	// V2 细粒度治理动作
+	case store.GovernActionEditTitle:
+		return "改标题"
+	case store.GovernActionEditBody:
+		return "改正文"
+	case store.GovernActionEditCategory:
+		return "改分类"
+	case store.GovernActionEditTags:
+		return "改标签"
+	case store.GovernActionEditInstructor:
+		return "改讲师"
+	case store.GovernActionHighlight:
+		return "高亮"
+	case store.GovernActionPin:
+		return "置顶"
+	case store.GovernActionRecommend:
+		return "推荐"
+	case store.GovernActionFeature:
+		return "精华"
 	default:
 		return action
 	}
@@ -306,8 +335,9 @@ func (s *Server) approvedTermSet() map[string]bool {
 
 // handleGovernancePage 渲染治理看板：服务端直接读库，**不调接口**（册子 §7.2）。
 //
-// 复用 governRoster() 而不是自己建集合，是为了继承它的降级口径：
-// 派生失败按空名册继续渲染（票数自然为 0），页面提示「名册暂不可用」，与接口侧一致。
+// V2 升级：顶部展示动态门槛公式演示（当前活跃用户 m → base/enhanced 门槛示例）；
+// 贡献者名册改用 DeriveContributionRoster（恒 10 人 + 种子 ID 补齐），区分贡献者与初创期种子；
+// 提案行全部使用 V2 动态指标（Quorum / ThresholdV2 / NetWeight / ApproveWeight / RejectWeight）。
 func (s *Server) handleGovernancePage(w http.ResponseWriter, r *http.Request) {
 	roster, rosterOK := s.governRoster()
 	views, err := s.st.ListProposalViews(roster)
@@ -322,20 +352,41 @@ func (s *Server) handleGovernancePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// V2: 查节点 7 日活跃身份数 → 顶部门槛公式演示
+	m := s.st.NodeActiveUsers()
+	thresholdBase := store.GovernThreshold("base", m, 0, 0)
+	thresholdEnhanced := store.GovernThreshold("enhanced", m, 0, 0)
+
 	data := pageData{
-		Title:           "治理看板",
-		Issuer:          s.opt.Issuer,
-		PairingCode:     s.opt.PairingCode,
-		Fingerprint:     s.opt.FingerprintHex,
-		RosterReady:     rosterOK,
-		RemoveThreshold: store.GovernThresholdLegacy(store.GovernActionRemove),
-		EditThreshold:   store.GovernThresholdLegacy(store.GovernActionEdit),
+		Title:                   "治理看板",
+		Issuer:                  s.opt.Issuer,
+		PairingCode:             s.opt.PairingCode,
+		Fingerprint:             s.opt.FingerprintHex,
+		RosterReady:             rosterOK,
+		ActiveUsersM:            m,
+		ThresholdBaseExample:    thresholdBase,
+		ThresholdEnhancedExample: thresholdEnhanced,
 	}
-	if contribs, err := s.st.ContributorRoster(); err == nil {
-		for _, c := range contribs {
-			data.Roster = append(data.Roster, pageContributor{ID: c.ID, Name: nameOrShortID(names[c.ID], c.ID), Count: c.Count})
+
+	// V2: 贡献者名册恒 10 人（DeriveContributionRoster），区分贡献者 vs 初创期种子。
+	if roster10, err := s.st.DeriveContributionRoster(); err == nil {
+		// 贡献者 ID 集（来自 ContributorRoster）：不在此集中的是种子。
+		contribSet := map[string]bool{}
+		if contribs, cerr := s.st.ContributorRoster(); cerr == nil {
+			for _, c := range contribs {
+				contribSet[c.ID] = true
+			}
+		}
+		data.RosterSeedIDs = map[string]bool{}
+		for _, id := range roster10 {
+			seed := !contribSet[id]
+			if seed {
+				data.RosterSeedIDs[id] = true
+			}
+			data.Roster = append(data.Roster, pageContributor{ID: id, Name: nameOrShortID(names[id], id)})
 		}
 	}
+
 	// ListProposalViews 按 proposal_id 升序（旧 → 新）返回；这里只做纯展示反转（新提案在前，册子 §7.4）
 	for i := len(views) - 1; i >= 0; i-- {
 		data.Proposals = append(data.Proposals, s.proposalPageRow(views[i], names))
@@ -344,24 +395,52 @@ func (s *Server) handleGovernancePage(w http.ResponseWriter, r *http.Request) {
 }
 
 // proposalPageRow 把一条提案视图折成看板行。**票数与门槛一律用 ListProposalViews 给的**，看板不自己算。
+// V2：使用 Quorum / ThresholdV2 / NetWeight 等动态指标（与 AddVoteV2 两阶段判定同源）。
 func (s *Server) proposalPageRow(v store.ProposalView, names map[string]string) pageProposal {
-	row := pageProposal{
-		Action:      v.Action,
-		ActionLabel: governActionLabel(v.Action),
-		ItemID:      v.ItemID,
-		Title:       v.ItemID, // 缺条目或非公开时回退显示 item_id（册子 §7.3 护栏 1）
-		Reason:      v.Reason,
-		VoteCount:   len(v.Votes),
-		Threshold:   v.Threshold,
-		Status:      v.Status,
-		StatusLabel: governStatusLabel(v.Status),
-		CreatedAt:   formatMillis(v.CreatedAt),
-	}
-	if row.Threshold > 0 {
-		row.Percent = row.VoteCount * 100 / row.Threshold
-		if row.Percent > 100 {
-			row.Percent = 100
+	// V2: 进度条 1 = 独立 voter 数 / quorum；进度条 2 = 净票权占比。
+	percent := 0
+	if v.Quorum > 0 {
+		percent = v.VoterCount * 100 / v.Quorum
+		if percent > 100 {
+			percent = 100
 		}
+	}
+	percent2 := 0
+	totalWeight := v.ApproveWeight + v.RejectWeight
+	approveBar := 0
+	rejectBar := 0
+	if totalWeight > 0 {
+		// 净票权占比（0~100）：正值表示赞成领先，负值表示反对领先。模板可据此渲染方向。
+		percent2 = v.NetWeight * 100 / totalWeight
+		approveBar = v.ApproveWeight * 100 / totalWeight
+		rejectBar = v.RejectWeight * 100 / totalWeight
+	}
+
+	level := v.GovernanceLevel
+	if level == "" {
+		level = "base"
+	}
+
+	row := pageProposal{
+		Action:          v.Action,
+		ActionLabel:     governActionLabel(v.Action),
+		ItemID:          v.ItemID,
+		Title:           v.ItemID, // 缺条目或非公开时回退显示 item_id（册子 §7.3 护栏 1）
+		Reason:          v.Reason,
+		VoteCount:       v.VoterCount,
+		Quorum:          v.Quorum,
+		Threshold:       v.ThresholdV2,
+		Percent:         percent,
+		Percent2:        percent2,
+		ApproveBar:      approveBar,
+		RejectBar:       rejectBar,
+		ApproveWeight:   v.ApproveWeight,
+		RejectWeight:    v.RejectWeight,
+		NetWeight:       v.NetWeight,
+		GovernanceLevel: level,
+		Status:          v.Status,
+		StatusLabel:     governStatusLabel(v.Status),
+		CreatedAt:       formatMillis(v.CreatedAt),
 	}
 	for _, id := range v.Votes {
 		row.Voters = append(row.Voters, pageContributor{ID: id, Name: nameOrShortID(names[id], id)})

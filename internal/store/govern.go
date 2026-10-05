@@ -118,6 +118,16 @@ func NetWeight(approveSum, rejectSum int) int {
 	return approveSum - rejectSum
 }
 
+// NodeActiveUsers 返回节点级 7 日活跃身份数（顶部门槛公式演示用，非提案语境化）。
+// 只读查询，查失败返回 0（fail-open：活跃数未知 → 门槛公式里 m=0 → 门槛只由 P/F 决定）。
+func (s *Store) NodeActiveUsers() int {
+	now := time.Now().UnixMilli()
+	sevenDaysMs := int64(7 * 24 * 60 * 60 * 1000)
+	var m int
+	_ = s.db.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ?`, now-sevenDaysMs).Scan(&m)
+	return m
+}
+
 // ProposalV2Metrics 实时算提案的 V2 动态门槛值（handler 层展示用，只读查询）。
 // 返回 threshold / quorum / netWeight / voterCount。
 func (s *Store) ProposalV2Metrics(proposalID int64) (threshold, quorum, netWeight, voterCount int, err error) {
@@ -212,11 +222,22 @@ type Proposal struct {
 }
 
 // ProposalView 是一条提案加上**当前有效票**与派生字段（册子 §3.3）。
+// V2 扩展新增：实时门槛 / quorum / 净票权 / 反对票等动态指标。
 type ProposalView struct {
 	Proposal
-	Votes     []string
-	Threshold int
+	Votes     []string // 投票人 ID 升序列表（保留给 handler 渲染投票人名单）
 	Status    string
+
+	// V2 动态指标（与 AddVoteV2 两阶段判定同源）
+	VoterCount    int // COUNT(DISTINCT voter_id)——不管 vote_type
+	ApproveWeight int // SUM(vote_weight WHERE vote_type='approve')
+	RejectWeight  int // SUM(vote_weight WHERE vote_type='reject')
+	NetWeight     int // ApproveWeight - RejectWeight
+	Quorum        int // GovernQuorum(ThresholdV2, m)
+	ThresholdV2   int // GovernThreshold(level, m, P, F)
+	M             int // 本提案语境下的活跃用户数（供页面调试验证）
+	P             int // 本提案语境下的他人 progress 去重数
+	F             int // 本提案语境下的他人 favorites 去重数
 }
 
 // proposalColumns 的列顺序必须与 scanProposal 的 Scan 参数一一对应。
@@ -555,6 +576,9 @@ func (s *Store) GetProposal(id int64) (Proposal, bool, error) {
 
 // ListProposalViews 按 proposal_id 升序返回全部提案（含已生效与 void 的历史，册子 §3.3），
 // 票已按 roster **实时复判**过滤。roster 传空 map 即册子 §6.2 的降级口径（有效票 = 0）。
+//
+// V2 扩展：每条提案附带实时 m/P/F / ThresholdV2 / Quorum / VoterCount / ApproveWeight / RejectWeight / NetWeight。
+// 语境（circle/node）与 AddVoteV2 完全同源——用 governContextParams(sqlExec, ...) 复用无界连接的 s.db。
 func (s *Store) ListProposalViews(roster map[string]bool) ([]ProposalView, error) {
 	rows, err := s.db.Query(`SELECT ` + proposalColumns + ` FROM govern_proposals ORDER BY proposal_id ASC`)
 	if err != nil {
@@ -576,6 +600,8 @@ func (s *Store) ListProposalViews(roster map[string]bool) ([]ProposalView, error
 		return nil, err
 	}
 	rows.Close()
+
+	now := time.Now().UnixMilli()
 	out := []ProposalView{}
 	for _, p := range proposals {
 		voters, err := proposalVotersExec(s.db, p.ProposalID)
@@ -587,11 +613,38 @@ func (s *Store) ListProposalViews(roster map[string]bool) ([]ProposalView, error
 		if err != nil {
 			return nil, err
 		}
+		// V2 实时指标：语境化 m/P/F → ThresholdV2 → Quorum；全量 voter + 票权聚合。
+		level := p.GovernanceLevel
+		if level == "" {
+			level = "base"
+		}
+		m, P, F, gerr := governContextParams(s.db, p, now)
+		if gerr != nil {
+			return nil, gerr
+		}
+		thresholdV2 := GovernThreshold(level, m, P, F)
+		quorum := GovernQuorum(thresholdV2, m)
+		var voterCount int
+		s.db.QueryRow(`SELECT COUNT(DISTINCT voter_id) FROM govern_votes WHERE proposal_id=?`, p.ProposalID).Scan(&voterCount)
+		var approveSum, rejectSum int
+		s.db.QueryRow(`SELECT
+			COALESCE(SUM(CASE WHEN vote_type='approve' THEN vote_weight ELSE 0 END),0),
+			COALESCE(SUM(CASE WHEN vote_type='reject' THEN vote_weight ELSE 0 END),0)
+			FROM govern_votes WHERE proposal_id=?`, p.ProposalID).Scan(&approveSum, &rejectSum)
+
 		out = append(out, ProposalView{
-			Proposal:  p,
-			Votes:     effective,
-			Threshold: governThresholdLegacy(p.Action),
-			Status:    ProposalStatus(p.ExecutedAt, p.VoidedAt),
+			Proposal:      p,
+			Votes:         effective,
+			Status:        ProposalStatus(p.ExecutedAt, p.VoidedAt),
+			VoterCount:    voterCount,
+			ApproveWeight: approveSum,
+			RejectWeight:  rejectSum,
+			NetWeight:     NetWeight(approveSum, rejectSum),
+			Quorum:        quorum,
+			ThresholdV2:   thresholdV2,
+			M:             m,
+			P:             P,
+			F:             F,
 		})
 	}
 	return out, nil
@@ -920,54 +973,55 @@ func editTagItemTx(tx *sql.Tx, p Proposal) (string, error) {
 
 // ============ V2 投票管线（治理重构 Spec v2 §4 + §6）============
 
-// governContextParams 在事务内根据提案语境查 V2 门槛公式的 m / P / F 参数（Spec v2 §6）。
+// governContextParams 根据提案语境查 V2 门槛公式的 m / P / F 参数（Spec v2 §6）。
+// e 可以是 *sql.Tx（事务内）或 *sql.DB（非事务只读查询）——均满足 sqlExec 接口。
 //   - category='circle' + circle_id != "" → 圈内活跃成员 + 圈内成员对该 item 的互动
 //   - 否则 → 节点级全局（默认）
 // 圈内成员从 groups.member_ids_json 解析；解析失败或组不存在 → fail-open fallback 到节点级。
-func governContextParams(tx *sql.Tx, p Proposal, now int64) (m, P, F int, err error) {
+func governContextParams(e sqlExec, p Proposal, now int64) (m, P, F int, err error) {
 	const sevenDaysMs int64 = 7 * 24 * 60 * 60 * 1000
 	if p.Category == "circle" && p.CircleID != "" {
 		var memberIDsJSON string
-		if qerr := tx.QueryRow(`SELECT member_ids_json FROM groups WHERE group_id=?`, p.CircleID).Scan(&memberIDsJSON); qerr != nil {
-			return governNodeParamsTx(tx, p, now, sevenDaysMs)
+		if qerr := e.QueryRow(`SELECT member_ids_json FROM groups WHERE group_id=?`, p.CircleID).Scan(&memberIDsJSON); qerr != nil {
+			return governNodeParams(e, p, now, sevenDaysMs)
 		}
 		var members []string
 		if jerr := json.Unmarshal([]byte(memberIDsJSON), &members); jerr != nil || len(members) == 0 {
-			return governNodeParamsTx(tx, p, now, sevenDaysMs)
+			return governNodeParams(e, p, now, sevenDaysMs)
 		}
-		m, err = countActiveInIDsTx(tx, members, now-sevenDaysMs)
+		m, err = countActiveInIDs(e, members, now-sevenDaysMs)
 		if err != nil {
 			return 0, 0, 0, fmt.Errorf("circle active members: %w", err)
 		}
 		if p.ItemID != "" {
-			P, err = countItemInIDsTx(tx, "progress", p.ItemID, p.ProposerID, members)
+			P, err = countItemInIDs(e, "progress", p.ItemID, p.ProposerID, members)
 			if err != nil {
 				return 0, 0, 0, fmt.Errorf("circle progress: %w", err)
 			}
-			F, err = countItemInIDsTx(tx, "favorites", p.ItemID, p.ProposerID, members)
+			F, err = countItemInIDs(e, "favorites", p.ItemID, p.ProposerID, members)
 			if err != nil {
 				return 0, 0, 0, fmt.Errorf("circle favorites: %w", err)
 			}
 		}
 		return m, P, F, nil
 	}
-	return governNodeParamsTx(tx, p, now, sevenDaysMs)
+	return governNodeParams(e, p, now, sevenDaysMs)
 }
 
-// governNodeParamsTx 节点级默认口径：全节点活跃身份 + 全节点对 item 的互动。
-func governNodeParamsTx(tx *sql.Tx, p Proposal, now, sevenDaysMs int64) (m, P, F int, err error) {
-	if err = tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ?`, now-sevenDaysMs).Scan(&m); err != nil {
+// governNodeParams 节点级默认口径：全节点活跃身份 + 全节点对 item 的互动。
+func governNodeParams(e sqlExec, p Proposal, now, sevenDaysMs int64) (m, P, F int, err error) {
+	if err = e.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ?`, now-sevenDaysMs).Scan(&m); err != nil {
 		return 0, 0, 0, fmt.Errorf("node active users: %w", err)
 	}
 	if p.ItemID != "" {
-		tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM progress WHERE item_id=? AND id != ?`, p.ItemID, p.ProposerID).Scan(&P)
-		tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM favorites WHERE item_id=? AND id != ?`, p.ItemID, p.ProposerID).Scan(&F)
+		e.QueryRow(`SELECT COUNT(DISTINCT id) FROM progress WHERE item_id=? AND id != ?`, p.ItemID, p.ProposerID).Scan(&P)
+		e.QueryRow(`SELECT COUNT(DISTINCT id) FROM favorites WHERE item_id=? AND id != ?`, p.ItemID, p.ProposerID).Scan(&F)
 	}
 	return m, P, F, nil
 }
 
 // countActiveInIDs 查给定 id 列表内活跃（last_seen_at > cutoff）的独立身份数。
-func countActiveInIDsTx(tx *sql.Tx, ids []string, cutoff int64) (int, error) {
+func countActiveInIDs(e sqlExec, ids []string, cutoff int64) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -978,14 +1032,14 @@ func countActiveInIDsTx(tx *sql.Tx, ids []string, cutoff int64) (int, error) {
 		args = append(args, id)
 	}
 	var n int
-	if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ? AND id IN (`+placeholders+`)`, args...).Scan(&n); err != nil {
+	if err := e.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ? AND id IN (`+placeholders+`)`, args...).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
 }
 
 // countItemInIDs 查给定表 (progress / favorites) 中 item_id = ? AND id != proposer AND id IN (ids) 的去重 id 数。
-func countItemInIDsTx(tx *sql.Tx, table, itemID, proposerID string, ids []string) (int, error) {
+func countItemInIDs(e sqlExec, table, itemID, proposerID string, ids []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -996,7 +1050,7 @@ func countItemInIDsTx(tx *sql.Tx, table, itemID, proposerID string, ids []string
 		args = append(args, id)
 	}
 	var n int
-	if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM `+table+` WHERE item_id=? AND id != ? AND id IN (`+placeholders+`)`, args...).Scan(&n); err != nil {
+	if err := e.QueryRow(`SELECT COUNT(DISTINCT id) FROM `+table+` WHERE item_id=? AND id != ? AND id IN (`+placeholders+`)`, args...).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil

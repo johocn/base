@@ -1,8 +1,22 @@
 {{define "content"}}
+<style>
+.bar2 { height: 4px; background: #eee; border-radius: 2px; margin: 2px 0; overflow: hidden; }
+.bar2 .bar-approve { height: 4px; background: #2F855A; float: left; }
+.bar2 .bar-reject { height: 4px; background: #C53030; float: right; }
+.level-base { color: #2B6CB0; border-color: #2B6CB0; }
+.level-enhanced { color: #805AD5; border-color: #805AD5; }
+.seed-tag { font-size: 11px; color: #718096; border: 1px dashed #cbd5e0; border-radius: 8px; padding: 0 6px; margin-left: 4px; }
+.net-pos { color: #2F855A; }
+.net-neg { color: #C53030; }
+.net-zero { color: #718096; }
+</style>
+
 <h1>治理看板</h1>
 <p class="small">
-	下架 {{.RemoveThreshold}} 票、改写与复活各 {{.EditThreshold}} 票 · 票数按当前名册实时复判
-	{{if not .RosterReady}}· 名册暂不可用，按空名册计{{end}}
+{{.ActiveUsersM}} 日活跃用户 ·
+基础门槛 ≈ 10+⌊{{.ActiveUsersM}}/3⌋+⌊(P+F)/3⌋ = {{.ThresholdBaseExample}} ·
+强化门槛 ≈ 20+⌊{{.ActiveUsersM}}/3⌋+⌊2(P+F)/3⌋ = {{.ThresholdEnhancedExample}}
+{{if not .RosterReady}} · 名册暂不可用{{end}}
 </p>
 
 {{if .Proposals}}
@@ -11,13 +25,30 @@
 	<li>
 		<h2>
 			<span class="badge">{{.ActionLabel}}</span>
+			{{if eq .GovernanceLevel "enhanced"}}<span class="badge level-enhanced">强化治理</span>{{else}}<span class="badge level-base">基础治理</span>{{end}}
 			{{if .TermName}}{{.TermName}}{{else}}{{if .Linkable}}<a href="/a/{{.ItemID}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}{{end}}
 			{{if .TermPending}}<span class="badge">待票选</span>{{end}}
 			{{if .ItemStateLabel}}<span class="badge {{if eq .ItemState "removed"}}badge-off{{else}}badge-on{{end}}">{{.ItemStateLabel}}</span>{{end}}
 		</h2>
 		<div class="small">{{.Reason}}</div>
+
+		{{/* 进度条 1：voter_count / quorum */}}
 		<div class="bar"><i style="width:{{.Percent}}%"></i></div>
-		<div class="small">{{.VoteCount}} / {{.Threshold}} 票 · {{.StatusLabel}} · {{.CreatedAt}}</div>
+
+		{{/* 净票权信息行：赞成 vs 反对 vs 净票权 */}}
+		{{if or (gt .ApproveWeight 0) (gt .RejectWeight 0)}}
+		<div class="bar2">
+			{{if gt .ApproveWeight 0}}<span class="bar-approve" style="width:{{.ApproveBar}}%"></span>{{end}}
+			{{if gt .RejectWeight 0}}<span class="bar-reject" style="width:{{.RejectBar}}%"></span>{{end}}
+		</div>
+		{{end}}
+
+		<div class="small">
+			{{.VoteCount}} / {{.Quorum}} voter ·
+			{{if eq .NetWeight 0}}<span class="net-zero">净票权 0</span>{{else if gt .NetWeight 0}}<span class="net-pos">净票权 +{{.NetWeight}}</span>{{else}}<span class="net-neg">净票权 {{.NetWeight}}</span>{{end}}
+			· 赞成 {{.ApproveWeight}} · 反对 {{.RejectWeight}} ·
+			{{.StatusLabel}} · {{.CreatedAt}}
+		</div>
 		{{if .Voters}}
 		<div class="small">投票人：{{range $i, $v := .Voters}}{{if $i}}、{{end}}{{$v.Name}}{{end}}</div>
 		{{end}}
@@ -35,14 +66,18 @@
 <p>本节点暂无提案。</p>
 {{end}}
 
-<h2>贡献者名册</h2>
+<h2>贡献者名册 · 恒 10 人</h2>
 {{if .Roster}}
 <ul class="board">
 {{range .Roster}}
-	<li>{{.Name}} · {{.Count}} 条 <span class="small">{{.ID}}</span></li>
+	<li>
+		{{.Name}}
+		{{if index $.RosterSeedIDs .ID}}<span class="seed-tag">种子</span>{{end}}
+		<span class="small">{{.ID}}</span>
+	</li>
 {{end}}
 </ul>
 {{else}}
-<p>暂无贡献者。</p>
+<p>贡献层未建立。</p>
 {{end}}
 {{end}}

@@ -406,8 +406,15 @@ func TestProposalListAnonymousAndRealtimeVotes(t *testing.T) {
 		t.Fatalf("应有 1 条提案: %v", list)
 	}
 	p := list[0]
-	if p["threshold"] != float64(3) || p["vote_count"] != float64(2) || p["status"] != "pending" {
-		t.Fatalf("列表字段不对: %v", p)
+	// V2: threshold 是动态门槛（基于 m/P/F），不再是静态 3。vote_count 是全量独立 voter 数。
+	if p["status"] != "pending" {
+		t.Fatalf("状态应为 pending: %v", p)
+	}
+	if p["vote_count"] != float64(2) {
+		t.Fatalf("独立 voter 数应为 2: %v", p)
+	}
+	if p["threshold"].(float64) <= 0 {
+		t.Fatalf("门槛应 > 0: %v", p)
 	}
 	votes, _ := p["votes"].([]any)
 	if len(votes) != 2 {
@@ -415,6 +422,7 @@ func TestProposalListAnonymousAndRealtimeVotes(t *testing.T) {
 	}
 
 	// C 出榜：把它的文章改成不足门槛的短正文 → C 的条数归零。
+	// V2 下 vote_count 是全量 voter_count（不受名册影响），但 Votes 数组仍按名册过滤。
 	if err := n.st.UpsertArticle(store.Article{
 		ItemID: "article/gc", Title: "短", BodyMD: "短",
 		ContentHash: protocol.SHA256Hex([]byte("短")), SourceRev: "rev-2",
@@ -422,8 +430,13 @@ func TestProposalListAnonymousAndRealtimeVotes(t *testing.T) {
 		t.Fatalf("UpsertArticle: %v", err)
 	}
 	p = n.proposals(t)[0]
-	if p["vote_count"] != float64(1) || p["status"] != "pending" {
-		t.Fatalf("C 出榜后票数应回退到 1: %v", p)
+	if p["vote_count"] != float64(2) {
+		t.Fatalf("V2: vote_count 不受名册影响，应保持 2: %v", p)
+	}
+	// 但 Votes 数组按 filterRosterAtWatermark 过滤，C 出榜后长度应变为 1。
+	votes, _ = p["votes"].([]any)
+	if len(votes) != 1 {
+		t.Fatalf("C 出榜后名册过滤的 Votes 应只剩 1: %v", votes)
 	}
 	// C 重新入榜 → 票恢复（UpsertArticle 不动 author_id，归属仍在）。
 	if err := n.st.UpsertArticle(store.Article{
@@ -433,10 +446,11 @@ func TestProposalListAnonymousAndRealtimeVotes(t *testing.T) {
 		t.Fatalf("UpsertArticle: %v", err)
 	}
 	p = n.proposals(t)[0]
-	if p["vote_count"] != float64(2) {
-		t.Fatalf("C 重新入榜后票应恢复: %v", p)
+	votes, _ = p["votes"].([]any)
+	if len(votes) != 2 {
+		t.Fatalf("C 重新入榜后 Votes 应恢复: %v", votes)
 	}
-	// edit 档门槛是 2。
+	// edit 档 V2 门槛也是动态的，只需验证存在且 > 0。
 	eid := n.propose(t, govSeedA, "edit", "article/gb", map[string]any{
 		"edit": map[string]any{"title": "新标题", "body_md": n.longBody("乙")},
 	})
@@ -444,8 +458,8 @@ func TestProposalListAnonymousAndRealtimeVotes(t *testing.T) {
 		if item["proposal_id"] != eid {
 			continue
 		}
-		if item["threshold"] != float64(2) {
-			t.Fatalf("edit 门槛应为 2: %v", item)
+		if item["threshold"].(float64) <= 0 {
+			t.Fatalf("edit 门槛应 > 0: %v", item)
 		}
 	}
 }
@@ -763,23 +777,34 @@ func TestGovernAC11AnonymousListRealtime(t *testing.T) {
 		t.Fatalf("AC11: %v", out)
 	}
 	p := n.proposals(t)[0]
-	if p["threshold"] != float64(3) || p["vote_count"] != float64(2) {
-		t.Fatalf("AC11: %v", p)
+	// V2: threshold 动态、vote_count 是全量 voter_count
+	if p["vote_count"] != float64(2) {
+		t.Fatalf("AC11 vote_count 应为 2 (全量): %v", p)
 	}
-	// 把 C 挤出名册 → 票回退。
+	if p["threshold"].(float64) <= 0 {
+		t.Fatalf("AC11 threshold 应 > 0: %v", p)
+	}
+	// 把 C 挤出名册 → vote_count 不变（全量），但 Votes 数组长度变 1。
 	n.shrink(t, "article/gc")
-	if p = n.proposals(t)[0]; p["vote_count"] != float64(1) {
-		t.Fatalf("AC11 出榜后应回退到 1: %v", p)
+	votes, _ := n.proposals(t)[0]["votes"].([]any)
+	if len(votes) != 1 {
+		t.Fatalf("AC11 出榜后 Votes 应只剩 1: %v", votes)
 	}
-	// C 恢复 → 票恢复。
+	// C 恢复 → Votes 恢复。
 	if err := n.st.UpsertArticle(store.Article{
 		ItemID: "article/gc", Title: "丙", BodyMD: n.longBody("丙"),
 		ContentHash: protocol.SHA256Hex([]byte(n.longBody("丙"))), SourceRev: "rev-back",
 	}); err != nil {
 		t.Fatalf("UpsertArticle: %v", err)
 	}
-	if p = n.proposals(t)[0]; p["vote_count"] != float64(2) {
-		t.Fatalf("AC11 恢复入榜后票应恢复: %v", p)
+	plist := n.proposals(t)
+	votes, _ = plist[0]["votes"].([]any)
+	if len(votes) != 2 {
+		t.Fatalf("AC11 恢复后 Votes 应恢复: %v", votes)
+	}
+	// 简单断言：vote_count 始终为 2（全量不受名册影响）
+	if plist[0]["vote_count"] != float64(2) {
+		t.Fatalf("AC11 vote_count 应保持 2: %v", plist[0])
 	}
 }
 

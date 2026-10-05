@@ -138,8 +138,12 @@ func TestCreateProposalWritesFirstVote(t *testing.T) {
 	if len(v.Votes) != 1 || v.Votes[0] != "aa" {
 		t.Fatalf("提案人应自计 1 票: %v", v.Votes)
 	}
-	if v.Threshold != 3 || v.Status != GovernStatusPending {
-		t.Fatalf("按 proposal_id=%d 读回不对: %+v", id, v)
+	if v.Status != GovernStatusPending {
+		t.Fatalf("按 proposal_id=%d 读回状态不对: %+v", id, v)
+	}
+	// V2: 提案人自投 1 票（vote_weight=1, vote_type=approve）
+	if v.VoterCount != 1 || v.ApproveWeight != 1 || v.RejectWeight != 0 || v.NetWeight != 1 {
+		t.Fatalf("V2 动态指标不对: %+v", v)
 	}
 }
 
