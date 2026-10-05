@@ -63,7 +63,9 @@ type pageProposal struct {
 	RejectWeight   int
 	NetWeight      int
 	GovernanceLevel string // "base" | "enhanced"
-	Status         string
+	HasVoteWeight   bool   // V2: ApproveWeight > 0 || RejectWeight > 0，模板用
+	NetSign         string // V2: "zero" | "pos" | "neg"，模板用（避免 else if）
+	Status          string
 	StatusLabel    string
 	CreatedAt      string
 	Voters         []pageContributor
@@ -288,6 +290,17 @@ func governStatusLabel(status string) string {
 	}
 }
 
+func netSignOf(nw int) string {
+	switch {
+	case nw == 0:
+		return "zero"
+	case nw > 0:
+		return "pos"
+	default:
+		return "neg"
+	}
+}
+
 func itemStateLabel(state string) string {
 	switch state {
 	case "active":
@@ -438,6 +451,8 @@ func (s *Server) proposalPageRow(v store.ProposalView, names map[string]string) 
 		RejectWeight:    v.RejectWeight,
 		NetWeight:       v.NetWeight,
 		GovernanceLevel: level,
+		HasVoteWeight:   v.ApproveWeight > 0 || v.RejectWeight > 0,
+		NetSign:         netSignOf(v.NetWeight),
 		Status:          v.Status,
 		StatusLabel:     governStatusLabel(v.Status),
 		CreatedAt:       formatMillis(v.CreatedAt),
