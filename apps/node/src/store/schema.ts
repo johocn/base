@@ -15,8 +15,11 @@ export const schemaStatements: string[] = [
 \t\tcontent_hash TEXT NOT NULL,
 \t\tsqlite_table TEXT NOT NULL,
 \t\tdist_class   TEXT NOT NULL DEFAULT 'public',
-\t\tstate        TEXT NOT NULL DEFAULT 'active',
-\t\tupdated_at   TEXT NOT NULL
+\t\tstate            TEXT    NOT NULL DEFAULT 'active',
+\t\tpin_level        INTEGER NOT NULL DEFAULT 0,
+\t\tpinned_at        INTEGER,
+\t\thighlight_until  INTEGER,
+\t\tupdated_at       TEXT    NOT NULL
 \t)`,
 
   `CREATE TABLE IF NOT EXISTS articles(
@@ -176,6 +179,9 @@ export const schemaStatements: string[] = [
 \t\tvoided_at         INTEGER NOT NULL DEFAULT 0,
 \t\texecuted_result   TEXT    NOT NULL DEFAULT '',
 \t\tsource_event_id   TEXT,
+\t\tgovernance_level  TEXT    NOT NULL DEFAULT 'base',
+\t\tcategory          TEXT,
+\t\tcircle_id         TEXT,
 \t\tcontent_version   INTEGER NOT NULL DEFAULT 0,
 \t\trevoked_rev       INTEGER NOT NULL DEFAULT 0
 \t)`,
@@ -183,6 +189,9 @@ export const schemaStatements: string[] = [
   `CREATE TABLE IF NOT EXISTS govern_votes(
 \t\tproposal_id INTEGER NOT NULL,
 \t\tvoter_id    TEXT    NOT NULL,
+\t\tvote_weight INTEGER NOT NULL DEFAULT 1,
+\t\tvote_type   TEXT    NOT NULL DEFAULT 'approve',
+\t\tdate        TEXT    NOT NULL DEFAULT '',
 \t\tcreated_at  INTEGER NOT NULL,
 \t\tsource_event_id TEXT,
 \t\tPRIMARY KEY(proposal_id, voter_id)
@@ -244,6 +253,16 @@ export const schemaStatements: string[] = [
 \t\tcreated_at INTEGER NOT NULL,
 \t\tPRIMARY KEY(item_id, circle_id)
 \t)`,
+
+  // favorites：条目收藏（治理重构 V2）。主键 (id, item_id)——同一用户可收藏多条目。
+  `CREATE TABLE IF NOT EXISTS favorites(
+\t\tid         TEXT    NOT NULL,
+\t\titem_id    TEXT    NOT NULL,
+\t\tcreated_at INTEGER NOT NULL,
+\t\tPRIMARY KEY(id, item_id)
+\t)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_favorites_item ON favorites(item_id)`,
 ];
 
 // events 表的后加列（B 阶段引入）。
@@ -257,6 +276,9 @@ export const eventColumnMigrations: { column: string; ddl: string }[] = [
 export const itemColumnMigrations: { column: string; ddl: string }[] = [
   { column: "author_id", ddl: `ALTER TABLE items ADD COLUMN author_id TEXT NOT NULL DEFAULT ''` },
   { column: "author_sig", ddl: `ALTER TABLE items ADD COLUMN author_sig TEXT NOT NULL DEFAULT ''` },
+  { column: "pin_level", ddl: `ALTER TABLE items ADD COLUMN pin_level INTEGER NOT NULL DEFAULT 0` },
+  { column: "pinned_at", ddl: `ALTER TABLE items ADD COLUMN pinned_at INTEGER` },
+  { column: "highlight_until", ddl: `ALTER TABLE items ADD COLUMN highlight_until INTEGER` },
 ];
 
 // groups 表的后加列（#33 册子 §3.8）。
@@ -293,6 +315,38 @@ export const governColumnMigrations: { table: string; column: string; ddl: strin
     table: "govern_proposals",
     column: "links_json",
     ddl: `ALTER TABLE govern_proposals ADD COLUMN links_json TEXT NOT NULL DEFAULT ''`,
+  },
+  // V2: govern_votes 补 vote_weight/vote_type/date
+  {
+    table: "govern_votes",
+    column: "vote_weight",
+    ddl: `ALTER TABLE govern_votes ADD COLUMN vote_weight INTEGER NOT NULL DEFAULT 1`,
+  },
+  {
+    table: "govern_votes",
+    column: "vote_type",
+    ddl: `ALTER TABLE govern_votes ADD COLUMN vote_type TEXT NOT NULL DEFAULT 'approve'`,
+  },
+  {
+    table: "govern_votes",
+    column: "date",
+    ddl: `ALTER TABLE govern_votes ADD COLUMN date TEXT NOT NULL DEFAULT ''`,
+  },
+  // V2: govern_proposals 补 governance_level/category/circle_id
+  {
+    table: "govern_proposals",
+    column: "governance_level",
+    ddl: `ALTER TABLE govern_proposals ADD COLUMN governance_level TEXT NOT NULL DEFAULT 'base'`,
+  },
+  {
+    table: "govern_proposals",
+    column: "category",
+    ddl: `ALTER TABLE govern_proposals ADD COLUMN category TEXT`,
+  },
+  {
+    table: "govern_proposals",
+    column: "circle_id",
+    ddl: `ALTER TABLE govern_proposals ADD COLUMN circle_id TEXT`,
   },
 ];
 
@@ -362,5 +416,12 @@ export function migrate(db: HostDb): void {
     } catch (err) {
       throw new Error(`store: migrate ${m.table}.${m.column}: ${String(err)}`);
     }
+  }
+  // govern_votes V2 新索引（idx_gv_voter_date_weight / idx_gv_proposal_type）必须等 vote_weight/vote_type/date 三列补完后建。
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_gv_voter_date_weight ON govern_votes(voter_id, date, vote_weight)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_gv_proposal_type ON govern_votes(proposal_id, vote_type)`);
+  } catch (err) {
+    throw new Error(`store: migrate govern_votes v2 index: ${String(err)}`);
   }
 }
