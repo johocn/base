@@ -21,6 +21,7 @@ var schemaStatements = []string{
 		content_hash TEXT NOT NULL,
 		sqlite_table TEXT NOT NULL,
 		dist_class   TEXT NOT NULL DEFAULT 'public',
+		instructor   TEXT NOT NULL DEFAULT '',
 		state              TEXT    NOT NULL DEFAULT 'active',
 		pin_level          INTEGER NOT NULL DEFAULT 0,
 		pinned_at          INTEGER,
@@ -198,6 +199,9 @@ var schemaStatements = []string{
 		title             TEXT    NOT NULL DEFAULT '',
 		body_md           TEXT    NOT NULL DEFAULT '',
 		links_json        TEXT    NOT NULL DEFAULT '', -- #37 册子 §3.5：tag 型 edit 的载荷（links[] 的规范 JSON）
+		tags_json         TEXT    NOT NULL DEFAULT '', -- Spec v2 §3: edit_tags 载荷（items.tags_json 的全量覆盖）
+		dist_class        TEXT    NOT NULL DEFAULT '', -- Spec v2 §3: edit_category 载荷
+		instructor        TEXT    NOT NULL DEFAULT '', -- Spec v2 §3: edit_instructor 载荷
 		base_content_hash TEXT    NOT NULL,
 		created_at        INTEGER NOT NULL,
 		executed_at       INTEGER NOT NULL DEFAULT 0,

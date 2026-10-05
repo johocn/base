@@ -51,7 +51,10 @@ type Item struct {
 	ContentHash string
 	SQLiteTable string
 	DistClass   string
+	Instructor  string // Spec v2 §3: edit_instructor 写入
 	State       string
+	PinLevel    int    // Spec v2 §3: highlight=1 pin=2 recommend=3 feature=4
+	PinnedAt    int64  // Spec v2 §3: setPinLevelTx 写入
 	TagsJSON    string
 	UpdatedAt   string
 	// 归属缓存（治理册 §3.1）：权威在签名里，这两列是「入库时已验签通过」的本地缓存。
@@ -423,7 +426,7 @@ func (s *Store) GetBlobBytes(blobID string) ([]byte, error) {
 
 // GetItem 读取目录条目。
 func (s *Store) GetItem(itemID string) (Item, bool, error) {
-	row := s.db.QueryRow(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,tags_json,updated_at,author_id,author_sig
+	row := s.db.QueryRow(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,instructor,state,pin_level,COALESCE(pinned_at,0),tags_json,updated_at,author_id,author_sig
 		FROM items WHERE item_id=?`, itemID)
 	it, err := scanItem(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -437,7 +440,7 @@ func (s *Store) GetItem(itemID string) (Item, bool, error) {
 
 // ListItems 按 item_id 升序返回指定状态的条目；state 为空表示全部。
 func (s *Store) ListItems(state string) ([]Item, error) {
-	q := `SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,tags_json,updated_at,author_id,author_sig FROM items`
+	q := `SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,instructor,state,pin_level,COALESCE(pinned_at,0),tags_json,updated_at,author_id,author_sig FROM items`
 	args := []any{}
 	if state != "" {
 		q += ` WHERE state=?`
@@ -457,7 +460,7 @@ func (s *Store) ListItemsPage(cursor string, limit int) ([]Item, string, error) 
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := s.db.Query(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,tags_json,updated_at,author_id,author_sig
+	rows, err := s.db.Query(`SELECT item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,instructor,state,pin_level,COALESCE(pinned_at,0),tags_json,updated_at,author_id,author_sig
 		FROM items WHERE item_id > ? ORDER BY item_id ASC LIMIT ?`, cursor, limit)
 	if err != nil {
 		return nil, "", err
@@ -477,7 +480,8 @@ func (s *Store) ListItemsPage(cursor string, limit int) ([]Item, string, error) 
 func scanItem(row interface{ Scan(...any) error }) (Item, error) {
 	var it Item
 	err := row.Scan(&it.ItemID, &it.Source, &it.Type, &it.Title, &it.SourceRev, &it.ContentHash,
-		&it.SQLiteTable, &it.DistClass, &it.State, &it.TagsJSON, &it.UpdatedAt, &it.AuthorID, &it.AuthorSig)
+		&it.SQLiteTable, &it.DistClass, &it.Instructor, &it.State, &it.PinLevel, &it.PinnedAt,
+		&it.TagsJSON, &it.UpdatedAt, &it.AuthorID, &it.AuthorSig)
 	return it, err
 }
 

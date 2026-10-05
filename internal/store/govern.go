@@ -12,11 +12,24 @@ import (
 	"github.com/johocn/base/internal/protocol"
 )
 
-// 三个受审动作（册子 §2.1）。门槛是**文档级常量**，校准走「改册子 + 改常量」。
+// 四个受审动作（册子 §2.1）。门槛是**文档级常量**，校准走「改册子 + 改常量」。
 const (
 	GovernActionRemove = "remove"
 	GovernActionEdit   = "edit"
 	GovernActionRevive = "revive"
+
+	// Spec v2 §3 新增：细粒度治理动作（在原有 edit 基础上拆 + 新类型）
+	GovernActionEditTitle     = "edit_title"      // 改标题（只改 items.title，保留归属）
+	GovernActionEditBody      = "edit_body"       // 改正文（改 articles.body_md，清署 items.author_id）
+	GovernActionEditCategory  = "edit_category"   // 改分类（items.dist_class）
+	GovernActionEditTags      = "edit_tags"       // 改标签（items.tags_json 全量覆盖）
+	GovernActionEditInstructor = "edit_instructor" // 改讲师（items.instructor）
+
+	// Spec v2 §3 新增：pin_level 系列（治理层给条目分级，enhanced 门槛）
+	GovernActionHighlight = "highlight" // pin_level=1 高亮
+	GovernActionPin       = "pin"       // pin_level=2 置顶
+	GovernActionRecommend = "recommend" // pin_level=3 推荐
+	GovernActionFeature   = "feature"   // pin_level=4 精华
 
 	governRemoveThreshold  = 3
 	governDefaultThreshold = 2
@@ -133,9 +146,12 @@ type Proposal struct {
 	ItemID          string
 	ProposerID      string
 	Reason          string
-	Title           string // 仅 Action == GovernActionEdit 时非空
-	BodyMD          string // 仅 Action == GovernActionEdit 时非空
+	Title           string // 仅 Action == GovernActionEditTitle / GovernActionEdit 时非空
+	BodyMD          string // 仅 Action == GovernActionEditBody / GovernActionEdit 时非空
 	LinksJSON       string // 仅 tag 型 Action == GovernActionEdit 时非空（#37 册子 §3.5）
+	TagsJSON        string // Spec v2 §3: edit_tags 载荷（items.tags_json 全量覆盖）
+	DistClass       string // Spec v2 §3: edit_category 载荷
+	Instructor      string // Spec v2 §3: edit_instructor 载荷
 	BaseContentHash string
 	CreatedAt       int64
 	ExecutedAt      int64
@@ -163,7 +179,7 @@ type ProposalView struct {
 
 // proposalColumns 的列顺序必须与 scanProposal 的 Scan 参数一一对应。
 // source_event_id 可空，故 COALESCE 成空串读回（NULL = 老路径本地写入）。
-const proposalColumns = `proposal_id,action,item_id,proposer_id,reason,title,body_md,COALESCE(links_json,''),base_content_hash,created_at,executed_at,voided_at,executed_result,COALESCE(source_event_id,''),content_version,revoked_rev,COALESCE(governance_level,'base'),COALESCE(category,''),COALESCE(circle_id,'')`
+const proposalColumns = `proposal_id,action,item_id,proposer_id,reason,title,body_md,COALESCE(links_json,''),COALESCE(tags_json,''),COALESCE(dist_class,''),COALESCE(instructor,''),base_content_hash,created_at,executed_at,voided_at,executed_result,COALESCE(source_event_id,''),content_version,revoked_rev,COALESCE(governance_level,'base'),COALESCE(category,''),COALESCE(circle_id,'')`
 
 // rowScanner 抽象 *sql.Row 与 *sql.Rows 的 Scan。
 type rowScanner interface{ Scan(dest ...any) error }
@@ -171,7 +187,7 @@ type rowScanner interface{ Scan(dest ...any) error }
 func scanProposal(sc rowScanner) (Proposal, error) {
 	var p Proposal
 	err := sc.Scan(&p.ProposalID, &p.Action, &p.ItemID, &p.ProposerID, &p.Reason, &p.Title, &p.BodyMD,
-		&p.LinksJSON, &p.BaseContentHash, &p.CreatedAt, &p.ExecutedAt, &p.VoidedAt, &p.ExecutedResult,
+		&p.LinksJSON, &p.TagsJSON, &p.DistClass, &p.Instructor, &p.BaseContentHash, &p.CreatedAt, &p.ExecutedAt, &p.VoidedAt, &p.ExecutedResult,
 		&p.SourceEventID, &p.ContentVersion, &p.RevokedRev,
 		&p.GovernanceLevel, &p.Category, &p.CircleID)
 	return p, err
@@ -329,10 +345,12 @@ func (s *Store) CreateProposal(p Proposal) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,base_content_hash,created_at,content_version,revoked_rev)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+	res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,tags_json,dist_class,instructor,base_content_hash,created_at,content_version,revoked_rev,governance_level,category,circle_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.Action, p.ItemID, p.ProposerID, p.Reason, p.Title, p.BodyMD, p.LinksJSON,
-		p.BaseContentHash, p.CreatedAt, cv, rv)
+		p.TagsJSON, p.DistClass, p.Instructor,
+		p.BaseContentHash, p.CreatedAt, cv, rv,
+		p.GovernanceLevel, p.Category, p.CircleID)
 	if err != nil {
 		return 0, fmt.Errorf("store: 写提案: %w", err)
 	}
@@ -370,10 +388,12 @@ func (s *Store) CreateDirectoryProposal(p Proposal, autoApprove bool) (int64, st
 	if err != nil {
 		return 0, "", err
 	}
-	res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,base_content_hash,created_at,content_version,revoked_rev)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+	res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,tags_json,dist_class,instructor,base_content_hash,created_at,content_version,revoked_rev,governance_level,category,circle_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.Action, p.ItemID, p.ProposerID, p.Reason, p.Title, p.BodyMD, p.LinksJSON,
-		p.BaseContentHash, p.CreatedAt, cv, rv)
+		p.TagsJSON, p.DistClass, p.Instructor,
+		p.BaseContentHash, p.CreatedAt, cv, rv,
+		p.GovernanceLevel, p.Category, p.CircleID)
 	if err != nil {
 		return 0, "", fmt.Errorf("store: 写目录提案: %w", err)
 	}
@@ -648,9 +668,84 @@ func governApplyTx(tx *sql.Tx, st *Store, p Proposal) (string, error) {
 			return "", err
 		}
 		return directoryExecutedResult, nil
+
+	// ============ Spec v2 §3 新增治理动作 ============
+	case GovernActionEditTitle:
+		// 只改 items.title，正文未变 → content_hash / 归属两列原样保留。
+		if _, err := tx.Exec(`UPDATE items SET title=? WHERE item_id=?`, p.Title, p.ItemID); err != nil {
+			return "", fmt.Errorf("store: edit_title %s: %w", p.ItemID, err)
+		}
+		return "edited_title", nil
+
+	case GovernActionEditBody:
+		// 先查载体，只对 article 生效；video/quiz 等载体没有 body_md 可改。
+		var sqliteTable string
+		if err := tx.QueryRow(`SELECT sqlite_table FROM items WHERE item_id=?`, p.ItemID).Scan(&sqliteTable); err != nil {
+			return "", fmt.Errorf("store: 读 items 载体 %s: %w", p.ItemID, err)
+		}
+		if sqliteTable != "articles" {
+			return "", fmt.Errorf("store: edit_body 仅支持 article 载体，不支持 %s", sqliteTable)
+		}
+		hash := protocol.SHA256Hex([]byte(p.BodyMD))
+		bodyEnc, err := st.encText(p.BodyMD)
+		if err != nil {
+			return "", fmt.Errorf("store: 加密改写正文 %s: %w", p.ItemID, err)
+		}
+		if _, err := tx.Exec(`UPDATE articles SET body_md=?,content_hash=?,source_rev=? WHERE item_id=?`,
+			bodyEnc, hash, hash[:16], p.ItemID); err != nil {
+			return "", fmt.Errorf("store: edit_body articles %s: %w", p.ItemID, err)
+		}
+		// 正文改动 → 清署（与 GovernActionEdit 改正文同逻辑，册子 §4.2 的数学推论）。
+		if _, err := tx.Exec(`UPDATE items SET content_hash=?,source_rev=?,updated_at=?,author_id='',author_sig='' WHERE item_id=?`,
+			hash, hash[:16], nowUTC(), p.ItemID); err != nil {
+			return "", fmt.Errorf("store: edit_body items %s: %w", p.ItemID, err)
+		}
+		return "edited_body_author_cleared", nil
+
+	case GovernActionEditCategory:
+		if _, err := tx.Exec(`UPDATE items SET dist_class=? WHERE item_id=?`, p.DistClass, p.ItemID); err != nil {
+			return "", fmt.Errorf("store: edit_category %s: %w", p.ItemID, err)
+		}
+		return "edited_category", nil
+
+	case GovernActionEditTags:
+		if _, err := tx.Exec(`UPDATE items SET tags_json=? WHERE item_id=?`, p.TagsJSON, p.ItemID); err != nil {
+			return "", fmt.Errorf("store: edit_tags %s: %w", p.ItemID, err)
+		}
+		return "edited_tags", nil
+
+	case GovernActionEditInstructor:
+		if _, err := tx.Exec(`UPDATE items SET instructor=? WHERE item_id=?`, p.Instructor, p.ItemID); err != nil {
+			return "", fmt.Errorf("store: edit_instructor %s: %w", p.ItemID, err)
+		}
+		return "edited_instructor", nil
+
+	case GovernActionHighlight:
+		return setPinLevelTx(tx, p.ItemID, 1)
+	case GovernActionPin:
+		return setPinLevelTx(tx, p.ItemID, 2)
+	case GovernActionRecommend:
+		return setPinLevelTx(tx, p.ItemID, 3)
+	case GovernActionFeature:
+		return setPinLevelTx(tx, p.ItemID, 4)
+
 	default:
 		return "", fmt.Errorf("store: 不支持的治理动作 %q", p.Action)
 	}
+}
+
+// setPinLevelTx 在事务内给条目设置 pin_level + pinned_at。
+func setPinLevelTx(tx *sql.Tx, itemID string, level int) (string, error) {
+	now := time.Now().UnixMilli()
+	res, err := tx.Exec(`UPDATE items SET pin_level=?,pinned_at=? WHERE item_id=?`, level, now, itemID)
+	if err != nil {
+		return "", fmt.Errorf("store: set pin_level %d: %w", level, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return "", sql.ErrNoRows
+	}
+	return fmt.Sprintf("pin_level_%d", level), nil
 }
 
 // editItemTx 执行改写（册子 §4.2）：全量覆盖 title / body_md，按 content_hash 是否变化决定归属后果。

@@ -39,7 +39,7 @@ func MigrateSchemaV2(db *sql.DB) error {
 		}
 	}
 
-	// govern_proposals: governance_level / category / circle_id
+	// govern_proposals: governance_level / category / circle_id / dist_class / instructor / tags_json
 	{
 		cols, err := tableColumns(db, "govern_proposals")
 		if err != nil {
@@ -60,9 +60,25 @@ func MigrateSchemaV2(db *sql.DB) error {
 				return fmt.Errorf("migrate govern_proposals.circle_id: %w", err)
 			}
 		}
+		// Spec v2 §3 新增载荷列
+		if !cols["dist_class"] {
+			if _, err := db.Exec(`ALTER TABLE govern_proposals ADD COLUMN dist_class TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("migrate govern_proposals.dist_class: %w", err)
+			}
+		}
+		if !cols["instructor"] {
+			if _, err := db.Exec(`ALTER TABLE govern_proposals ADD COLUMN instructor TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("migrate govern_proposals.instructor: %w", err)
+			}
+		}
+		if !cols["tags_json"] {
+			if _, err := db.Exec(`ALTER TABLE govern_proposals ADD COLUMN tags_json TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("migrate govern_proposals.tags_json: %w", err)
+			}
+		}
 	}
 
-	// items: pin_level / pinned_at / highlight_until
+	// items: pin_level / pinned_at / highlight_until / instructor
 	{
 		cols, err := tableColumns(db, "items")
 		if err != nil {
@@ -81,6 +97,11 @@ func MigrateSchemaV2(db *sql.DB) error {
 		if !cols["highlight_until"] {
 			if _, err := db.Exec(`ALTER TABLE items ADD COLUMN highlight_until INTEGER`); err != nil {
 				return fmt.Errorf("migrate items.highlight_until: %w", err)
+			}
+		}
+		if !cols["instructor"] {
+			if _, err := db.Exec(`ALTER TABLE items ADD COLUMN instructor TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("migrate items.instructor: %w", err)
 			}
 		}
 	}

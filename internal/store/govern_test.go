@@ -828,3 +828,193 @@ func TestAddVoteV2_NormalUser_ForcedToOneWeight(t *testing.T) {
 		t.Fatalf("approve 票权总和应为 2（proposer + NORMAL_USER 各 1），实际 %d", approveSum)
 	}
 }
+
+// ============ Task 6: Spec v2 新增治理动作 happy path ============
+
+// setupEffectiveEnv 用 V2 投票管线让一个 base 门槛提案生效（投到 voter_count >= quorum 且 net>0）。
+func setupEffectiveEnv(t *testing.T, st *Store, pid int64, voterIDs []string) {
+	t.Helper()
+	for _, vid := range voterIDs {
+		if _, err := st.AddVoteV2(pid, vid, 1, "approve"); err != nil {
+			t.Fatalf("AddVoteV2(%s): %v", vid, err)
+		}
+	}
+}
+
+func TestTask6_EditTitle(t *testing.T) {
+	st, ids := setupVoterEnv(t, 5) // m=5，threshold_base=11，quorum=5
+	sub := govItem(t, st, "article/et1", "旧标题", "甲")
+	pid, err := st.CreateProposal(Proposal{
+		Action: GovernActionEditTitle, ItemID: "article/et1", ProposerID: ids[0],
+		Title: "新标题_V2", BaseContentHash: sub.ContentHash, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+	// 看一下初始 proposal 状态
+	p0, _, _ := st.GetProposal(pid)
+	t.Logf("初始提案: executed_at=%d voided_at=%d BaseContentHash=%q", p0.ExecutedAt, p0.VoidedAt, p0.BaseContentHash)
+	// 看一下 items 的 state / content_hash
+	var state, hash string
+	st.db.QueryRow(`SELECT state,content_hash FROM items WHERE item_id='article/et1'`).Scan(&state, &hash)
+	t.Logf("items: state=%q hash=%q (sub.ContentHash=%q)", state, hash, sub.ContentHash)
+	for _, vid := range ids[1:] {
+		res, err := st.AddVoteV2(pid, vid, 1, "approve")
+		if err != nil {
+			t.Fatalf("AddVoteV2(%s): %v", vid, err)
+		}
+		t.Logf("投 %s: voter_count=%d quorum=%d net_weight=%d status=%s", vid, res.VoterCount, res.Quorum, res.NetWeight, res.Status)
+	}
+	it, _, _ := st.GetItem("article/et1")
+	p, _, _ := st.GetProposal(pid)
+	t.Logf("最终: item.Title=%q item.PinLevel=%d item.DistClass=%q proposal.executed_at=%d voided_at=%d executed_result=%q status=%s",
+		it.Title, it.PinLevel, it.DistClass, p.ExecutedAt, p.VoidedAt, p.ExecutedResult, ProposalStatus(p.ExecutedAt, p.VoidedAt))
+	// 直接 SQL 查 items
+	var rawTitle, rawDist string
+	var rawPin int
+	st.db.QueryRow(`SELECT title, pin_level, dist_class FROM items WHERE item_id='article/et1'`).Scan(&rawTitle, &rawPin, &rawDist)
+	t.Logf("SQL直查 items: title=%q pin_level=%d dist_class=%q", rawTitle, rawPin, rawDist)
+	if it.Title != "新标题_V2" {
+		t.Fatalf("edit_title 后标题应变: got %q", it.Title)
+	}
+	if it.ContentHash != sub.ContentHash {
+		t.Fatalf("edit_title 不改正文 → content_hash 应不变: got %q", it.ContentHash)
+	}
+	if it.AuthorID != sub.AuthorID {
+		t.Fatalf("edit_title 保留归属 → author_id 应不变: got %q", it.AuthorID)
+	}
+	if p.ExecutedResult != "edited_title" {
+		t.Fatalf("executed_result=%q want edited_title", p.ExecutedResult)
+	}
+}
+
+func TestTask6_EditBody_ArticleClearsAuthorship(t *testing.T) {
+	st, ids := setupVoterEnv(t, 5)
+	sub := govItem(t, st, "article/eb1", "标题", "乙")
+	newBody := govLongBody("新")
+	pid, err := st.CreateProposal(Proposal{
+		Action: GovernActionEditBody, ItemID: "article/eb1", ProposerID: ids[0],
+		BodyMD: newBody, BaseContentHash: sub.ContentHash, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+	setupEffectiveEnv(t, st, pid, ids[1:])
+	it, _, _ := st.GetItem("article/eb1")
+	wantHash := protocol.SHA256Hex([]byte(newBody))
+	if it.ContentHash != wantHash {
+		t.Fatalf("edit_body content_hash 应重算: got %q want %q", it.ContentHash, wantHash)
+	}
+	if it.AuthorID != "" || it.AuthorSig != "" {
+		t.Fatalf("edit_body 清署: got author_id=%q author_sig=%q", it.AuthorID, it.AuthorSig)
+	}
+	p, _, _ := st.GetProposal(pid)
+	if p.ExecutedResult != "edited_body_author_cleared" {
+		t.Fatalf("executed_result=%q", p.ExecutedResult)
+	}
+}
+
+func TestTask6_EditCategory(t *testing.T) {
+	st, ids := setupVoterEnv(t, 5)
+	sub := govItem(t, st, "article/ec1", "标题", "丙")
+	pid, err := st.CreateProposal(Proposal{
+		Action: GovernActionEditCategory, ItemID: "article/ec1", ProposerID: ids[0],
+		DistClass: "featured", BaseContentHash: sub.ContentHash, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+	setupEffectiveEnv(t, st, pid, ids[1:])
+	it, _, _ := st.GetItem("article/ec1")
+	if it.DistClass != "featured" {
+		t.Fatalf("dist_class 应为 featured: got %q", it.DistClass)
+	}
+	p, _, _ := st.GetProposal(pid)
+	if p.ExecutedResult != "edited_category" {
+		t.Fatalf("executed_result=%q", p.ExecutedResult)
+	}
+}
+
+func TestTask6_EditTags(t *testing.T) {
+	st, ids := setupVoterEnv(t, 5)
+	sub := govItem(t, st, "article/etg1", "标题", "丁")
+	newTags := `["governance","v2"]`
+	pid, err := st.CreateProposal(Proposal{
+		Action: GovernActionEditTags, ItemID: "article/etg1", ProposerID: ids[0],
+		TagsJSON: newTags, BaseContentHash: sub.ContentHash, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+	setupEffectiveEnv(t, st, pid, ids[1:])
+	it, _, _ := st.GetItem("article/etg1")
+	if it.TagsJSON != newTags {
+		t.Fatalf("tags_json 应为新值: got %q", it.TagsJSON)
+	}
+	p, _, _ := st.GetProposal(pid)
+	if p.ExecutedResult != "edited_tags" {
+		t.Fatalf("executed_result=%q", p.ExecutedResult)
+	}
+}
+
+func TestTask6_EditInstructor(t *testing.T) {
+	st, ids := setupVoterEnv(t, 5)
+	sub := govItem(t, st, "article/ei1", "标题", "戊")
+	pid, err := st.CreateProposal(Proposal{
+		Action: GovernActionEditInstructor, ItemID: "article/ei1", ProposerID: ids[0],
+		Instructor: "Dr. V2", BaseContentHash: sub.ContentHash, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+	setupEffectiveEnv(t, st, pid, ids[1:])
+	var got string
+	if err := st.db.QueryRow(`SELECT instructor FROM items WHERE item_id=?`, "article/ei1").Scan(&got); err != nil {
+		t.Fatalf("读 instructor: %v", err)
+	}
+	if got != "Dr. V2" {
+		t.Fatalf("instructor 应为 Dr. V2: got %q", got)
+	}
+	p, _, _ := st.GetProposal(pid)
+	if p.ExecutedResult != "edited_instructor" {
+		t.Fatalf("executed_result=%q", p.ExecutedResult)
+	}
+}
+
+func TestTask6_PinLevels(t *testing.T) {
+	levels := []struct {
+		action string
+		level  int
+		want   string
+	}{
+		{GovernActionHighlight, 1, "pin_level_1"},
+		{GovernActionPin, 2, "pin_level_2"},
+		{GovernActionRecommend, 3, "pin_level_3"},
+		{GovernActionFeature, 4, "pin_level_4"},
+	}
+	for _, tc := range levels {
+		t.Run(tc.action, func(t *testing.T) {
+			st, ids := setupVoterEnv(t, 5)
+			sub := govItem(t, st, "article/pin1_"+tc.action, "标题", "己")
+			pid, err := st.CreateProposal(Proposal{
+				Action: tc.action, ItemID: "article/pin1_" + tc.action, ProposerID: ids[0],
+				BaseContentHash: sub.ContentHash, CreatedAt: time.Now().UnixMilli(),
+			})
+			if err != nil {
+				t.Fatalf("CreateProposal: %v", err)
+			}
+			setupEffectiveEnv(t, st, pid, ids[1:])
+			it, _, _ := st.GetItem("article/pin1_" + tc.action)
+			if it.PinLevel != tc.level {
+				t.Fatalf("pin_level=%d want %d", it.PinLevel, tc.level)
+			}
+			if it.PinnedAt == 0 {
+				t.Fatal("pinned_at 应为非零")
+			}
+			p, _, _ := st.GetProposal(pid)
+			if p.ExecutedResult != tc.want {
+				t.Fatalf("executed_result=%q want %q", p.ExecutedResult, tc.want)
+			}
+		})
+	}
+}
