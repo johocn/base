@@ -2,8 +2,10 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/johocn/base/internal/protocol"
 )
@@ -553,5 +555,276 @@ func TestAddVoteEmptyRosterDegrades(t *testing.T) {
 	}
 	if it, _, _ := st.GetItem("article/gd1"); it.State != "active" {
 		t.Fatalf("降级时不得动目标: %s", it.State)
+	}
+}
+
+// ============ V2 测试辅助函数 ============
+
+// setupIdentities 直接用 SQL 往 identities 表插 n 个活跃身份（last_seen_at = now）。
+func setupIdentities(t *testing.T, st *Store, n int) {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("user_%d", i)
+		_, err := st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`,
+			id, "ed25519", "pubkey_"+id, now, now)
+		if err != nil {
+			t.Fatalf("setupIdentities: %v", err)
+		}
+	}
+}
+
+// setupInactiveIdentities 插入 n 个身份但设为不活跃（last_seen_at 很久以前），不计入 m。
+func setupInactiveIdentities(t *testing.T, st *Store, n int, prefix string) {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	old := now - 8*24*60*60*1000 // 8 天前，跨过 7 天活跃窗口
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("%s_%d", prefix, i)
+		st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`,
+			id, "ed25519", "pubkey_"+id, now, old)
+	}
+}
+
+// setupProgress 直接用 SQL 往 progress 表插 count 条去重学习记录（item_id=itemID）。
+func setupProgress(t *testing.T, st *Store, itemID string, voterIDs []string) {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	for _, vid := range voterIDs {
+		st.db.Exec(`INSERT OR IGNORE INTO progress(id,item_id,position,done,day,updated_at,event_id)
+			VALUES(?,?,?,?,?,?,?)`, vid, itemID, 0, 1, time.Now().Format("2006-01-02"), now, "evt_"+vid)
+	}
+}
+
+// setupFavorites 直接用 SQL 往 favorites 表插 count 条收藏记录。
+func setupFavorites(t *testing.T, st *Store, itemID string, voterIDs []string) {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	for _, vid := range voterIDs {
+		st.db.Exec(`INSERT OR IGNORE INTO favorites(id,item_id,created_at) VALUES(?,?,?)`,
+			vid, itemID, now)
+	}
+}
+
+// setupVoterEnv 创建带 m 个活跃身份的测试 store。返回 store + 身份 id 列表。
+func setupVoterEnv(t *testing.T, m int) (*Store, []string) {
+	t.Helper()
+	st := openTemp(t)
+	ids := make([]string, m)
+	now := time.Now().UnixMilli()
+	for i := 0; i < m; i++ {
+		ids[i] = fmt.Sprintf("voter_%d", i)
+		_, err := st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`,
+			ids[i], "ed25519", "pubkey_"+ids[i], now, now)
+		if err != nil {
+			t.Fatalf("setupVoterEnv: %v", err)
+		}
+	}
+	return st, ids
+}
+
+// setupVoterEnvWithContributor 创建带指定贡献者的测试 store。
+// 贡献者通过成为 identities 表前 10 个注册身份之一而自动进入 DeriveContributionRoster。
+func setupVoterEnvWithContributor(t *testing.T, contributorID string) *Store {
+	t.Helper()
+	st := openTemp(t)
+	now := time.Now().UnixMilli()
+	// 先插入贡献者（确保最早注册，被 roster 补齐逻辑捕获）
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`,
+		contributorID, "ed25519", "pubkey_"+contributorID, now, now)
+	// 再插入 9 个身份凑够 10 个
+	for i := 0; i < 9; i++ {
+		id := fmt.Sprintf("other_%d", i)
+		st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`,
+			id, "ed25519", "pubkey_"+id, now, now)
+	}
+	return st
+}
+
+// createHotProposal 创建热门条目的 remove 提案：目标条目有 progress=12 条、favorites=9 条（均排除 proposer）。
+// 关键：progress/favorites 的身份必须是不活跃的（last_seen_at 很久以前），否则会被计入 m 导致 quorum 过高。
+func createHotProposal(t *testing.T, st *Store, proposerID string) int64 {
+	t.Helper()
+	// 创建一个 article 条目（走 UpsertSubmission）
+	sub := govItem(t, st, "article/hot1", "热门标题", "热")
+	// 用不活跃身份插 12 个 progress（不计入 m）
+	setupInactiveIdentities(t, st, 12, "prog_user")
+	pIDs := make([]string, 12)
+	for i := 0; i < 12; i++ {
+		pIDs[i] = fmt.Sprintf("prog_user_%d", i)
+	}
+	setupProgress(t, st, "article/hot1", pIDs)
+	// 用不活跃身份插 9 个 favorites
+	setupInactiveIdentities(t, st, 9, "fav_user")
+	fIDs := make([]string, 9)
+	for i := 0; i < 9; i++ {
+		fIDs[i] = fmt.Sprintf("fav_user_%d", i)
+	}
+	setupFavorites(t, st, "article/hot1", fIDs)
+
+	id, err := st.CreateProposal(Proposal{
+		Action: GovernActionRemove, ItemID: "article/hot1", ProposerID: proposerID,
+		Reason: "不合规", BaseContentHash: sub.ContentHash, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal(hot): %v", err)
+	}
+	return id
+}
+
+// createSimpleProposal 创建一个简单的 remove 提案（无 progress/favorites）。返回 proposal_id 和真实的 content_hash。
+func createSimpleProposal(t *testing.T, st *Store, proposerID, itemID string) (int64, string) {
+	t.Helper()
+	sub := signedSubmission(t, subSeedA, itemID, "标题", govLongBody("简"))
+	if _, err := st.UpsertSubmission(sub); err != nil {
+		t.Fatalf("UpsertSubmission(%s): %v", itemID, err)
+	}
+	id, err := st.CreateProposal(Proposal{
+		Action: GovernActionRemove, ItemID: itemID, ProposerID: proposerID,
+		Reason: "测试", BaseContentHash: sub.ContentHash, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal(simple): %v", err)
+	}
+	return id, sub.ContentHash
+}
+
+// ============ V2 投票管线测试 ============
+
+func TestAddVoteV2_QuorumNotMet_StayPending(t *testing.T) {
+	st, ids := setupVoterEnv(t, 5)
+	// ids[0] = "voter_0" 作为 proposer（CreateProposal 会为他自投 1 票）
+	pid := createHotProposal(t, st, ids[0])
+	// proposer 已投，再投 ids[1], ids[2], ids[3] → voter_count=4 < quorum=5
+	for i := 1; i <= 3; i++ {
+		if _, err := st.AddVoteV2(pid, ids[i], 1, "approve"); err != nil {
+			t.Fatalf("AddVoteV2 %s: %v", ids[i], err)
+		}
+	}
+	// 再投 ids[4] → voter_count=5 == quorum，净票权 > 0 → effective
+	result, err := st.AddVoteV2(pid, ids[4], 1, "approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.VoterCount != 5 {
+		t.Fatalf("voter_count 应为 5，实际 %d", result.VoterCount)
+	}
+	if result.Status != "effective" {
+		t.Fatalf("quorum=5 达成 + 净票权>0 应 effective，实际 %s", result.Status)
+	}
+}
+
+func TestAddVoteV2_NetNegative_Void(t *testing.T) {
+	st, ids := setupVoterEnv(t, 5)
+	pid := createHotProposal(t, st, ids[0])
+	// proposer(ids[0]) 已投 approve(1)。再投 ids[1]=approve + ids[2..3]=reject + ids[4]=reject
+	if _, err := st.AddVoteV2(pid, ids[1], 1, "approve"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if _, err := st.AddVoteV2(pid, ids[2], 1, "reject"); err != nil {
+		t.Fatalf("reject 2: %v", err)
+	}
+	if _, err := st.AddVoteV2(pid, ids[3], 1, "reject"); err != nil {
+		t.Fatalf("reject 3: %v", err)
+	}
+	// 最后 ids[4] 投 reject → voter_count=5 达到 quorum
+	result, err := st.AddVoteV2(pid, ids[4], 1, "reject")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// approve=2 (proposer + ids[1]), reject=3 (ids[2..4]) → net=2-3=-1
+	if result.NetWeight != -1 {
+		t.Fatalf("net_weight 应为 -1，实际 %d", result.NetWeight)
+	}
+	if result.Status != "void" {
+		t.Fatalf("净票权=-1 应 void，实际 %s", result.Status)
+	}
+}
+
+func TestAddVoteV2_ContributorQuota_Exceeded(t *testing.T) {
+	st := openTemp(t)
+	now := time.Now().UnixMilli()
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "CONTRIB_1", "ed25519", "k1", now, now)
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "other_0", "ed25519", "k0", now, now)
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "other_1", "ed25519", "k1a", now, now)
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "other_2", "ed25519", "k2", now, now)
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "other_3", "ed25519", "k3", now, now)
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "other_4", "ed25519", "k4", now, now)
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "other_5", "ed25519", "k5", now, now)
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "other_6", "ed25519", "k6", now, now)
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "other_7", "ed25519", "k7", now, now)
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "other_8", "ed25519", "k8", now, now)
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`, "PROPOSER", "ed25519", "kp", now, now)
+	// 跨提案投 2 权 × 10 次（每个提案投 2 权 → 单条目累计不触发，只触发每日配额）
+	for i := 0; i < 10; i++ {
+		sub := signedSubmission(t, subSeedA, fmt.Sprintf("item_q1_%d", i), "标题", govLongBody("简"))
+		if _, err := st.UpsertSubmission(sub); err != nil {
+			t.Fatal(err)
+		}
+		pid, err := st.CreateProposal(Proposal{
+			Action: GovernActionRemove, ItemID: fmt.Sprintf("item_q1_%d", i), ProposerID: "PROPOSER",
+			BaseContentHash: sub.ContentHash, CreatedAt: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.AddVoteV2(pid, "CONTRIB_1", 2, "approve"); err != nil {
+			t.Fatalf("第 %d 次（不同提案）投 2 权应成功，err=%v", i, err)
+		}
+	}
+	// 第 11 个提案投 2 权 → 累计 22 > 20 → 被每日配额拒绝
+	sub := signedSubmission(t, subSeedA, "item_q1_10", "标题", govLongBody("简"))
+	if _, err := st.UpsertSubmission(sub); err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := st.CreateProposal(Proposal{
+		Action: GovernActionRemove, ItemID: "item_q1_10", ProposerID: "PROPOSER",
+		BaseContentHash: sub.ContentHash, CreatedAt: now,
+	})
+	_, err := st.AddVoteV2(pid, "CONTRIB_1", 2, "approve")
+	if err == nil || !strings.Contains(err.Error(), "quota_exceeded") {
+		t.Fatalf("第 11 次应被配额拒绝，实际 err=%v", err)
+	}
+}
+
+func TestAddVoteV2_Contributor_OneWeight_NoQuotaConsumed(t *testing.T) {
+	st := setupVoterEnvWithContributor(t, "CONTRIB_1")
+	now := time.Now().UnixMilli()
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`,
+		"PROPOSER", "ed25519", "pubkey_PROPOSER", now, now)
+	// 投 1 权 × 30 个不同提案（每次投不同 item → 单条目累计不触发）
+	for i := 0; i < 30; i++ {
+		itemID := fmt.Sprintf("item_q2_%d", i)
+		pid, _ := createSimpleProposal(t, st, "PROPOSER", itemID)
+		if _, err := st.AddVoteV2(pid, "CONTRIB_1", 1, "approve"); err != nil {
+			t.Fatalf("第 %d 次（不同提案）投 1 权应成功，err=%v", i, err)
+		}
+	}
+}
+
+func TestAddVoteV2_NormalUser_ForcedToOneWeight(t *testing.T) {
+	// 创建 11 个身份：voter_0..voter_9 在前 10（贡献层），NORMAL_USER 第 11（普通用户）
+	st, ids := setupVoterEnv(t, 10)
+	now := time.Now().UnixMilli()
+	st.db.Exec(`INSERT OR IGNORE INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`,
+		"NORMAL_USER", "ed25519", "pubkey_NORMAL", now, now)
+	pid, _ := createSimpleProposal(t, st, ids[0], "item_n1")
+	// 普通用户请求 voteWeight=7，应被强制为 1
+	if _, err := st.AddVoteV2(pid, "NORMAL_USER", 7, "approve"); err != nil {
+		t.Fatal(err)
+	}
+	var vw int
+	if err := st.db.QueryRow(`SELECT vote_weight FROM govern_votes WHERE voter_id='NORMAL_USER' AND proposal_id=?`, pid).Scan(&vw); err != nil {
+		t.Fatal(err)
+	}
+	if vw != 1 {
+		t.Fatalf("普通用户 voteWeight 强制为 1，实际写入 %d", vw)
+	}
+	// approve_weight 检查（可能 quorum 没到所以投票还没结算，但 vote 行里已经写入了）
+	// 让我们直接查 govern_votes 的 approve 票权总和
+	var approveSum int
+	st.db.QueryRow(`SELECT COALESCE(SUM(vote_weight),0) FROM govern_votes WHERE proposal_id=? AND vote_type='approve'`, pid).Scan(&approveSum)
+	if approveSum != 2 {
+		t.Fatalf("approve 票权总和应为 2（proposer + NORMAL_USER 各 1），实际 %d", approveSum)
 	}
 }

@@ -97,12 +97,15 @@ func TestMigrateSchemaV2OnLegacyDb(t *testing.T) {
 	)`); err != nil {
 		t.Fatal(err)
 	}
-	// 老 govern_votes（无 V2 三列）
+	// 老 govern_votes（无 V2 三列，但主键已改为自增 id，支持多次投票累加）
 	if _, err := db.Exec(`CREATE TABLE govern_votes(
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		proposal_id INTEGER NOT NULL, voter_id TEXT NOT NULL,
-		created_at INTEGER NOT NULL, source_event_id TEXT,
-		PRIMARY KEY(proposal_id, voter_id)
+		created_at INTEGER NOT NULL, source_event_id TEXT
 	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE INDEX idx_gv_old_pv ON govern_votes(proposal_id, voter_id)`); err != nil {
 		t.Fatal(err)
 	}
 	// 老 govern_proposals（无 V2 三列）

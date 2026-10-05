@@ -515,7 +515,12 @@ func (s *Store) DeriveContributionRoster() ([]string, error) {
 		contributors = append(contributors, earliest...)
 	}
 
-	return contributors[:RosterTopN], nil
+	// 数据库身份总数可能 < RosterTopN，需做长度保护（避免切片越界 panic）。
+	end := len(contributors)
+	if end > RosterTopN {
+		end = RosterTopN
+	}
+	return contributors[:end], nil
 }
 
 // contributorTopN 返回前 n 名贡献者的 ID 列表（按贡献数降序 + author_id 升序 tiebreak）。

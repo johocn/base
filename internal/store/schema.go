@@ -212,15 +212,17 @@ var schemaStatements = []string{
 	)`,
 
 	`CREATE TABLE IF NOT EXISTS govern_votes(
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
 		proposal_id INTEGER NOT NULL,
 		voter_id    TEXT    NOT NULL,
 		vote_weight INTEGER NOT NULL DEFAULT 1,
 		vote_type   TEXT    NOT NULL DEFAULT 'approve',
 		date        TEXT    NOT NULL DEFAULT '',
 		created_at  INTEGER NOT NULL,
-		source_event_id TEXT,
-		PRIMARY KEY(proposal_id, voter_id)
+		source_event_id TEXT
 	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_govern_votes_proposal_voter ON govern_votes(proposal_id, voter_id)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_govern_proposals_item ON govern_proposals(item_id, action)`,
 

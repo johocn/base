@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -146,6 +147,10 @@ type Proposal struct {
 	// 票权按该水位复算，名册中途变化不改判（AC 12）。
 	ContentVersion int64
 	RevokedRev     int64
+	// GovernanceLevel / Category / CircleID 是 V2 动态门槛的分类元信息（Spec v2 §4）。
+	GovernanceLevel string
+	Category        string
+	CircleID        string
 }
 
 // ProposalView 是一条提案加上**当前有效票**与派生字段（册子 §3.3）。
@@ -158,7 +163,7 @@ type ProposalView struct {
 
 // proposalColumns 的列顺序必须与 scanProposal 的 Scan 参数一一对应。
 // source_event_id 可空，故 COALESCE 成空串读回（NULL = 老路径本地写入）。
-const proposalColumns = `proposal_id,action,item_id,proposer_id,reason,title,body_md,COALESCE(links_json,''),base_content_hash,created_at,executed_at,voided_at,executed_result,COALESCE(source_event_id,''),content_version,revoked_rev`
+const proposalColumns = `proposal_id,action,item_id,proposer_id,reason,title,body_md,COALESCE(links_json,''),base_content_hash,created_at,executed_at,voided_at,executed_result,COALESCE(source_event_id,''),content_version,revoked_rev,COALESCE(governance_level,'base'),COALESCE(category,''),COALESCE(circle_id,'')`
 
 // rowScanner 抽象 *sql.Row 与 *sql.Rows 的 Scan。
 type rowScanner interface{ Scan(dest ...any) error }
@@ -167,7 +172,8 @@ func scanProposal(sc rowScanner) (Proposal, error) {
 	var p Proposal
 	err := sc.Scan(&p.ProposalID, &p.Action, &p.ItemID, &p.ProposerID, &p.Reason, &p.Title, &p.BodyMD,
 		&p.LinksJSON, &p.BaseContentHash, &p.CreatedAt, &p.ExecutedAt, &p.VoidedAt, &p.ExecutedResult,
-		&p.SourceEventID, &p.ContentVersion, &p.RevokedRev)
+		&p.SourceEventID, &p.ContentVersion, &p.RevokedRev,
+		&p.GovernanceLevel, &p.Category, &p.CircleID)
 	return p, err
 }
 
@@ -334,8 +340,10 @@ func (s *Store) CreateProposal(p Proposal) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,created_at) VALUES(?,?,?)`,
-		id, p.ProposerID, p.CreatedAt); err != nil {
+	// V2: 提案人自投固定 vote_weight=1, vote_type='approve'，写 date 便于每日配额查询。
+	selfVoteDate := time.UnixMilli(p.CreatedAt).Format("2006-01-02")
+	if _, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,vote_weight,vote_type,date,created_at) VALUES(?,?,?,?,?,?)`,
+		id, p.ProposerID, 1, "approve", selfVoteDate, p.CreatedAt); err != nil {
 		return 0, fmt.Errorf("store: 写提案人第 1 票: %w", err)
 	}
 	return id, tx.Commit()
@@ -373,8 +381,9 @@ func (s *Store) CreateDirectoryProposal(p Proposal, autoApprove bool) (int64, st
 	if err != nil {
 		return 0, "", err
 	}
-	if _, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,created_at) VALUES(?,?,?)`,
-		id, p.ProposerID, p.CreatedAt); err != nil {
+	selfVoteDate := time.UnixMilli(p.CreatedAt).Format("2006-01-02")
+	if _, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,vote_weight,vote_type,date,created_at) VALUES(?,?,?,?,?,?)`,
+		id, p.ProposerID, 1, "approve", selfVoteDate, p.CreatedAt); err != nil {
 		return 0, "", fmt.Errorf("store: 写目录提案人第 1 票: %w", err)
 	}
 	if !autoApprove {
@@ -505,23 +514,19 @@ func (s *Store) AddVote(proposalID int64, voterID string, roster map[string]bool
 	return res, nil
 }
 
-// addVoteTx 是 AddVote 的事务体。
-//
-// **写语句刻意置于最前**：它让 SQLite 先取写锁、把并发投票串行化，
-// 之后的读必然看到此前已提交的 executed_at / voided_at——这是册子 §4.4 步 1 成立的前提。
+// addVoteTx 是 AddVote 的事务体（legacy）。
 func addVoteTx(tx *sql.Tx, st *Store, proposalID int64, voterID string, roster map[string]bool) (VoteResult, error) {
 	now := time.Now().UnixMilli()
-	ins, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,created_at) VALUES(?,?,?)
-		ON CONFLICT(proposal_id,voter_id) DO NOTHING`, proposalID, voterID, now)
-	if err != nil {
-		return VoteResult{}, fmt.Errorf("store: 写票: %w", err)
+	// 先检查是否已投票（V2 schema 下无唯一约束，需手动查）
+	var exists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM govern_votes WHERE proposal_id=? AND voter_id=?`, proposalID, voterID).Scan(&exists); err != nil {
+		return VoteResult{}, fmt.Errorf("store: 查票: %w", err)
 	}
-	n, err := ins.RowsAffected()
-	if err != nil {
-		return VoteResult{}, err
-	}
-	if n == 0 {
+	if exists > 0 {
 		return VoteResult{}, ErrAlreadyVoted
+	}
+	if _, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,created_at) VALUES(?,?,?)`, proposalID, voterID, now); err != nil {
+		return VoteResult{}, fmt.Errorf("store: 写票: %w", err)
 	}
 
 	p, err := scanProposal(tx.QueryRow(`SELECT `+proposalColumns+` FROM govern_proposals WHERE proposal_id=?`, proposalID))
@@ -721,4 +726,203 @@ func editTagItemTx(tx *sql.Tx, p Proposal) (string, error) {
 		return "", fmt.Errorf("store: 改写 items %s: %w", p.ItemID, err)
 	}
 	return "edited_links", nil
+}
+
+// ============ V2 投票管线（治理重构 Spec v2 §4）============
+
+// VoteResultV2 是 V2 投票管线的返回结构（Spec v2 §4）。
+type VoteResultV2 struct {
+	ProposalID    int64  `json:"proposal_id"`
+	VoterCount    int    `json:"voter_count"`    // 独立 voter 总数
+	Quorum        int    `json:"quorum"`         // 当前法定人数
+	Threshold     int    `json:"threshold"`      // 当前门槛公式值
+	ApproveWeight int    `json:"approve_weight"` // 赞成票权总和
+	RejectWeight  int    `json:"reject_weight"`  // 反对票权总和
+	NetWeight     int    `json:"net_weight"`     // 净票权 = approve - reject
+	Status        string `json:"status"`         // pending | effective | void
+}
+
+// AddVoteV2 投一票。voteType: "approve" | "reject"；voteWeight: 1~10（普通用户强制 1）。
+// 两阶段判定：阶段 1 voter_count ≥ quorum → 阶段 2 净票权 = approve − reject > 0。
+// 贡献层投 vote_weight ≥ 2 时受每日 20 票权配额约束；贡献层对单条目累计 ≤ 10。
+func (s *Store) AddVoteV2(proposalID int64, voterID string, voteWeight int, voteType string) (VoteResultV2, error) {
+	// 1. 参数校验
+	if voteType != "approve" && voteType != "reject" {
+		return VoteResultV2{}, fmt.Errorf("invalid vote_type: %s (need approve|reject)", voteType)
+	}
+	if voteWeight < 1 || voteWeight > 10 {
+		return VoteResultV2{}, fmt.Errorf("vote_weight must be [1,10], got %d", voteWeight)
+	}
+
+	// 2. 查提案
+	p, ok, err := s.GetProposal(proposalID)
+	if err != nil {
+		return VoteResultV2{}, err
+	}
+	if !ok {
+		return VoteResultV2{}, fmt.Errorf("proposal not found: %d", proposalID)
+	}
+	if p.ExecutedAt != 0 || p.VoidedAt != 0 {
+		return VoteResultV2{}, fmt.Errorf("proposal already settled (status=%s)", ProposalStatus(p.ExecutedAt, p.VoidedAt))
+	}
+
+	// 3. 贡献层资格判定
+	roster, err := s.DeriveContributionRoster()
+	if err != nil {
+		// 名册派生失败按空名册降级（fail-closed 对资格判定）：非贡献者路径强制 voteWeight=1。
+		// 但配额检查只会对贡献者发生，所以空名册下自然跳过。
+	}
+	isContributor := err == nil && slices.Contains(roster, voterID)
+
+	// 4. 普通用户强制 voteWeight=1
+	if !isContributor {
+		voteWeight = 1
+	}
+
+	// 5. 贡献层配额检查
+	if isContributor && voteWeight >= 2 {
+		// 5a. 每日 20 票权配额（投 >= 2 权的累计）
+		today := time.Now().Format("2006-01-02")
+		var usedDaily int
+		if err := s.db.QueryRow(`SELECT COALESCE(SUM(vote_weight),0) FROM govern_votes
+			WHERE voter_id=? AND date=? AND vote_weight >= 2`, voterID, today).Scan(&usedDaily); err != nil {
+			return VoteResultV2{}, fmt.Errorf("quota check: %w", err)
+		}
+		if usedDaily+voteWeight > 20 {
+			return VoteResultV2{}, fmt.Errorf("quota_exceeded: daily contribution quota=%d, used=%d, add=%d", 20, usedDaily, voteWeight)
+		}
+	}
+
+	// 6. 单条目累计检查（贡献层，累计 ≤ 10）
+	if isContributor {
+		var usedItem int
+		if err := s.db.QueryRow(`SELECT COALESCE(SUM(vote_weight),0) FROM govern_votes
+			WHERE voter_id=? AND proposal_id=?`, voterID, proposalID).Scan(&usedItem); err != nil {
+			return VoteResultV2{}, fmt.Errorf("per-item quota check: %w", err)
+		}
+		if usedItem+voteWeight > 10 {
+			return VoteResultV2{}, fmt.Errorf("per_item_quota_exceeded: per-item limit=10, used=%d, add=%d", usedItem, voteWeight)
+		}
+	}
+
+	// 7. 事务内写票 + 两阶段判定
+	return s.addVoteTxV2(proposalID, voterID, voteWeight, voteType, p.GovernanceLevel, p.ItemID, p.ProposerID)
+}
+
+// addVoteTxV2 是 AddVoteV2 的事务体。
+//
+// 两阶段判定（Spec v2 §4）：
+//   阶段 1：独立 voter_count ≥ quorum → 进入阶段 2；否则 pending。
+//   阶段 2：计算净票权 = approve_weight − reject_weight；> 0 则执行生效（需过 governPreconditionTx），≤ 0 则 void。
+//
+// governanceLevel 决定 base/enhanced 门槛公式；itemID + proposerID 用于实时算 P / F。
+func (s *Store) addVoteTxV2(proposalID int64, voterID string, voteWeight int, voteType, governanceLevel, itemID, proposerID string) (VoteResultV2, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return VoteResultV2{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UnixMilli()
+	date := time.Now().Format("2006-01-02")
+
+	// Step A: 写 govern_votes
+	if _, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,vote_weight,vote_type,date,created_at)
+		VALUES(?,?,?,?,?,?)`,
+		proposalID, voterID, voteWeight, voteType, date, now); err != nil {
+		return VoteResultV2{}, fmt.Errorf("insert vote: %w", err)
+	}
+
+	// Step B: 读提案（事务内）
+	p, err := scanProposal(tx.QueryRow(`SELECT `+proposalColumns+` FROM govern_proposals WHERE proposal_id=?`, proposalID))
+	if err != nil {
+		return VoteResultV2{}, fmt.Errorf("scan proposal: %w", err)
+	}
+
+	// Step C: 实时计算 m（活跃 7 天用户数）
+	var m int
+	sevenDaysMs := int64(7 * 24 * 60 * 60 * 1000)
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ?`, now-sevenDaysMs).Scan(&m); err != nil {
+		return VoteResultV2{}, fmt.Errorf("count active users: %w", err)
+	}
+
+	// Step D: 实时计算 P + F（去重，排除 author/proposer）
+	var P, F int
+	if itemID != "" {
+		if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM progress WHERE item_id=? AND id != ?`, itemID, proposerID).Scan(&P); err != nil {
+			return VoteResultV2{}, fmt.Errorf("count progress: %w", err)
+		}
+		if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM favorites WHERE item_id=? AND id != ?`, itemID, proposerID).Scan(&F); err != nil {
+			return VoteResultV2{}, fmt.Errorf("count favorites: %w", err)
+		}
+	}
+
+	// Step E: 门槛 + quorum
+	threshold := GovernThreshold(governanceLevel, m, P, F)
+	quorum := GovernQuorum(threshold, m)
+
+	// Step F: 独立 voter 数（不管 vote_type）
+	var voterCount int
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT voter_id) FROM govern_votes WHERE proposal_id=?`, proposalID).Scan(&voterCount); err != nil {
+		return VoteResultV2{}, fmt.Errorf("count voters: %w", err)
+	}
+
+	// Step G: 阶段 1 — quorum 未达 → pending
+	if voterCount < quorum {
+		tx.Commit()
+		return VoteResultV2{
+			ProposalID: proposalID, VoterCount: voterCount,
+			Quorum: quorum, Threshold: threshold, Status: "pending",
+		}, nil
+	}
+
+	// Step H: 进入阶段 2 — 净票权
+	var approveSum, rejectSum int
+	if err := tx.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN vote_type='approve' THEN vote_weight ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN vote_type='reject' THEN vote_weight ELSE 0 END),0)
+		FROM govern_votes WHERE proposal_id=?`, proposalID).Scan(&approveSum, &rejectSum); err != nil {
+		return VoteResultV2{}, fmt.Errorf("sum vote weights: %w", err)
+	}
+	net := NetWeight(approveSum, rejectSum)
+
+	out := VoteResultV2{
+		ProposalID: proposalID, VoterCount: voterCount,
+		Quorum: quorum, Threshold: threshold,
+		ApproveWeight: approveSum, RejectWeight: rejectSum, NetWeight: net,
+	}
+
+	if net <= 0 {
+		// 失败 → void
+		if _, err := tx.Exec(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, now, proposalID); err != nil {
+			return VoteResultV2{}, fmt.Errorf("mark void: %w", err)
+		}
+		out.Status = "void"
+		tx.Commit()
+		return out, nil
+	}
+
+	// net > 0 — 跑前置条件 + 执行动作
+	met, err := governPreconditionTx(tx, p)
+	if err != nil {
+		return VoteResultV2{}, err
+	}
+	if !met {
+		if _, err := tx.Exec(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, now, proposalID); err != nil {
+			return VoteResultV2{}, fmt.Errorf("mark void (precondition): %w", err)
+		}
+		out.Status = "void"
+		tx.Commit()
+		return out, nil
+	}
+
+	result, err := governApplyTx(tx, s, p)
+	if err != nil {
+		return VoteResultV2{}, err
+	}
+	if _, err := tx.Exec(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`, now, result, proposalID); err != nil {
+		return VoteResultV2{}, fmt.Errorf("mark executed: %w", err)
+	}
+	out.Status = "effective"
+	return out, tx.Commit()
 }

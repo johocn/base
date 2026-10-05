@@ -67,11 +67,14 @@ func (s *Store) ProjectGovernProposal(e GovernProposalEvent) error {
 			e.ContentHash, e.CreatedAt, e.EventID, e.ContentVersion, e.RevokedRev); err != nil {
 			return fmt.Errorf("store: 投影提案: %w", err)
 		}
-		// 提案人自投第 1 票（与 CreateProposal 同构；票的 created_at 用**事件值**，不是本机 now）
-		if _, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,created_at,source_event_id)
-			VALUES(?,?,?,?) ON CONFLICT(proposal_id,voter_id) DO NOTHING`,
-			e.ProposalID, e.Actor, e.CreatedAt, e.EventID); err != nil {
-			return fmt.Errorf("store: 投影提案人第 1 票: %w", err)
+		// 提案人自投第 1 票（幂等：先查是否已投）
+		var cnt int
+		tx.QueryRow(`SELECT COUNT(*) FROM govern_votes WHERE proposal_id=? AND voter_id=?`, e.ProposalID, e.Actor).Scan(&cnt)
+		if cnt == 0 {
+			if _, err := tx.Exec(`INSERT INTO govern_votes(proposal_id,voter_id,created_at,source_event_id)
+				VALUES(?,?,?,?)`, e.ProposalID, e.Actor, e.CreatedAt, e.EventID); err != nil {
+				return fmt.Errorf("store: 投影提案人第 1 票: %w", err)
+			}
 		}
 		return tx.Commit()
 	}
