@@ -60,8 +60,8 @@ def h5_routes(page: Page):
 def api_health(page: Page):
     """API 端点健康检查 — 通过 fetch 调用"""
     checks = [
-        ('/v1/catalog',  lambda b: b.get('pack_id')),
-        ('/v1/release',  lambda b: b.get('payload')),
+        ('/v1/catalog',  lambda b: bool(b.get('pack_id'))),
+        ('/v1/release',  lambda b: bool(b.get('payload'))),
         ('/v1/comment',  lambda b: b.get('comments') is not None),
         ('/v1/proposal', lambda b: all(
             all(k in p for k in ['voterCount', 'quorum', 'netWeight', 'governanceLevel', 'category'])
@@ -110,8 +110,11 @@ def main():
 
     all_ok = all(list(route_results.values()) + list(api_results.values()))
     log('======== 冒烟结果 ========')
-    log(f'路由通过率: {sum(route_results.values())}/{len(route_results)}')
-    log(f'API通过率:  {sum(api_results.values())}/{len(api_results)}')
+    def safe_sum(d):
+        """只累计 bool 值，忽略意外的字符串/None 等类型"""
+        return sum(1 for v in d.values() if v is True)
+    log(f'路由通过率: {safe_sum(route_results)}/{len(route_results)}')
+    log(f'API通过率:  {safe_sum(api_results)}/{len(api_results)}')
 
     # 汇总
     failures = [k for k, v in route_results.items() if not v]
