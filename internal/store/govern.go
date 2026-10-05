@@ -918,7 +918,89 @@ func editTagItemTx(tx *sql.Tx, p Proposal) (string, error) {
 	return "edited_links", nil
 }
 
-// ============ V2 投票管线（治理重构 Spec v2 §4）============
+// ============ V2 投票管线（治理重构 Spec v2 §4 + §6）============
+
+// governContextParams 在事务内根据提案语境查 V2 门槛公式的 m / P / F 参数（Spec v2 §6）。
+//   - category='circle' + circle_id != "" → 圈内活跃成员 + 圈内成员对该 item 的互动
+//   - 否则 → 节点级全局（默认）
+// 圈内成员从 groups.member_ids_json 解析；解析失败或组不存在 → fail-open fallback 到节点级。
+func governContextParams(tx *sql.Tx, p Proposal, now int64) (m, P, F int, err error) {
+	const sevenDaysMs int64 = 7 * 24 * 60 * 60 * 1000
+	if p.Category == "circle" && p.CircleID != "" {
+		var memberIDsJSON string
+		if qerr := tx.QueryRow(`SELECT member_ids_json FROM groups WHERE group_id=?`, p.CircleID).Scan(&memberIDsJSON); qerr != nil {
+			return governNodeParamsTx(tx, p, now, sevenDaysMs)
+		}
+		var members []string
+		if jerr := json.Unmarshal([]byte(memberIDsJSON), &members); jerr != nil || len(members) == 0 {
+			return governNodeParamsTx(tx, p, now, sevenDaysMs)
+		}
+		m, err = countActiveInIDsTx(tx, members, now-sevenDaysMs)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("circle active members: %w", err)
+		}
+		if p.ItemID != "" {
+			P, err = countItemInIDsTx(tx, "progress", p.ItemID, p.ProposerID, members)
+			if err != nil {
+				return 0, 0, 0, fmt.Errorf("circle progress: %w", err)
+			}
+			F, err = countItemInIDsTx(tx, "favorites", p.ItemID, p.ProposerID, members)
+			if err != nil {
+				return 0, 0, 0, fmt.Errorf("circle favorites: %w", err)
+			}
+		}
+		return m, P, F, nil
+	}
+	return governNodeParamsTx(tx, p, now, sevenDaysMs)
+}
+
+// governNodeParamsTx 节点级默认口径：全节点活跃身份 + 全节点对 item 的互动。
+func governNodeParamsTx(tx *sql.Tx, p Proposal, now, sevenDaysMs int64) (m, P, F int, err error) {
+	if err = tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ?`, now-sevenDaysMs).Scan(&m); err != nil {
+		return 0, 0, 0, fmt.Errorf("node active users: %w", err)
+	}
+	if p.ItemID != "" {
+		tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM progress WHERE item_id=? AND id != ?`, p.ItemID, p.ProposerID).Scan(&P)
+		tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM favorites WHERE item_id=? AND id != ?`, p.ItemID, p.ProposerID).Scan(&F)
+	}
+	return m, P, F, nil
+}
+
+// countActiveInIDs 查给定 id 列表内活跃（last_seen_at > cutoff）的独立身份数。
+func countActiveInIDsTx(tx *sql.Tx, ids []string, cutoff int64) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, cutoff)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ? AND id IN (`+placeholders+`)`, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// countItemInIDs 查给定表 (progress / favorites) 中 item_id = ? AND id != proposer AND id IN (ids) 的去重 id 数。
+func countItemInIDsTx(tx *sql.Tx, table, itemID, proposerID string, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids)+2)
+	args = append(args, itemID, proposerID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM `+table+` WHERE item_id=? AND id != ? AND id IN (`+placeholders+`)`, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
 
 // VoteResultV2 是 V2 投票管线的返回结构（Spec v2 §4）。
 type VoteResultV2 struct {
@@ -1029,26 +1111,22 @@ func (s *Store) addVoteTxV2(proposalID int64, voterID string, voteWeight int, vo
 		return VoteResultV2{}, fmt.Errorf("scan proposal: %w", err)
 	}
 
-	// Step C: 实时计算 m（活跃 7 天用户数）
-	var m int
-	sevenDaysMs := int64(7 * 24 * 60 * 60 * 1000)
-	if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ?`, now-sevenDaysMs).Scan(&m); err != nil {
-		return VoteResultV2{}, fmt.Errorf("count active users: %w", err)
+	// Step C/D: 按提案语境（category / circle_id）查 m / P / F（Spec v2 §6 圈内外分支）。
+	// category='circle' + circle_id != "" → 圈内口径；否则 → 节点级全局。
+	m, P, F, err := governContextParams(tx, p, now)
+	if err != nil {
+		return VoteResultV2{}, fmt.Errorf("govern params: %w", err)
 	}
 
-	// Step D: 实时计算 P + F（去重，排除 author/proposer）
-	var P, F int
-	if itemID != "" {
-		if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM progress WHERE item_id=? AND id != ?`, itemID, proposerID).Scan(&P); err != nil {
-			return VoteResultV2{}, fmt.Errorf("count progress: %w", err)
-		}
-		if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM favorites WHERE item_id=? AND id != ?`, itemID, proposerID).Scan(&F); err != nil {
-			return VoteResultV2{}, fmt.Errorf("count favorites: %w", err)
-		}
+	// Step E: 门槛 + quorum（使用提案自身的 governance_level，入参 governanceLevel 保持兼容）
+	level := p.GovernanceLevel
+	if level == "" {
+		level = governanceLevel
 	}
-
-	// Step E: 门槛 + quorum
-	threshold := GovernThreshold(governanceLevel, m, P, F)
+	if level == "" {
+		level = "base"
+	}
+	threshold := GovernThreshold(level, m, P, F)
 	quorum := GovernQuorum(threshold, m)
 
 	// Step F: 独立 voter 数（不管 vote_type）

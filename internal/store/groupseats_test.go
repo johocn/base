@@ -157,3 +157,66 @@ func TestEventWatermark(t *testing.T) {
 		t.Fatalf("水位长度 = %d, want 16", n)
 	}
 }
+
+// TestRemoveQuorumV2 / TestDissolveVoteQuorumV2 是 Spec v2 §6 纯函数演算测试。
+// 直接对照 GovernThreshold + GovernQuorum 的组合公式，不需要数据库。
+
+func TestRemoveQuorumV2(t *testing.T) {
+	cases := []struct {
+		m, P, F int
+		want    int
+	}{
+		// m=5, base = 10+1+0 = 11, quorum = min(max(11, 3), 5) = 5（阈值 > m 被裁切）
+		{5, 0, 0, 5},
+		// m=10, base = 10+3+0 = 13, quorum = min(max(13, 5), 10) = 10
+		{10, 0, 0, 10},
+		// m=20, P=F=3: base = 10+6+2 = 18, quorum = min(max(18, 10), 20) = 18
+		{20, 3, 3, 18},
+		// m=50, P=10,F=20: base = 10+16+10 = 36, quorum = min(max(36, 25), 50) = 36
+		{50, 10, 20, 36},
+		// m=100, P=F=0: base = 10+33+0 = 43, ⌈100/2⌉=50 → 50 获胜
+		{100, 0, 0, 50},
+		// 小圈 m=3: threshold=10+1+0=11 > 3 → 3（全员同意）
+		{3, 0, 0, 3},
+	}
+	for _, c := range cases {
+		got := RemoveQuorumV2(c.m, c.P, c.F)
+		if got != c.want {
+			t.Errorf("RemoveQuorumV2(m=%d,P=%d,F=%d) = %d, want %d", c.m, c.P, c.F, got, c.want)
+		}
+	}
+}
+
+func TestDissolveVoteQuorumV2(t *testing.T) {
+	cases := []struct {
+		m, P, F int
+		want    int
+	}{
+		// m=10: enhanced = 20+3+0 = 23 > 10 → 10
+		{10, 0, 0, 10},
+		// m=20, P=F=3: enhanced = 20+6+4 = 30 > 20 → 20
+		{20, 3, 3, 20},
+		// m=50, P=10,F=20: enhanced = 20+16+20 = 56 > 50 → 50
+		{50, 10, 20, 50},
+		// m=100, P=F=0: enhanced = 20+33+0 = 53, quorum = min(max(53, 50), 100) = 53
+		{100, 0, 0, 53},
+		// 互动多 → 门槛高但被裁切：m=30, P=F=20 → enhanced = 20+10+26=56 > 30 → 30
+		{30, 20, 20, 30},
+	}
+	for _, c := range cases {
+		got := DissolveVoteQuorumV2(c.m, c.P, c.F)
+		if got != c.want {
+			t.Errorf("DissolveVoteQuorumV2(m=%d,P=%d,F=%d) = %d, want %d", c.m, c.P, c.F, got, c.want)
+		}
+	}
+}
+
+// TestDissolveV2比RemoveV2门槛高：同样 m/P/F 下 enhanced > base
+func TestDissolveV2HigherThanRemoveV2(t *testing.T) {
+	m, P, F := 25, 5, 5
+	r := RemoveQuorumV2(m, P, F)
+	d := DissolveVoteQuorumV2(m, P, F)
+	if d < r {
+		t.Errorf("DissolveVoteQuorumV2(%d,%d,%d)=%d 不应低于 RemoveQuorumV2=%d", m, P, F, d, r)
+	}
+}

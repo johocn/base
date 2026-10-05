@@ -21,9 +21,19 @@ func GovernorSeats(m int) int {
 }
 
 // RemoveQuorum 是「移出成员」的治者签名门槛 ⌈2k/3⌉（册子 §3.4）。k=1 时自动为 1。
+// Deprecated: Spec v2 后应改用 RemoveQuorumV2(m_circle, P_circle, F_circle)。
 func RemoveQuorum(k int) int { return (2*k + 2) / 3 }
 
+// RemoveQuorumV2 是「移出成员」的 V2 动态门槛（Spec v2 §6）：
+//   base 门槛公式（圈内 m_circle + P_circle + F_circle）+ GovernQuorum 裁切。
+// m_circle 是圈内注册成员数；P_circle / F_circle 是圈内成员对圈内容的互动度（progress / favorites）。
+func RemoveQuorumV2(mCircle, PCircle, FCircle int) int {
+	threshold := GovernThreshold("base", mCircle, PCircle, FCircle)
+	return GovernQuorum(threshold, mCircle)
+}
+
 // DissolveProposerQuorum 是「解散圈子」的发起治者门槛 min(2, k)（册子 §3.4）。
+// 保持不变：这是治者签名门槛，不是票选 quorum；Spec v2 §6 明确不动它。
 func DissolveProposerQuorum(k int) int {
 	if k < 2 {
 		return k
@@ -32,12 +42,20 @@ func DissolveProposerQuorum(k int) int {
 }
 
 // DissolveVoteQuorum 是「解散圈子」的成员投票门槛 min(30, ⌊m/3⌋+1)（册子 §3.4，必须超过 1/3 且上限 30）。
+// Deprecated: Spec v2 后应改用 DissolveVoteQuorumV2(m_circle, P_circle, F_circle)。
 func DissolveVoteQuorum(m int) int {
 	q := m/3 + 1
 	if q > 30 {
 		return 30
 	}
 	return q
+}
+
+// DissolveVoteQuorumV2 是「解散圈子」的 V2 动态门槛（Spec v2 §6）：
+//   enhanced 门槛公式 + GovernQuorum 裁切（比 base 更严格）。
+func DissolveVoteQuorumV2(mCircle, PCircle, FCircle int) int {
+	threshold := GovernThreshold("enhanced", mCircle, PCircle, FCircle)
+	return GovernQuorum(threshold, mCircle)
 }
 
 // brushWindowMs 是防刷窗口：任意滚动 24h（册子 §3.3 第 3 条，边界取整到秒）。

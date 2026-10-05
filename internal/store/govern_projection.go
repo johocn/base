@@ -234,22 +234,11 @@ func (s *Store) SettleGovernProposal(proposalID int64, roster map[string]bool, r
 		return tx.Commit()
 	}
 
-	// Step B: 实时算 m（7 天活跃身份数）
-	var m int
-	sevenDaysMs := int64(7 * 24 * 60 * 60 * 1000)
-	if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM identities WHERE last_seen_at > ?`, now-sevenDaysMs).Scan(&m); err != nil {
-		return fmt.Errorf("count active users: %w", err)
-	}
-
-	// Step C: 实时算 P + F（排除 proposer）
-	var P, F int
-	if cur.ItemID != "" {
-		if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM progress WHERE item_id=? AND id != ?`, cur.ItemID, cur.ProposerID).Scan(&P); err != nil {
-			return fmt.Errorf("count progress: %w", err)
-		}
-		if err := tx.QueryRow(`SELECT COUNT(DISTINCT id) FROM favorites WHERE item_id=? AND id != ?`, cur.ItemID, cur.ProposerID).Scan(&F); err != nil {
-			return fmt.Errorf("count favorites: %w", err)
-		}
+	// Step B/C: 按提案语境（category / circle_id）查 m / P / F（Spec v2 §6 圈内外分支）。
+	// category='circle' + circle_id != "" → 圈内口径；否则 → 节点级全局。
+	m, P, F, err := governContextParams(tx, cur, now)
+	if err != nil {
+		return fmt.Errorf("govern params: %w", err)
 	}
 
 	// Step D: 门槛 + quorum

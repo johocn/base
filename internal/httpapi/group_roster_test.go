@@ -193,13 +193,14 @@ func TestRosterV2DissolveQuorumSatisfied(t *testing.T) {
 	gid := groupIDOf(103)
 	seedGroupV2(t, st, ts.URL, gid, testSeed, 3, 1)
 
-	// m=3：发起 1 名治者（创建者）+ 成员 2 签（创建者 + 另 1 名成员）⇒ 通过。member_ids 传空数组。
+	// m=3：发起 1 名治者（创建者）+ 成员 2 签（创建者 + 另 2 名成员）⇒ 通过。member_ids 传空数组。
+	// Spec v2 §6 DissolveVoteQuorumV2(3,0,0)=3（enhanced 门槛 + GovernQuorum 裁切到 m），需要全 3 成员签名。
 	body := map[string]any{
 		"group_id": gid, "action": "roster", "sub": "dissolve",
 		"epoch": 2, "roster_rev": 2, "member_ids": []string{},
 		"encrypted": 1,
 	}
-	status, out := submitRosterV2(t, ts.URL, testSeed, eventIDOf(1003), int64(1790000002000), body, testSeed, memberSeed(1))
+	status, out := submitRosterV2(t, ts.URL, testSeed, eventIDOf(1003), int64(1790000002000), body, testSeed, memberSeed(1), memberSeed(2))
 	if status != http.StatusOK {
 		t.Fatalf("want 200, got %d %v", status, out)
 	}
@@ -234,7 +235,7 @@ func TestRosterV2RevStale(t *testing.T) {
 	ids := seedGroupV2(t, st, ts.URL, gid, testSeed, 11, 1)
 
 	govs := governorsOf(t, st, gid, ids, 1, 1)
-	if len(govs) < 2 {
+	if len(govs) < 3 {
 		t.Fatalf("m=11 应有 3 名治者，得 %v", govs)
 	}
 	seedByID := map[string]string{ids[0]: testSeed}
@@ -247,12 +248,14 @@ func TestRosterV2RevStale(t *testing.T) {
 			continue
 		}
 		signers = append(signers, seedByID[g])
-		if len(signers) == 2 {
+		if len(signers) == 3 {
 			break
 		}
 	}
 
 	// epoch 递增但 roster_rev 未递增 ⇒ 409 group_roster_epoch_stale。
+	// Spec v2 §6 RemoveQuorumV2(11,0,0)=13 被治者数 k=3 裁切到 3，3 个治者签名刚过 quorum 检查，
+	// 但 PutGroupRosterV2 内的 rev stale 检查会在后续拒绝。
 	body := map[string]any{
 		"group_id": gid, "action": "roster", "sub": "remove",
 		"epoch": 2, "roster_rev": 1, "member_ids": append([]string{}, ids[:10]...),

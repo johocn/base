@@ -478,7 +478,21 @@ func (s *Server) handleGroupRosterV2(w http.ResponseWriter, actor string, req ev
 		return
 	}
 	seats := store.DeriveSeats(memberIDs, creatorID, rosterRev, r.Epoch, events)
-	if code := rosterQuorumError(actor, r, signers, ciSet(memberIDs), govSet(seats.Governors), seats); code != "" {
+	// Spec v2 §6: 圈内 V2 动态门槛参数。
+	// mCircle = 变更前的圈内成员数（memberIDs 是变更前的 current 或新 r.MemberIDs？
+	//   seat.Decidable 已用 memberIDs 算好席位门槛，这里沿用同一口径 = len(memberIDs)）。
+	mCircle := len(memberIDs)
+	// pCircle = 圈内 msg 事件的独立 actor 数（只计 action=msg 的去重参与者，代表圈内互动度）。
+	pCircleSet := map[string]bool{}
+	for _, ev := range events {
+		if store.GroupBodyAction(ev.BodyJSON) == "msg" {
+			pCircleSet[ev.ID] = true
+		}
+	}
+	pCircle := len(pCircleSet)
+	// fCircle = 0：圈 msg 事件不进 items 表，没有 progress / favorites 概念。
+	fCircle := 0
+	if code := rosterQuorumError(actor, r, signers, ciSet(memberIDs), govSet(seats.Governors), seats, mCircle, pCircle, fCircle); code != "" {
 		s.writeAuthErr(w, http.StatusForbidden, code)
 		return
 	}
@@ -600,9 +614,10 @@ func subsetOf(signers, set map[string]bool) bool {
 	return true
 }
 
-// rosterQuorumError 按 sub 判定门槛，返回要回的错误码；"" 表示通过（册子 §3.4）。
+// rosterQuorumError 按 sub 判定门槛，返回要回的错误码；"" 表示通过（册子 §3.4 + Spec v2 §6）。
 // actor 是本次事件的发起者（join 档要求签名者集合恒等于 {actor}，补充 9）。
-func rosterQuorumError(actor string, r groupRosterV2, signers, members, governors map[string]bool, seats store.SeatSnapshot) string {
+// mCircle / pCircle / fCircle 是圈内 V2 动态门槛参数（成员数 / msg 独立 actor 数 / 圈 msg 收藏数 = 0）。
+func rosterQuorumError(actor string, r groupRosterV2, signers, members, governors map[string]bool, seats store.SeatSnapshot, mCircle, pCircle, fCircle int) string {
 	k := seats.SeatCount
 	switch r.Sub {
 	case subJoin:
@@ -621,7 +636,13 @@ func rosterQuorumError(actor string, r groupRosterV2, signers, members, governor
 		if !seats.Decidable {
 			return "group_roster_quorum_missing" // 不可判定 ⇒ 拒写重大动作（补充 6）
 		}
-		if !subsetOf(signers, governors) || countIn(signers, governors) < store.RemoveQuorum(k) {
+		// Spec v2 §6: 用 V2 base 门槛公式，结果再按治者数裁切——治者是唯一能签名的池，
+		// quorum 不可能超过 k。GovernQuorum 有 ⌈m/2⌉ 下限，大圈时可能 > k，需要裁切。
+		q := store.RemoveQuorumV2(mCircle, pCircle, fCircle)
+		if q > k {
+			q = k
+		}
+		if !subsetOf(signers, governors) || countIn(signers, governors) < q {
 			return "group_roster_quorum_missing"
 		}
 		return ""
@@ -635,8 +656,10 @@ func rosterQuorumError(actor string, r groupRosterV2, signers, members, governor
 		if countIn(signers, governors) < store.DissolveProposerQuorum(k) {
 			return "group_proposal_proposer_missing" // 发起段不足（册子 §6）
 		}
-		// 投票段用**变更前**的名单人数：解散事件本身把名单清空（补充 11）。
-		if countIn(signers, members) < store.DissolveVoteQuorum(len(members)) {
+		// Spec v2 §6: V2 enhanced 动态门槛。签名池是**全成员**（dissolve 允许非治者成员签名），
+		// GovernQuorum 已经裁切到 mCircle，不需要额外裁切。
+		q := store.DissolveVoteQuorumV2(mCircle, pCircle, fCircle)
+		if countIn(signers, members) < q {
 			return "group_roster_quorum_missing"
 		}
 		return ""
