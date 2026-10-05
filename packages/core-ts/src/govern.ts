@@ -72,6 +72,16 @@ export interface ProposalItem {
   category?: string;
   /** Spec v2：提案目标所属圈（缺省 ''） */
   circleId?: string;
+  /** Spec v2 两阶段：独立 voter 数（V2 管线里所有人都算，不再按名册过滤） */
+  voterCount?: number;
+  /** Spec v2 两阶段：法定人数（GovernQuorum） */
+  quorum?: number;
+  /** Spec v2：赞成票权 SUM(vote_weight WHERE vote_type='approve') */
+  approveWeight?: number;
+  /** Spec v2：反对票权 SUM(vote_weight WHERE vote_type='reject') */
+  rejectWeight?: number;
+  /** Spec v2：净票权 = approveWeight - rejectWeight；>0 才 effective，<=0 void */
+  netWeight?: number;
 }
 
 export class GovernError extends Error {
@@ -115,6 +125,11 @@ function toProposalItem(p: Record<string, unknown>): ProposalItem {
     governanceLevel: String(p.governance_level ?? 'base'),
     category: String(p.category ?? ''),
     circleId: String(p.circle_id ?? ''),
+    voterCount: Number(p.vote_count ?? 0),
+    quorum: Number(p.quorum ?? 0),
+    approveWeight: Number(p.approve_weight ?? 0),
+    rejectWeight: Number(p.reject_weight ?? 0),
+    netWeight: Number(p.net_weight ?? 0),
   };
 }
 
