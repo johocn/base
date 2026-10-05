@@ -63,7 +63,11 @@ def api_health(page: Page):
         ('/v1/catalog',  lambda b: b.get('pack_id')),
         ('/v1/release',  lambda b: b.get('payload')),
         ('/v1/comment',  lambda b: b.get('comments') is not None),
-        ('/v1/proposal', lambda b: b.get('proposals') is not None),
+        ('/v1/proposal', lambda b: all(
+            all(k in p for k in ['voterCount', 'quorum', 'netWeight', 'governanceLevel', 'category'])
+            for p in (b.get('proposals') or [])
+        )),
+        ('/v1/contributors', lambda b: b.get('contributors') is not None and len(b.get('contributors', [])) <= 10),
         ('/healthz',     lambda b: True),
     ]
     results = {}

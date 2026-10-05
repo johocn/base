@@ -1022,3 +1022,178 @@ func TestTask6_PinLevels(t *testing.T) {
 		})
 	}
 }
+
+// ============ B2: V2 治理管线端到端验证（完整 happy path + void 分支）============
+
+// TestE2E_GovernanceV2_RemoveProposal_FullFlow 走完整 V2 治理管线：
+// 身份 × 5 → 提交条目 → 提 remove 提案（proposer 自投）→ 混合投票 → quorum 达成 → 净票权 > 0 → effective → 条目下架。
+func TestE2E_GovernanceV2_RemoveProposal_FullFlow(t *testing.T) {
+	// 步骤 1：创建 5 个活跃身份（m=5 → threshold_base=11 → quorum=min(11,5)=5）
+	st, ids := setupVoterEnv(t, 5)
+	proposerID := ids[0]
+
+	// 步骤 2：proposer 提交一条 active article 条目
+	sub := govItem(t, st, "article/e2e_remove", "E2E 待下架条目", "E2E-甲")
+	itBefore, _, err := st.GetItem("article/e2e_remove")
+	if err != nil {
+		t.Fatalf("GetItem before: %v", err)
+	}
+	if itBefore.State != "active" {
+		t.Fatalf("条目初始状态应为 active，得 %s", itBefore.State)
+	}
+
+	// 步骤 3：proposer 提 remove 提案 — CreateProposal 自动写 proposer 第 1 票（approve, weight=1）
+	pid, err := st.CreateProposal(Proposal{
+		Action: GovernActionRemove, ItemID: "article/e2e_remove", ProposerID: proposerID,
+		Reason: "E2E 测试 remove 管线", BaseContentHash: sub.ContentHash, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+
+	// 验证初始状态：voter_count=1，status=pending
+	p0, _, _ := st.GetProposal(pid)
+	if p0.ExecutedAt != 0 || p0.VoidedAt != 0 {
+		t.Fatalf("新提案应为 pending，executed_at=%d voided_at=%d", p0.ExecutedAt, p0.VoidedAt)
+	}
+	views0, _ := st.ListProposalViews(map[string]bool{})
+	if len(views0) != 1 {
+		t.Fatalf("ListProposalViews len=%d want 1", len(views0))
+	}
+	if views0[0].VoterCount != 1 || views0[0].ApproveWeight != 1 || views0[0].NetWeight != 1 {
+		t.Fatalf("初始投票状态: voter_count=%d approve=%d net=%d",
+			views0[0].VoterCount, views0[0].ApproveWeight, views0[0].NetWeight)
+	}
+	if views0[0].Quorum != 5 {
+		t.Fatalf("quorum=m=5 应 clamp 到 5（m=5），得 %d", views0[0].Quorum)
+	}
+
+	// 步骤 4：投 ids[1]=approve + ids[2]=reject → voter_count=3 < quorum=5 → 仍 pending
+	r1, err := st.AddVoteV2(pid, ids[1], 1, "approve")
+	if err != nil {
+		t.Fatalf("AddVoteV2 ids[1]: %v", err)
+	}
+	if r1.Status != "pending" {
+		t.Fatalf("投 ids[1] 后应 pending，得 %s (voter_count=%d quorum=%d)", r1.Status, r1.VoterCount, r1.Quorum)
+	}
+	r2, err := st.AddVoteV2(pid, ids[2], 1, "reject")
+	if err != nil {
+		t.Fatalf("AddVoteV2 ids[2]: %v", err)
+	}
+	if r2.Status != "pending" {
+		t.Fatalf("投 ids[2] 后应 pending，得 %s (voter_count=%d quorum=%d)", r2.Status, r2.VoterCount, r2.Quorum)
+	}
+	// 此时 approve=2 (proposer+ids[1])，reject=1 (ids[2])，net=2-1=1
+	if r2.VoterCount != 3 || r2.ApproveWeight != 2 || r2.RejectWeight != 1 || r2.NetWeight != 1 {
+		t.Fatalf("混合投票后: voter_count=%d approve=%d reject=%d net=%d",
+			r2.VoterCount, r2.ApproveWeight, r2.RejectWeight, r2.NetWeight)
+	}
+
+	// 步骤 5：投 ids[3]=approve + ids[4]=approve → voter_count=5 == quorum → 净票权=4-1=3 > 0 → effective
+	r3, err := st.AddVoteV2(pid, ids[3], 1, "approve")
+	if err != nil {
+		t.Fatalf("AddVoteV2 ids[3]: %v", err)
+	}
+	if r3.Status != "pending" { // voter_count=4 还没到 quorum=5
+		t.Fatalf("投 ids[3] 后应 pending，得 %s (voter_count=%d)", r3.Status, r3.VoterCount)
+	}
+	r4, err := st.AddVoteV2(pid, ids[4], 1, "approve")
+	if err != nil {
+		t.Fatalf("AddVoteV2 ids[4]: %v", err)
+	}
+
+	// 步骤 6：验证最终生效状态
+	if r4.Status != "effective" {
+		t.Fatalf("quorum=5 达成 + 净票权=4-1=3>0 应 effective，得 %s (voter_count=%d quorum=%d net=%d)",
+			r4.Status, r4.VoterCount, r4.Quorum, r4.NetWeight)
+	}
+	if r4.VoterCount != 5 || r4.Quorum != 5 {
+		t.Fatalf("最终 voter_count=%d quorum=%d want 5/5", r4.VoterCount, r4.Quorum)
+	}
+	if r4.ApproveWeight != 4 || r4.RejectWeight != 1 || r4.NetWeight != 3 {
+		t.Fatalf("最终票权: approve=%d reject=%d net=%d want 4/1/3",
+			r4.ApproveWeight, r4.RejectWeight, r4.NetWeight)
+	}
+
+	// 条目应已下架
+	itAfter, _, err := st.GetItem("article/e2e_remove")
+	if err != nil {
+		t.Fatalf("GetItem after: %v", err)
+	}
+	if itAfter.State != "removed" {
+		t.Fatalf("条目应已下架 state=removed，得 %s", itAfter.State)
+	}
+
+	// 提案 executed_at 应非零，executed_result="removed"
+	pAfter, _, _ := st.GetProposal(pid)
+	if pAfter.ExecutedAt == 0 {
+		t.Fatal("提案应已 executed（executed_at != 0）")
+	}
+	if pAfter.ExecutedResult != "removed" {
+		t.Fatalf("executed_result=%q want removed", pAfter.ExecutedResult)
+	}
+	if pAfter.VoidedAt != 0 {
+		t.Fatal("effective 提案不应有 voided_at")
+	}
+
+	// 墓碑应存在
+	var rev int64
+	if err := st.db.QueryRow(`SELECT revoked_rev FROM tombstones WHERE item_id=?`, "article/e2e_remove").Scan(&rev); err != nil {
+		t.Fatalf("墓碑不存在: %v", err)
+	}
+}
+
+// TestE2E_GovernanceV2_RemoveProposal_NetRejected_Void 验证反对票赢 → 净票权 ≤ 0 → void → 条目不动。
+func TestE2E_GovernanceV2_RemoveProposal_NetRejected_Void(t *testing.T) {
+	st, ids := setupVoterEnv(t, 5)
+	proposerID := ids[0]
+	sub := govItem(t, st, "article/e2e_void", "E2E 待裁决条目", "E2E-乙")
+
+	// proposer 提 remove 提案 → 自投 approve(1)
+	pid, err := st.CreateProposal(Proposal{
+		Action: GovernActionRemove, ItemID: "article/e2e_void", ProposerID: proposerID,
+		Reason: "E2E 测试 void 管线", BaseContentHash: sub.ContentHash, CreatedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+
+	// 全投 reject：ids[1..4] 都 reject → voter_count=5=quorum, approve=1, reject=4 → net=-3
+	for i := 1; i <= 3; i++ {
+		if _, err := st.AddVoteV2(pid, ids[i], 1, "reject"); err != nil {
+			t.Fatalf("AddVoteV2 ids[%d]: %v", i, err)
+		}
+	}
+	// 最后 ids[4] reject 应刚好触发 quorum 判定 → void
+	rFinal, err := st.AddVoteV2(pid, ids[4], 1, "reject")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rFinal.Status != "void" {
+		t.Fatalf("净票权=-3 应 void，得 %s (voter_count=%d quorum=%d net=%d)",
+			rFinal.Status, rFinal.VoterCount, rFinal.Quorum, rFinal.NetWeight)
+	}
+	if rFinal.VoterCount != 5 {
+		t.Fatalf("voter_count=%d want 5", rFinal.VoterCount)
+	}
+	if rFinal.ApproveWeight != 1 || rFinal.RejectWeight != 4 || rFinal.NetWeight != -3 {
+		t.Fatalf("票权: approve=%d reject=%d net=%d want 1/4/-3",
+			rFinal.ApproveWeight, rFinal.RejectWeight, rFinal.NetWeight)
+	}
+
+	// 条目应仍 active
+	it, _, _ := st.GetItem("article/e2e_void")
+	if it.State != "active" {
+		t.Fatalf("void 不得下架条目，state=%s", it.State)
+	}
+
+	// 提案 voided_at 应非零
+	p, _, _ := st.GetProposal(pid)
+	if p.VoidedAt == 0 {
+		t.Fatal("void 提案应有 voided_at")
+	}
+	if p.ExecutedAt != 0 {
+		t.Fatal("void 提案不应有 executed_at")
+	}
+}
