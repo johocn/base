@@ -22,11 +22,27 @@ const GOVERN_EVENT_TYPE = 'govern.v1';
 /** 提案撞号（conflict）时的重取重发上限：重取最大 id 再发，避免会话内无限循环。 */
 const PROPOSAL_CONFLICT_ATTEMPTS = 3;
 
-/** 受审动作（#27 §2.1）+ 词条补录 `directory_add`（#58 §3.1）。 */
-export type GovernAction = 'remove' | 'edit' | 'revive' | 'directory_add';
+/** 受审动作（#27 §2.1）+ 词条补录 `directory_add`（#58 §3.1）+ Spec v2 扩 12 种。 */
+export type GovernAction =
+  | 'remove'
+  | 'edit'
+  | 'revive'
+  | 'directory_add'
+  | 'edit_title'
+  | 'edit_body'
+  | 'edit_category'
+  | 'edit_tags'
+  | 'edit_instructor'
+  | 'highlight'
+  | 'pin'
+  | 'recommend'
+  | 'feature';
 
 /** 提案状态三值（#27 §4.4）。 */
 export type GovernStatus = 'pending' | 'effective' | 'void';
+
+/** 投票类型（Spec v2 §4）。 */
+export type VoteType = 'approve' | 'reject';
 
 export interface ProposalItem {
   /** 十进制整数字符串，与节点侧同一 id */
@@ -50,6 +66,12 @@ export interface ProposalItem {
   /** 提案快照水位（#33 §4.3）：票权按此判定，名册中途变化不改判。 */
   contentVersion: number;
   revokedRev: number;
+  /** Spec v2：治理门槛档位 'base'|'enhanced'（缺省 'base'） */
+  governanceLevel?: string;
+  /** Spec v2：提案目标所属分类（缺省 ''） */
+  category?: string;
+  /** Spec v2：提案目标所属圈（缺省 ''） */
+  circleId?: string;
 }
 
 export class GovernError extends Error {
@@ -90,6 +112,9 @@ function toProposalItem(p: Record<string, unknown>): ProposalItem {
     voidedAt: Number(p.voided_at ?? 0),
     contentVersion: Number(p.content_version ?? 0),
     revokedRev: Number(p.revoked_rev ?? 0),
+    governanceLevel: String(p.governance_level ?? 'base'),
+    category: String(p.category ?? ''),
+    circleId: String(p.circle_id ?? ''),
   };
 }
 
@@ -263,23 +288,37 @@ export async function createProposal(o: GovernOptions, input: CreateProposalInpu
 
 export interface VoteResult {
   proposalId: string;
-  voteCount: number;
-  threshold: number;
   status: GovernStatus;
+  /** Spec v2 两阶段管线字段（旧节点可能缺） */
+  threshold?: number;
+  quorum?: number;
+  voterCount?: number;
+  approveWeight?: number;
+  rejectWeight?: number;
+  netWeight?: number;
+}
+
+export interface VoteOptions {
+  voteType?: VoteType;
+  voteWeight?: number;
 }
 
 /**
- * 投一票。事件投递的 200 **不回**票数 / 门槛 / 状态（只回 `{event_id, received_at}`），
- * 故写后重拉一次 `GET /v1/proposal`，响应用重拉结果里的那一条构造（本册 §5.6）。
+ * 投一票。Spec v2 两阶段管线：voteType ∈ approve|reject，voteWeight ∈ [1,10]。
+ * 事件体 choice 仍传 'yes'（govern.v1 事件不区分 approve/reject，全按 approve 算）。
+ * 写后重拉提案列表返回当次快照（本册 §5.6）。
  */
-export async function vote(o: GovernOptions, proposalId: string): Promise<VoteResult> {
+export async function vote(
+  o: GovernOptions,
+  proposalId: string,
+  opts?: VoteOptions,
+): Promise<VoteResult> {
   const ident = await ensureIdentity(o);
   await postGovernEvent(o, ident, { action: 'vote', proposal_id: Number(proposalId), choice: 'yes' });
   const fresh = (await listProposals(o)).find((p) => p.proposalId === proposalId);
   return {
     proposalId,
-    voteCount: fresh?.voteCount ?? 0,
-    threshold: fresh?.threshold ?? 0,
     status: fresh?.status ?? 'pending',
+    threshold: fresh?.threshold ?? 0,
   };
 }
