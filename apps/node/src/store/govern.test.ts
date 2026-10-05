@@ -30,7 +30,18 @@ function newDb(): Db {
   const dir = mkdtempSync(join(tmpdir(), "base-node-govern-"));
   const db = openDb(join(dir, "base.db"));
   for (const stmt of schemaStatements) db.execute(stmt);
-  for (const m of itemColumnMigrations) db.execute(m.ddl);
+  // itemColumnMigrations 里部分列已在 schemaStatements（pin_level/pinned_at/highlight_until/instructor/tags_json），
+  // 判重跳过，只补 author_id/author_sig 这些 schemaStatements 里没有的后加列。
+  const cols = new Set<string>();
+  for (const r of (db as unknown as { select(sql: string): { name: unknown }[] }).select(
+    `PRAGMA table_info(items)`,
+  )) {
+    cols.add(String(r.name));
+  }
+  for (const m of itemColumnMigrations) {
+    if (cols.has(m.column)) continue;
+    db.execute(m.ddl);
+  }
   opened.push({ db, dir });
   return db;
 }
@@ -433,19 +444,19 @@ describe("addVote", () => {
     expect(proposalRow(db, id).executed_result).toBe("directory_approved");
   });
 
-  it("免票选删除：course 无课时 → threshold=0、即生效、executed_result=free_remove", () => {
+  it("Spec v2 shouldFreeExec：作者本人 + 无他人互动 + active → CreateProposal 直接生效 executed_result=free_exec:removed", () => {
     const db = newDb();
     putMeta(db, "content_version", "3");
     putItem(db, "course/c1", { type: "course", sqliteTable: "segments", authorId: "p" });
     const id = createProposal(db, input({ action: "remove", itemId: "course/c1" }));
-
-    const res = addVote(db, null, id, "q", roster("p", "q"));
-    expect(res.threshold).toBe(0);
-    expect(res.status).toBe("effective");
+    // ShouldFreeExec 快速路径：不需要投票
     expect(getItemRow(db, "course/c1")?.state).toBe("removed");
     const tomb = db.select(`SELECT revoked_rev FROM tombstones WHERE item_id=?`, ["course/c1"]);
     expect(Number(tomb[0].revoked_rev)).toBe(4);
-    expect(proposalRow(db, id).executed_result).toBe("free_remove");
+    const row = proposalRow(db, id);
+    expect(Number(row.executed_at)).not.toBe(0);
+    expect(Number(row.voided_at)).toBe(0);
+    expect(row.executed_result).toBe("free_exec:removed");
   });
 
   it("免票选删除反例：有课时且他人学过 → 退回 3 票", () => {

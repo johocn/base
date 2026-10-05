@@ -37,8 +37,13 @@ const ITEMS_DDL = `CREATE TABLE items(
 	content_hash TEXT NOT NULL,
 	sqlite_table TEXT NOT NULL,
 	dist_class   TEXT NOT NULL DEFAULT 'public',
-	state        TEXT NOT NULL DEFAULT 'active',
-	updated_at   TEXT NOT NULL,
+	instructor   TEXT NOT NULL DEFAULT '',
+	state              TEXT    NOT NULL DEFAULT 'active',
+	pin_level          INTEGER NOT NULL DEFAULT 0,
+	pinned_at          INTEGER,
+	highlight_until    INTEGER,
+	tags_json          TEXT    NOT NULL DEFAULT '[]',
+	updated_at         TEXT    NOT NULL,
 	author_id    TEXT NOT NULL DEFAULT '',
 	author_sig   TEXT NOT NULL DEFAULT ''
 )`;
@@ -86,21 +91,30 @@ const PROPOSALS_DDL = `CREATE TABLE govern_proposals(
 	title             TEXT    NOT NULL DEFAULT '',
 	body_md           TEXT    NOT NULL DEFAULT '',
 	links_json        TEXT    NOT NULL DEFAULT '',
+	tags_json         TEXT    NOT NULL DEFAULT '',
+	dist_class        TEXT    NOT NULL DEFAULT '',
+	instructor        TEXT    NOT NULL DEFAULT '',
 	base_content_hash TEXT    NOT NULL,
 	created_at        INTEGER NOT NULL,
 	executed_at       INTEGER NOT NULL DEFAULT 0,
 	voided_at         INTEGER NOT NULL DEFAULT 0,
 	executed_result   TEXT    NOT NULL DEFAULT '',
 	source_event_id   TEXT,
+	governance_level  TEXT    NOT NULL DEFAULT 'base',
+	category          TEXT,
+	circle_id         TEXT,
 	content_version   INTEGER NOT NULL DEFAULT 0,
 	revoked_rev       INTEGER NOT NULL DEFAULT 0
 )`;
 const VOTES_DDL = `CREATE TABLE govern_votes(
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
 	proposal_id INTEGER NOT NULL,
 	voter_id    TEXT    NOT NULL,
+	vote_weight INTEGER NOT NULL DEFAULT 1,
+	vote_type   TEXT    NOT NULL DEFAULT 'approve',
+	date        TEXT    NOT NULL DEFAULT '',
 	created_at  INTEGER NOT NULL,
-	source_event_id TEXT,
-	PRIMARY KEY(proposal_id, voter_id)
+	source_event_id TEXT
 )`;
 const SEGMENTS_DDL = `CREATE TABLE segments(
 	item_id      TEXT NOT NULL,
@@ -123,6 +137,19 @@ const PROGRESS_DDL = `CREATE TABLE progress(
 	updated_at  TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY(id, item_id)
 )`;
+const FAVORITES_DDL = `CREATE TABLE favorites(
+	id       TEXT NOT NULL,
+	item_id  TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY(id, item_id)
+)`;
+const IDENTITIES_DDL = `CREATE TABLE identities(
+	id           TEXT PRIMARY KEY,
+	alg          TEXT NOT NULL,
+	pubkey       TEXT NOT NULL,
+	created_at   INTEGER NOT NULL,
+	last_seen_at INTEGER NOT NULL DEFAULT 0
+)`;
 
 const TABLES = [
   ITEMS_DDL,
@@ -137,6 +164,8 @@ const TABLES = [
   SEGMENTS_DDL,
   TAG_LINKS_DDL,
   PROGRESS_DDL,
+  FAVORITES_DDL,
+  IDENTITIES_DDL,
 ];
 
 const GA = "aa".repeat(16);
@@ -176,6 +205,15 @@ beforeAll(() => {
   db = openDb(join(dir, "base.db"));
   for (const stmt of TABLES) db.execute(stmt);
 
+  // V2 需要 identities 表算 m（7 天活跃）；插 3 个让 m=3 → threshold=11, quorum=3。
+  const nowMs = Date.now();
+  for (const id of [GA, GB, GC]) {
+    db.execute(
+      `INSERT INTO identities(id,alg,pubkey,created_at,last_seen_at) VALUES(?,?,?,?,?)`,
+      [id, "ed25519", id, nowMs, nowMs],
+    );
+  }
+
   // 名册 = {GA,GB,GC}（3 < 10 ⇒ 目录小节点豁免成立）。
   addGovernor(GA, "article/gov-a");
   addGovernor(GB, "article/gov-b");
@@ -197,16 +235,14 @@ beforeAll(() => {
   // 目录：tag/mergekey 已有未定案提案 + GA 的一票（供同键归并分支）。
   const mergeItem = directoryProposalItemId("tag", "mergekey");
   db.execute(
-    `INSERT INTO govern_proposals(proposal_id,action,item_id,proposer_id,reason,title,body_md,links_json,base_content_hash,created_at,executed_at,voided_at,executed_result,source_event_id,content_version,revoked_rev)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [100, "directory_add", mergeItem, GA, "", "Mergekey", "mergekey", "", "h", 500, 0, 0, "", null, 0, 0],
+    `INSERT INTO govern_proposals(proposal_id,action,item_id,proposer_id,reason,title,body_md,links_json,tags_json,dist_class,instructor,base_content_hash,created_at,executed_at,voided_at,executed_result,source_event_id,governance_level,category,circle_id,content_version,revoked_rev)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [100, "directory_add", mergeItem, GA, "", "Mergekey", "mergekey", "", "", "", "", "h", 500, 0, 0, "", null, "base", "", "", 0, 0],
   );
-  db.execute(`INSERT INTO govern_votes(proposal_id,voter_id,created_at,source_event_id) VALUES(?,?,?,?)`, [
-    100,
-    GA,
-    501,
-    null,
-  ]);
+  db.execute(
+    `INSERT INTO govern_votes(proposal_id,voter_id,vote_weight,vote_type,date,created_at,source_event_id) VALUES(?,?,?,?,?,?,?)`,
+    [100, GA, 1, "approve", "1970-01-01", 501, null],
+  );
 });
 
 afterAll(() => {
@@ -216,6 +252,12 @@ afterAll(() => {
 
 function text(res: ServerResponse): string {
   return Buffer.from(res.body ?? new Uint8Array()).toString("utf8");
+}
+
+function jsonOf(res: ServerResponse): Record<string, unknown> {
+  const raw = text(res);
+  // strip trailing \n if present
+  return JSON.parse(raw.endsWith("\n") ? raw.slice(0, -1) : raw);
 }
 
 function makePostHandler(byID?: IpLimiter, byIP?: IpLimiter): AuthedHandler {
@@ -462,31 +504,32 @@ describe("POST /v1/proposal/{id}/vote", () => {
   let pA = "";
   let pB = "";
 
-  it("空体放行 → 200 pending（未达门槛，vote_count 2）", async () => {
+  it("空体放行 → 200 pending（未达门槛）", async () => {
     pA = await createRemoveProposal("article/t1");
     const res = await vote(pA, GB, "");
     expect(res.status).toBe(200);
-    expect(text(res)).toBe(
-      `{"proposal_id":"${pA}","status":"pending","threshold":3,"vote_count":2}\n`,
-    );
+    const j = jsonOf(res);
+    expect(j.status).toBe("pending");
+    expect(Number(j.quorum)).toBe(3); // m=3, threshold=11 → quorum=min(11,3)=3
+    expect(Number(j.voter_count)).toBe(2); // 自投 + GB
   });
 
   it("{} 放行 → 200", async () => {
     pB = await createRemoveProposal("article/t2");
     const res = await vote(pB, GB, "{}");
     expect(res.status).toBe(200);
-    expect(text(res)).toBe(
-      `{"proposal_id":"${pB}","status":"pending","threshold":3,"vote_count":2}\n`,
-    );
+    const j = jsonOf(res);
+    expect(j.status).toBe("pending");
+    expect(Number(j.voter_count)).toBe(2);
   });
 
   it("null 放行 → 200", async () => {
     const pC = await createRemoveProposal("article/t3");
     const res = await vote(pC, GB, "null");
     expect(res.status).toBe(200);
-    expect(text(res)).toBe(
-      `{"proposal_id":"${pC}","status":"pending","threshold":3,"vote_count":2}\n`,
-    );
+    const j = jsonOf(res);
+    expect(j.status).toBe("pending");
+    expect(Number(j.voter_count)).toBe(2);
   });
 
   it("携带 id 字段 → 400 author_id_forbidden", async () => {
@@ -515,18 +558,25 @@ describe("POST /v1/proposal/{id}/vote", () => {
     expect(text(res)).toBe(`{"code":"voter_not_governor","error":"投票人不在本节点名册内"}\n`);
   });
 
-  it("重复投票 → 409 already_voted", async () => {
-    const res = await vote(pA, GA, "");
-    expect(res.status).toBe(409);
-    expect(text(res)).toBe(`{"code":"already_voted","error":"已对本提案投过票"}\n`);
+  it("V2 允许同 voter 多次投 → 200", async () => {
+    // V2 主键自增不再拒绝同 voter 重投（可反悔 vote_type）
+    const res = await vote(pA, GA, '{"vote_type":"reject"}');
+    expect(res.status).toBe(200);
+    const j = jsonOf(res);
+    // GA 自投(approve)+GA 重投(reject)+GB(approve) → voter_count=2（distinct），approve=2, reject=1
+    expect(Number(j.voter_count)).toBe(2);
+    expect(Number(j.approve_weight)).toBe(2);
+    expect(Number(j.reject_weight)).toBe(1);
+    expect(Number(j.net_weight)).toBe(1);
   });
 
-  it("达到门槛 → 200 effective（vote_count 3）", async () => {
+  it("达到 quorum + net>0 → 200 effective", async () => {
     const res = await vote(pB, GC, "");
     expect(res.status).toBe(200);
-    expect(text(res)).toBe(
-      `{"proposal_id":"${pB}","status":"effective","threshold":3,"vote_count":3}\n`,
-    );
+    const j = jsonOf(res);
+    expect(j.status).toBe("effective");
+    expect(Number(j.voter_count)).toBe(3);
+    expect(Number(j.net_weight)).toBe(3);
     // 生效动作已执行：目标条目 state=removed、墓碑落库。
     const it0 = db.select(`SELECT state FROM items WHERE item_id=?`, ["article/t2"]);
     expect(String(it0[0].state)).toBe("removed");

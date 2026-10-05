@@ -15,7 +15,20 @@ export const ROSTER_TOP_N = 10;
 
 // —— 治理动作 / 状态 / 门槛（govern.go:14-39） ——
 export const GOVERN_ACTION_REMOVE = "remove";
+export const GOVERN_ACTION_REVIVE = "revive";
+export const GOVERN_ACTION_EDIT = "edit";
 export const GOVERN_ACTION_DIRECTORY_ADD = "directory_add";
+// Spec v2 §3 新增细粒度动作
+export const GOVERN_ACTION_EDIT_TITLE = "edit_title";
+export const GOVERN_ACTION_EDIT_BODY = "edit_body";
+export const GOVERN_ACTION_EDIT_CATEGORY = "edit_category";
+export const GOVERN_ACTION_EDIT_TAGS = "edit_tags";
+export const GOVERN_ACTION_EDIT_INSTRUCTOR = "edit_instructor";
+// Spec v2 §3 新增 pin_level 系列（治理层给条目分级，enhanced 门槛）
+export const GOVERN_ACTION_HIGHLIGHT = "highlight";
+export const GOVERN_ACTION_PIN = "pin";
+export const GOVERN_ACTION_RECOMMEND = "recommend";
+export const GOVERN_ACTION_FEATURE = "feature";
 export const GOVERN_STATUS_PENDING = "pending";
 const GOVERN_REMOVE_THRESHOLD = 3;
 const GOVERN_DEFAULT_THRESHOLD = 2;
@@ -553,6 +566,118 @@ export function governThresholdForRoster(
   return governThreshold(action);
 }
 
+// ========= Spec v2 §4 动态门槛公式 =========
+
+/**
+ * GovernThreshold（Spec v2 §4，govern.go:73-89）。
+ * level: 'base' | 'enhanced'
+ * m = 活跃 7 天用户数，P = 他人学习去重数，F = 他人收藏去重数。
+ * base:     10 + ⌊m/3⌋ + ⌊(P+F)/3⌋
+ * enhanced: 20 + ⌊m/3⌋ + ⌊2*(P+F)/3⌋
+ * Go 整数除法对正数向零截断等于 ⌊x⌋，Node Math.floor 同。
+ */
+export function GovernThreshold(level: string, m: number, P: number, F: number): number {
+  const mPrime = Math.floor(m / 3);
+  if (level === "enhanced") {
+    return 20 + mPrime + Math.floor((2 * (P + F)) / 3);
+  }
+  return 10 + mPrime + Math.floor((P + F) / 3);
+}
+
+/**
+ * GovernQuorum（Spec v2 §4，govern.go:91-114）。
+ * quorum = min(max(threshold, ⌈m/2⌉), m)
+ * ⌈m/2⌉ = (m+1)/2 在整数域（对正数）。
+ */
+export function GovernQuorum(threshold: number, m: number): number {
+  if (threshold <= 0) return 0;
+  if (m <= 0) return threshold;
+  const half = Math.floor((m + 1) / 2);
+  if (threshold > half) {
+    return threshold > m ? m : threshold;
+  }
+  return half > m ? m : half;
+}
+
+/** NetWeight（Spec v2 §4，govern.go:117-119）= approve_sum - reject_sum。 */
+export function NetWeight(approveSum: number, rejectSum: number): number {
+  return approveSum - rejectSum;
+}
+
+// ========= Spec v2 §3.5 免票选 shouldFreeExec（free_remove.go:22-...） =========
+
+/** isCourseID（free_remove.go:60-63）。 */
+function isCourseId(itemId: string): boolean {
+  const parts = itemId.split("/");
+  return parts.length === 2 && parts[0] === "course" && parts[1] !== "";
+}
+
+/** isLessonID（free_remove.go:66-69）。 */
+function isLessonId(itemId: string): boolean {
+  const parts = itemId.split("/");
+  return (
+    parts.length === 4 && parts[0] === "course" && parts[2] === "lesson" && parts[1] !== "" && parts[3] !== ""
+  );
+}
+
+/** courseLessonIDs（free_remove.go:72-87）。 */
+function courseLessonIds(db: Db, courseId: string): string[] {
+  const rows = db.select(
+    `SELECT text FROM segments WHERE item_id=? AND seq>=1 ORDER BY seq ASC`,
+    [courseId],
+  );
+  return rows.map((r) => toStr(r.text));
+}
+
+/**
+ * shouldFreeExec（free_remove.go:22-75）：判据 = 目录条款否 + 作者本人 + active + 无他人互动 (progress + favorites)。
+ * 异常 fail-closed（返回 false + 错误，由上层退回正常投票路径）。
+ */
+export function shouldFreeExec(db: Db, itemId: string, proposerId: string, action: string): {
+  free: boolean;
+  err: Error | null;
+} {
+  // 目录条款永不免票选
+  if (action === GOVERN_ACTION_DIRECTORY_ADD) return { free: false, err: null };
+  // 读 author_id / state
+  let rows: Record<string, unknown>[];
+  try {
+    rows = db.select(`SELECT author_id,state FROM items WHERE item_id=?`, [itemId]);
+  } catch (e) {
+    return { free: false, err: e as Error };
+  }
+  if (rows.length === 0) return { free: false, err: null };
+  const authorId = toStr(rows[0].author_id);
+  const state = toStr(rows[0].state);
+  if (authorId === "" || authorId !== proposerId) return { free: false, err: null };
+  if (state !== "active") return { free: false, err: null };
+
+  // 构造 progress/favorites 查询范围
+  const targets = [itemId];
+  if (isCourseId(itemId)) {
+    const lessons = courseLessonIds(db, itemId);
+    targets.push(...lessons);
+  }
+  const ph = placeholders(targets.length);
+  let P = 0;
+  let F = 0;
+  try {
+    const pRows = db.select(
+      `SELECT COUNT(DISTINCT id) AS n FROM progress WHERE item_id IN (${ph}) AND id<>?`,
+      [...targets, proposerId],
+    );
+    P = Number(pRows[0]?.n ?? 0);
+    const fRows = db.select(
+      `SELECT COUNT(DISTINCT id) AS n FROM favorites WHERE item_id IN (${ph}) AND id<>?`,
+      [...targets, proposerId],
+    );
+    F = Number(fRows[0]?.n ?? 0);
+  } catch (e) {
+    return { free: false, err: e as Error };
+  }
+  return { free: P === 0 && F === 0, err: null };
+}
+
 /** ProposalStatus（govern.go:70-79）。 */
 export function proposalStatus(executedAt: number, voidedAt: number): string {
   if (executedAt !== 0) return "effective";
@@ -843,13 +968,22 @@ export function directoryProposalItemId(kind: string, termKey: string): string {
   return "dir/" + kind + "/" + directoryPayloadHash(kind, termKey).slice(0, 16);
 }
 
-/** validProposalAction（govern.go:33-39）：remove / edit / revive / directory_add 四值枚举。 */
+/** validProposalAction（govern.go:33-39 + Spec v2 §3）：12 种治理动作枚举。 */
 export function validProposalAction(a: string): boolean {
   return (
     a === GOVERN_ACTION_REMOVE ||
-    a === "edit" ||
-    a === "revive" ||
-    a === GOVERN_ACTION_DIRECTORY_ADD
+    a === GOVERN_ACTION_EDIT ||
+    a === GOVERN_ACTION_REVIVE ||
+    a === GOVERN_ACTION_DIRECTORY_ADD ||
+    a === GOVERN_ACTION_EDIT_TITLE ||
+    a === GOVERN_ACTION_EDIT_BODY ||
+    a === GOVERN_ACTION_EDIT_CATEGORY ||
+    a === GOVERN_ACTION_EDIT_TAGS ||
+    a === GOVERN_ACTION_EDIT_INSTRUCTOR ||
+    a === GOVERN_ACTION_HIGHLIGHT ||
+    a === GOVERN_ACTION_PIN ||
+    a === GOVERN_ACTION_RECOMMEND ||
+    a === GOVERN_ACTION_FEATURE
   );
 }
 

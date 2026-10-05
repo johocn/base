@@ -8,6 +8,7 @@ import type { ServerHandler, ServerResponse } from "@base/core-ts";
 import type { Db } from "../db";
 import {
   addVote,
+  addVoteV2,
   AlreadyVotedError,
   createDirectoryProposal,
   createProposal,
@@ -281,17 +282,19 @@ export function proposalPostHandler(deps: ProposalDeps): AuthedHandler {
 }
 
 /**
- * handleVotePost（govern.go:288-345）：投票请求**可能带副作用**——这一票把有效票推到
- * 该动作门槛时，在同一事务内执行动作。请求体可空（空体与 {} 等价）。
+ * handleVotePost（govern.go:288-345 + Spec v2 §4）：投票请求**可能带副作用**——这一票把有效票推到
+ * 该动作门槛时，在同一事务内执行动作。
+ * 请求体可带 vote_type('approve'|'reject') / vote_weight(1..10)；缺省 vote_type='approve' / vote_weight=1。
  */
 export function proposalVoteHandler(deps: ProposalDeps): AuthedHandler {
   return async (req, actor) => {
     const raw = Buffer.from(req.body.subarray(0, MAX_JSON_BODY)).toString("utf8");
     // Go 用 bytes.TrimSpace（空白集与 JS `.trim()` 不同），故必须走 trimGoSpace。
+    let voteType = "approve";
+    let voteWeight = 1;
     if (trimGoSpace(raw) !== "") {
       const node = parseJSONDocument(raw);
       if (node === null) {
-        // writeError 形状（{"error":...}），无 code。
         return jsonResponse(400, { error: "bad_json" });
       }
       if (node.t !== "null") {
@@ -305,6 +308,32 @@ export function proposalVoteHandler(deps: ProposalDeps): AuthedHandler {
           jsonObjectField(node, "id") !== undefined
         ) {
           return writeAuthErr(400, "author_id_forbidden");
+        }
+        const vt = jsonObjectField(node, "vote_type");
+        if (vt !== undefined) {
+          if (vt.t !== "str" || typeof vt.v !== "string") {
+            return jsonResponse(400, { error: "invalid_vote_type" });
+          }
+          const s = vt.v;
+          if (s !== "approve" && s !== "reject") {
+            return jsonResponse(400, { error: "invalid_vote_type" });
+          }
+          voteType = s;
+        }
+        const vw = jsonObjectField(node, "vote_weight");
+        if (vw !== undefined) {
+          let n: number;
+          if (vw.t === "num") {
+            n = parseInt(vw.raw, 10);
+          } else if (vw.t === "str") {
+            n = parseInt(vw.v, 10);
+          } else {
+            return jsonResponse(400, { error: "invalid_vote_weight" });
+          }
+          if (!Number.isFinite(n) || n < 1 || n > 10) {
+            return jsonResponse(400, { error: "invalid_vote_weight" });
+          }
+          voteWeight = n | 0;
         }
       }
     }
@@ -328,21 +357,29 @@ export function proposalVoteHandler(deps: ProposalDeps): AuthedHandler {
     if (roster.ok && !roster.set.has(actor)) {
       return writeAuthErr(403, "voter_not_governor");
     }
-    let res: ReturnType<typeof addVote>;
+    let res: ReturnType<typeof addVoteV2>;
     try {
-      res = addVote(deps.db, deps.storeKey, pid, actor, roster.set);
+      res = addVoteV2(deps.db, deps.storeKey, pid, actor, voteWeight, voteType);
     } catch (err) {
       if (err instanceof AlreadyVotedError) {
         return writeAuthErr(409, "already_voted");
       }
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith("quota_exceeded") || msg.startsWith("per_item_quota_exceeded")) {
+        return writeAuthErr(429, msg);
+      }
       return errResponse(err);
     }
-    // Go map 键按字典序：proposal_id, status, threshold, vote_count。
+    // VoteResultV2：proposal_id / voter_count / quorum / threshold / approve_weight / reject_weight / net_weight / status
     return jsonResponse(200, {
       proposal_id: String(res.proposalId),
       status: res.status,
       threshold: res.threshold,
-      vote_count: res.voteCount,
+      quorum: res.quorum,
+      voter_count: res.voterCount,
+      approve_weight: res.approveWeight,
+      reject_weight: res.rejectWeight,
+      net_weight: res.netWeight,
     });
   };
 }

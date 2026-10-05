@@ -8,12 +8,17 @@
 // 生效判定 / 动作执行全部复用 governProjection.ts 的唯一实现，不另起口径。
 import type { Db } from "../db";
 import {
+  contributorRoster,
   directoryKindOfItemId,
   filterRosterAtWatermarkSet,
   GOVERN_ACTION_REMOVE,
+  GovernQuorum,
+  GovernThreshold,
   governThresholdForRoster,
+  NetWeight,
   proposalStatus,
   restoredRosterAuthors,
+  shouldFreeExec,
   toStr,
 } from "../routes/derived";
 import {
@@ -53,7 +58,7 @@ function rollbackQuietly(db: Db): void {
   }
 }
 
-/** CreateProposal / CreateDirectoryProposal 的入参（govern.go:82-102 写路径实际消费的列）。 */
+/** CreateProposal / CreateDirectoryProposal 的入参（govern.go:82-102 + Spec v2 §3 扩列）。 */
 export interface ProposalInput {
   action: string;
   itemId: string;
@@ -62,8 +67,18 @@ export interface ProposalInput {
   title: string;
   bodyMd: string;
   linksJson: string;
+  /** Spec v2 §3: edit_tags 载荷 */
+  tagsJson?: string;
+  /** Spec v2 §3: edit_category 载荷 */
+  distClass?: string;
+  /** Spec v2 §3: edit_instructor 载荷 */
+  instructor?: string;
   baseContentHash: string;
   createdAt: number;
+  /** V2 动态门槛分类元信息，缺省 'base' */
+  governanceLevel?: string;
+  category?: string;
+  circleId?: string;
 }
 
 /** VoteResult（govern.go:432-438）：一次投票落库后的判定结果。 */
@@ -71,6 +86,18 @@ export interface VoteResult {
   proposalId: number;
   voteCount: number;
   threshold: number;
+  status: string;
+}
+
+/** VoteResultV2（Spec v2 §4，govern.go:923-933）：两阶段投票管线的响应体。 */
+export interface VoteResultV2 {
+  proposalId: number;
+  voterCount: number;
+  quorum: number;
+  threshold: number;
+  approveWeight: number;
+  rejectWeight: number;
+  netWeight: number;
   status: string;
 }
 
@@ -127,36 +154,90 @@ function filterRoster(ids: string[], roster: Set<string>): string[] {
   return out;
 }
 
-/** CreateProposal（govern.go:263-295）：单事务写提案行 + 提案人第 1 票，返回新 proposal_id。 */
-export function createProposal(db: Db, p: ProposalInput): number {
+/** CreateProposal（govern.go:378-463 + Spec v2 §3/§4 扩列/shouldFreeExec）：
+ * 正常路径写提案行 + 提案人自投（vote_weight=1, vote_type=approve, date=ISO yyyy-mm-dd）。
+ * shouldFreeExec 快速路径（Spec v2 §3.5）：若作者本人 + 无他人互动 + active → 同事务直接执行 governApplyTx。 */
+export function createProposal(db: Db, p: ProposalInput, storeKey: Uint8Array | null = null): number {
+  // Should this default be 'base'? Yes — Go CreateProposal 里没显式给就 base。
+  const governanceLevel = p.governanceLevel ?? "base";
+  const category = p.category ?? "";
+  const circleId = p.circleId ?? "";
+  const tagsJson = p.tagsJson ?? "";
+  const distClass = p.distClass ?? "";
+  const instructor = p.instructor ?? "";
+
+  // ============ Spec v2 §3.5 免票选快速路径 ============
+  const freeCheck = shouldFreeExec(db, p.itemId, p.proposerId, p.action);
+  if (freeCheck.err === null && freeCheck.free) {
+    db.execute("BEGIN");
+    try {
+      const now = Date.now();
+      const cv = contentVersion(db);
+      const rv = maxRevokedRev(db);
+      // 跑前置条件（同 Go governPreconditionTx：content_hash 匹配 / state 匹配 / 条目存在）
+      const p2: Parameters<typeof governPreconditionTx>[1] = {
+        proposalId: 0, action: p.action, itemId: p.itemId, proposerId: p.proposerId,
+        reason: p.reason, title: p.title, bodyMd: p.bodyMd, linksJson: p.linksJson,
+        tagsJson, distClass, instructor, baseContentHash: p.baseContentHash,
+        createdAt: p.createdAt, executedAt: 0, voidedAt: 0, executedResult: "",
+        sourceEventId: "", contentVersion: cv, revokedRev: rv, governanceLevel, category, circleId,
+      };
+      const met = governPreconditionTx(db, p2);
+      if (!met) {
+        // 前置不满足 → 直接记 void 提案
+        db.execute(
+          `INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,tags_json,dist_class,instructor,base_content_hash,created_at,voided_at,content_version,revoked_rev,governance_level,category,circle_id)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [p.action, p.itemId, p.proposerId, p.reason, p.title, p.bodyMd, p.linksJson,
+            tagsJson, distClass, instructor,
+            p.baseContentHash, p.createdAt, now, cv, rv,
+            governanceLevel, category, circleId],
+        );
+        const id = lastInsertRowId(db);
+        db.execute("COMMIT");
+        return id;
+      }
+      // 前置满足 → 直接执行动作 + 记 executed_at
+      const execRes = governApplyTx(db, storeKey, { ...p2, proposalId: 0 });
+      db.execute(
+        `INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,tags_json,dist_class,instructor,base_content_hash,created_at,executed_at,executed_result,content_version,revoked_rev,governance_level,category,circle_id)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [p.action, p.itemId, p.proposerId, p.reason, p.title, p.bodyMd, p.linksJson,
+          tagsJson, distClass, instructor,
+          p.baseContentHash, p.createdAt, now, "free_exec:" + execRes, cv, rv,
+          governanceLevel, category, circleId],
+      );
+      const pid = lastInsertRowId(db);
+      db.execute("COMMIT");
+      return pid;
+    } catch (err) {
+      rollbackQuietly(db);
+      throw err;
+    }
+  }
+
+  // ============ 正常投票路径 ============
   db.execute("BEGIN");
   try {
-    // 提案建时固化快照水位（册子 §4.3）：content_version 记当前版本，revoked_rev 记当前墓碑高水位。
     const cv = contentVersion(db);
     const rv = maxRevokedRev(db);
     db.execute(
-      `INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,base_content_hash,created_at,content_version,revoked_rev)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,tags_json,dist_class,instructor,base_content_hash,created_at,content_version,revoked_rev,governance_level,category,circle_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        p.action,
-        p.itemId,
-        p.proposerId,
-        p.reason,
-        p.title,
-        p.bodyMd,
-        p.linksJson,
-        p.baseContentHash,
-        p.createdAt,
-        cv,
-        rv,
+        p.action, p.itemId, p.proposerId, p.reason, p.title, p.bodyMd, p.linksJson,
+        tagsJson, distClass, instructor,
+        p.baseContentHash, p.createdAt, cv, rv,
+        governanceLevel, category, circleId,
       ],
     );
     const id = lastInsertRowId(db);
-    db.execute(`INSERT INTO govern_votes(proposal_id,voter_id,created_at) VALUES(?,?,?)`, [
-      id,
-      p.proposerId,
-      p.createdAt,
-    ]);
+    // 提案人自投：vote_weight=1, vote_type=approve, date=ISO yyyy-mm-dd（UTC）
+    const dateIso = new Date(p.createdAt).toISOString().slice(0, 10);
+    db.execute(
+      `INSERT INTO govern_votes(proposal_id,voter_id,vote_weight,vote_type,date,created_at) VALUES(?,?,?,?,?,?)`,
+      [id, p.proposerId, 1, "approve", dateIso, p.createdAt],
+    );
     db.execute("COMMIT");
     return id;
   } catch (err) {
@@ -166,7 +247,7 @@ export function createProposal(db: Db, p: ProposalInput): number {
 }
 
 /**
- * CreateDirectoryProposal（govern.go:303-354）：写目录提案 + 第 1 票；autoApprove=true（小节点豁免）时
+ * CreateDirectoryProposal（govern.go:471-525）：写目录提案 + 第 1 票；autoApprove=true（小节点豁免）时
  * **同事务**批准词条、推 directory_version、记 executed_at。返回 {id, status}。
  */
 export function createDirectoryProposal(
@@ -178,29 +259,26 @@ export function createDirectoryProposal(
   try {
     const cv = contentVersion(db);
     const rv = maxRevokedRev(db);
+    const governanceLevel = p.governanceLevel ?? "base";
+    const category = p.category ?? "";
+    const circleId = p.circleId ?? "";
     db.execute(
-      `INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,base_content_hash,created_at,content_version,revoked_rev)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,tags_json,dist_class,instructor,base_content_hash,created_at,content_version,revoked_rev,governance_level,category,circle_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        p.action,
-        p.itemId,
-        p.proposerId,
-        p.reason,
-        p.title,
-        p.bodyMd,
-        p.linksJson,
-        p.baseContentHash,
-        p.createdAt,
-        cv,
-        rv,
+        p.action, p.itemId, p.proposerId, p.reason, p.title, p.bodyMd, p.linksJson,
+        p.tagsJson ?? "", p.distClass ?? "", p.instructor ?? "",
+        p.baseContentHash, p.createdAt, cv, rv,
+        governanceLevel, category, circleId,
       ],
     );
     const id = lastInsertRowId(db);
-    db.execute(`INSERT INTO govern_votes(proposal_id,voter_id,created_at) VALUES(?,?,?)`, [
-      id,
-      p.proposerId,
-      p.createdAt,
-    ]);
+    // 提案人自投：vote_weight=1, vote_type=approve, date=ISO yyyy-mm-dd（UTC）
+    const dateIso = new Date(p.createdAt).toISOString().slice(0, 10);
+    db.execute(
+      `INSERT INTO govern_votes(proposal_id,voter_id,vote_weight,vote_type,date,created_at) VALUES(?,?,?,?,?,?)`,
+      [id, p.proposerId, 1, "approve", dateIso, p.createdAt],
+    );
     if (!autoApprove) {
       db.execute("COMMIT");
       return { id, status: GOVERN_STATUS_PENDING };
@@ -224,6 +302,8 @@ export function createDirectoryProposal(
 
 /**
  * AddVote（govern.go:445-459 + addVoteTx:465-539）：写一张票并在**同一事务内**做生效判定。
+ * V2 schema 下 govern_votes 主键已改成自增 id，(proposal_id, voter_id) 不再是 UNIQUE；
+ * 旧路径（handler 还在用）仍需一人一票，故先手动 COUNT 判重（对齐 Go addVoteTx）。
  * roster 由调用方在**事务外**派生；空名册 ⇒ 有效票 = 0（册子 §6.2 降级口径）。
  * storeKey 供 edit 动作加密正文用（Go 由 Store 自带，Node 侧显式传参，同 settleGovernProposal）。
  */
@@ -237,15 +317,19 @@ export function addVote(
   db.execute("BEGIN");
   try {
     const now = Date.now();
-    // 写语句刻意置于最前（govern.go:462-464）：让 SQLite 先取写锁、串行化并发投票。
-    db.execute(
-      `INSERT INTO govern_votes(proposal_id,voter_id,created_at) VALUES(?,?,?)
-        ON CONFLICT(proposal_id,voter_id) DO NOTHING`,
-      [proposalId, voterId, now],
+    // V2 schema 不再有 (proposal_id,voter_id) 主键 → 手动判重
+    const exist = db.select(
+      `SELECT COUNT(*) AS n FROM govern_votes WHERE proposal_id=? AND voter_id=?`,
+      [proposalId, voterId],
     );
-    // already_voted 的唯一判据是受影响行数（不能用「先查再插」，并发语义不同）。
-    const changed = db.select(`SELECT changes() AS n`);
-    if (Number(changed[0]?.n ?? 0) === 0) throw new AlreadyVotedError();
+    if (Number(exist[0]?.n ?? 0) > 0) throw new AlreadyVotedError();
+
+    // 写语句刻意置于最前：让 SQLite 先取写锁、串行化并发投票。
+    db.execute(
+      `INSERT INTO govern_votes(proposal_id,voter_id,created_at,source_event_id,
+          vote_weight,vote_type,date) VALUES(?,?,?,?,?,?,?)`,
+      [proposalId, voterId, now, null, 1, "approve", ""],
+    );
 
     const p = getProposal(db, proposalId);
     if (p === null) throw new Error(`store: 读提案 ${proposalId}: no rows`);
@@ -290,6 +374,186 @@ export function addVote(
     }
     let result = governApplyTx(db, storeKey, p);
     if (freeResult !== "") result = freeResult; // 免票选删除：executed_result 记 'free_remove'（仅诊断）
+    db.execute(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`, [
+      now,
+      result,
+      proposalId,
+    ]);
+    out.status = GOVERN_STATUS_EFFECTIVE;
+    db.execute("COMMIT");
+    return out;
+  } catch (err) {
+    rollbackQuietly(db);
+    throw err;
+  }
+}
+
+/**
+ * AddVoteV2（Spec v2 §4，govern.go:938-1117）：V2 两阶段投票管线。
+ *   - voteType: 'approve' | 'reject'
+ *   - voteWeight: 1..10（非贡献层强制 1；贡献层每日 20 配额 + 单条目 ≤ 10）
+ * 返回 VoteResultV2（含阈值/quorum/净票权/当前状态）。
+ */
+export function addVoteV2(
+  db: Db,
+  storeKey: Uint8Array | null,
+  proposalId: number,
+  voterId: string,
+  voteWeight: number,
+  voteType: string,
+): VoteResultV2 {
+  // 1. 参数校验
+  if (voteType !== "approve" && voteType !== "reject") {
+    throw new Error(`invalid vote_type: ${voteType} (need approve|reject)`);
+  }
+  if (voteWeight < 1 || voteWeight > 10) {
+    throw new Error(`vote_weight must be [1,10], got ${voteWeight}`);
+  }
+
+  // 2. 查提案
+  const p = getProposal(db, proposalId);
+  if (p === null) throw new Error(`proposal not found: ${proposalId}`);
+  if (p.executedAt !== 0 || p.voidedAt !== 0) {
+    throw new Error(`proposal already settled (status=${proposalStatus(p.executedAt, p.voidedAt)})`);
+  }
+
+  // 3. 贡献层资格判定
+  let isContributor = false;
+  try {
+    const roster = contributorRoster(db, storeKey);
+    isContributor = roster.some((c) => c.id === voterId);
+  } catch {
+    // 名册派生失败：按空名册降级（fail-closed 资格判定）
+  }
+
+  // 4. 普通用户强制 voteWeight=1
+  if (!isContributor) voteWeight = 1;
+
+  // 5. 贡献层配额检查
+  if (isContributor && voteWeight >= 2) {
+    const today = new Date().toISOString().slice(0, 10);
+    const usedDaily = Number(
+      db.select(
+        `SELECT COALESCE(SUM(vote_weight),0) AS c FROM govern_votes WHERE voter_id=? AND date=? AND vote_weight>=2`,
+        [voterId, today],
+      )[0]?.c ?? 0,
+    );
+    if (usedDaily + voteWeight > 20) {
+      throw new Error(`quota_exceeded: daily contribution quota=20, used=${usedDaily}, add=${voteWeight}`);
+    }
+  }
+
+  // 6. 单条目累计检查（贡献层）
+  if (isContributor) {
+    const usedItem = Number(
+      db.select(
+        `SELECT COALESCE(SUM(vote_weight),0) AS c FROM govern_votes WHERE voter_id=? AND proposal_id=?`,
+        [voterId, proposalId],
+      )[0]?.c ?? 0,
+    );
+    if (usedItem + voteWeight > 10) {
+      throw new Error(`per_item_quota_exceeded: per-item limit=10, used=${usedItem}, add=${voteWeight}`);
+    }
+  }
+
+  // 7. 事务内写票 + 两阶段判定
+  const now = Date.now();
+  const dateIso = new Date(now).toISOString().slice(0, 10);
+  const gl = p.governanceLevel || "base";
+
+  db.execute("BEGIN");
+  try {
+    // Step A: 写 govern_votes
+    db.execute(
+      `INSERT INTO govern_votes(proposal_id,voter_id,vote_weight,vote_type,date,created_at) VALUES(?,?,?,?,?,?)`,
+      [proposalId, voterId, voteWeight, voteType, dateIso, now],
+    );
+
+    // Step B: 读提案（事务内）
+    const pInner = getProposal(db, proposalId);
+    if (pInner === null) throw new Error(`proposal ${proposalId} vanished mid-tx`);
+
+    // Step C: m — 7 天活跃 identities
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const m = Number(
+      db.select(`SELECT COUNT(DISTINCT id) AS c FROM identities WHERE last_seen_at > ?`, [
+        now - sevenDaysMs,
+      ])[0]?.c ?? 0,
+    );
+
+    // Step D: P + F（去重，排除 author/proposer）
+    let P = 0;
+    let F = 0;
+    if (pInner.itemId !== "") {
+      P = Number(
+        db.select(`SELECT COUNT(DISTINCT id) AS c FROM progress WHERE item_id=? AND id!=?`, [
+          pInner.itemId,
+          pInner.proposerId,
+        ])[0]?.c ?? 0,
+      );
+      F = Number(
+        db.select(`SELECT COUNT(DISTINCT id) AS c FROM favorites WHERE item_id=? AND id!=?`, [
+          pInner.itemId,
+          pInner.proposerId,
+        ])[0]?.c ?? 0,
+      );
+    }
+
+    // Step E: 门槛 + quorum
+    const threshold = GovernThreshold(gl, m, P, F);
+    const quorum = GovernQuorum(threshold, m);
+
+    // Step F: 独立 voter 数 + 净票权
+    const voterCount = Number(
+      db.select(`SELECT COUNT(DISTINCT voter_id) AS c FROM govern_votes WHERE proposal_id=?`, [
+        proposalId,
+      ])[0]?.c ?? 0,
+    );
+    const sumRow = db.select(
+      `SELECT
+        COALESCE(SUM(CASE WHEN vote_type='approve' THEN vote_weight ELSE 0 END),0) AS a,
+        COALESCE(SUM(CASE WHEN vote_type='reject' THEN vote_weight ELSE 0 END),0) AS r
+        FROM govern_votes WHERE proposal_id=?`,
+      [proposalId],
+    )[0];
+    const approveSum = Number(sumRow?.a ?? 0);
+    const rejectSum = Number(sumRow?.r ?? 0);
+    const net = NetWeight(approveSum, rejectSum);
+
+    // Step G: 阶段 1 — quorum 未达 → pending
+    const out: VoteResultV2 = {
+      proposalId,
+      voterCount,
+      quorum,
+      threshold,
+      approveWeight: approveSum,
+      rejectWeight: rejectSum,
+      netWeight: net,
+      status: "",
+    };
+    if (voterCount < quorum) {
+      out.status = GOVERN_STATUS_PENDING;
+      db.execute("COMMIT");
+      return out;
+    }
+
+    if (net <= 0) {
+      // 失败 → void
+      db.execute(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, [now, proposalId]);
+      out.status = GOVERN_STATUS_VOID;
+      db.execute("COMMIT");
+      return out;
+    }
+
+    // net > 0 — 前置条件 + 执行
+    if (!governPreconditionTx(db, pInner)) {
+      db.execute(`UPDATE govern_proposals SET voided_at=? WHERE proposal_id=?`, [now, proposalId]);
+      out.status = GOVERN_STATUS_VOID;
+      db.execute("COMMIT");
+      return out;
+    }
+
+    const result = governApplyTx(db, storeKey, pInner);
     db.execute(`UPDATE govern_proposals SET executed_at=?,executed_result=? WHERE proposal_id=?`, [
       now,
       result,

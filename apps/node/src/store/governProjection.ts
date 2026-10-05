@@ -8,7 +8,16 @@ import {
   directoryKindOfItemId,
   filterRosterAtWatermarkSet,
   GOVERN_ACTION_DIRECTORY_ADD,
+  GOVERN_ACTION_EDIT_BODY,
+  GOVERN_ACTION_EDIT_CATEGORY,
+  GOVERN_ACTION_EDIT_INSTRUCTOR,
+  GOVERN_ACTION_EDIT_TAGS,
+  GOVERN_ACTION_EDIT_TITLE,
+  GOVERN_ACTION_FEATURE,
+  GOVERN_ACTION_HIGHLIGHT,
+  GOVERN_ACTION_PIN,
   GOVERN_ACTION_REMOVE,
+  GOVERN_ACTION_RECOMMEND,
   governThresholdForRoster,
   parseGoInt64,
   restoredRosterAuthors,
@@ -55,6 +64,9 @@ interface Proposal {
   title: string;
   bodyMd: string;
   linksJson: string;
+  tagsJson: string;
+  distClass: string;
+  instructor: string;
   baseContentHash: string;
   createdAt: number;
   executedAt: number;
@@ -63,6 +75,9 @@ interface Proposal {
   sourceEventId: string;
   contentVersion: number;
   revokedRev: number;
+  governanceLevel: string;
+  category: string;
+  circleId: string;
 }
 
 export interface TagLink {
@@ -82,10 +97,15 @@ function nowUTC(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
-// proposalColumns（govern.go:114）的列顺序须与 scanProposal 一一对应；两处 COALESCE 加别名便于按名取值。
-const PROPOSAL_COLUMNS = `proposal_id,action,item_id,proposer_id,reason,title,body_md,COALESCE(links_json,'') AS links_json,base_content_hash,created_at,executed_at,voided_at,executed_result,COALESCE(source_event_id,'') AS source_event_id,content_version,revoked_rev`;
+// proposalColumns（govern.go:222-236）的列顺序须与 scanProposal 一一对应；COALESCE 加别名便于按名取值。
+const PROPOSAL_COLUMNS = `proposal_id,action,item_id,proposer_id,reason,title,body_md,
+  COALESCE(links_json,'') AS links_json,COALESCE(tags_json,'') AS tags_json,
+  COALESCE(dist_class,'') AS dist_class,COALESCE(instructor,'') AS instructor,
+  base_content_hash,created_at,executed_at,voided_at,executed_result,
+  COALESCE(source_event_id,'') AS source_event_id,content_version,revoked_rev,
+  COALESCE(governance_level,'base') AS governance_level,COALESCE(category,'') AS category,COALESCE(circle_id,'') AS circle_id`;
 
-/** scanProposal（govern.go:119-125）。 */
+/** scanProposal（govern.go:229-236）。 */
 function scanProposal(r: Record<string, unknown>): Proposal {
   return {
     proposalId: Number(r.proposal_id ?? 0),
@@ -96,6 +116,9 @@ function scanProposal(r: Record<string, unknown>): Proposal {
     title: toStr(r.title),
     bodyMd: toStr(r.body_md),
     linksJson: toStr(r.links_json),
+    tagsJson: toStr(r.tags_json),
+    distClass: toStr(r.dist_class),
+    instructor: toStr(r.instructor),
     baseContentHash: toStr(r.base_content_hash),
     createdAt: Number(r.created_at ?? 0),
     executedAt: Number(r.executed_at ?? 0),
@@ -104,6 +127,9 @@ function scanProposal(r: Record<string, unknown>): Proposal {
     sourceEventId: toStr(r.source_event_id),
     contentVersion: Number(r.content_version ?? 0),
     revokedRev: Number(r.revoked_rev ?? 0),
+    governanceLevel: toStr(r.governance_level) || "base",
+    category: toStr(r.category),
+    circleId: toStr(r.circle_id),
   };
 }
 
@@ -138,8 +164,8 @@ export function projectGovernProposal(db: Db, e: GovernProposalEvent): boolean {
       // 首次投影：事件是权威，按事件值落库（proposal_id 取事件值，不依赖本机自增）。
       db.execute(
         `INSERT INTO govern_proposals(
-          proposal_id,action,item_id,proposer_id,reason,title,body_md,base_content_hash,created_at,source_event_id,content_version,revoked_rev)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+          proposal_id,action,item_id,proposer_id,reason,title,body_md,links_json,tags_json,dist_class,instructor,base_content_hash,created_at,source_event_id,content_version,revoked_rev,governance_level,category,circle_id)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           e.proposalId,
           e.verb,
@@ -148,19 +174,34 @@ export function projectGovernProposal(db: Db, e: GovernProposalEvent): boolean {
           e.reason,
           e.title,
           e.bodyMd,
+          "", // links_json（事件无此字段）
+          "", // tags_json
+          "", // dist_class
+          "", // instructor
           e.contentHash,
           e.createdAt,
           e.eventId,
           e.contentVersion,
           e.revokedRev,
+          "base", // governance_level
+          "", // category
+          "", // circle_id
         ],
       );
       // 提案人自投第 1 票；票的 created_at 用**事件值**，不是本机 now。
-      db.execute(
-        `INSERT INTO govern_votes(proposal_id,voter_id,created_at,source_event_id)
-          VALUES(?,?,?,?) ON CONFLICT(proposal_id,voter_id) DO NOTHING`,
-        [e.proposalId, e.actor, e.createdAt, e.eventId],
+      // 先判重（V2 主键自增，无 ON CONFLICT 可用）。
+      const dup = db.select(
+        `SELECT COUNT(*) AS c FROM govern_votes WHERE proposal_id=? AND voter_id=? AND COALESCE(source_event_id,'')=?`,
+        [e.proposalId, e.actor, e.eventId],
       );
+      if (Number(dup[0].c ?? 0) === 0) {
+        const dateIso = new Date(e.createdAt).toISOString().slice(0, 10);
+        db.execute(
+          `INSERT INTO govern_votes(proposal_id,voter_id,vote_weight,vote_type,date,created_at,source_event_id)
+            VALUES(?,?,?,?,?,?,?)`,
+          [e.proposalId, e.actor, 1, "approve", dateIso, e.createdAt, e.eventId],
+        );
+      }
       db.execute("COMMIT");
       return false;
     }
@@ -218,9 +259,11 @@ export function projectGovernVote(db: Db, e: GovernVoteEvent): void {
     [e.proposalId, e.actor],
   );
   if (rows.length === 0) {
+    // V2 schema：vote 事件无 weight/type，默认 1/approve
+    const dateIso = new Date(e.createdAt).toISOString().slice(0, 10);
     db.execute(
-      `INSERT INTO govern_votes(proposal_id,voter_id,created_at,source_event_id) VALUES(?,?,?,?)`,
-      [e.proposalId, e.actor, e.createdAt, e.eventId],
+      `INSERT INTO govern_votes(proposal_id,voter_id,vote_weight,vote_type,date,created_at,source_event_id) VALUES(?,?,?,?,?,?,?)`,
+      [e.proposalId, e.actor, 1, "approve", dateIso, e.createdAt, e.eventId],
     );
     return;
   }
@@ -446,7 +489,8 @@ function editItemTx(db: Db, storeKey: Uint8Array | null, p: Proposal): string {
   return "edited_author_cleared";
 }
 
-/** governApplyTx（govern.go:564-602）：在事务内执行受审动作，返回 executed_result。 */
+/** governApplyTx（govern.go:731-829）：在事务内执行受审动作，返回 executed_result。
+ * 覆盖 12 种动作（remove/revive/edit/edit_title/edit_body/edit_category/edit_tags/edit_instructor/directory_add/highlight/pin/recommend/feature）。 */
 export function governApplyTx(db: Db, storeKey: Uint8Array | null, p: Proposal): string {
   switch (p.action) {
     case GOVERN_ACTION_REMOVE: {
@@ -468,9 +512,64 @@ export function governApplyTx(db: Db, storeKey: Uint8Array | null, p: Proposal):
       bumpDirectoryVersion(db);
       return DIRECTORY_EXECUTED_RESULT;
     }
+    // ============ Spec v2 §3 新增治理动作 ============
+    case GOVERN_ACTION_EDIT_TITLE: {
+      if (p.title === "") throw new Error(`store: edit_title ${p.itemId}: 标题不能为空`);
+      db.execute(`UPDATE items SET title=? WHERE item_id=?`, [p.title, p.itemId]);
+      return "edited_title";
+    }
+    case GOVERN_ACTION_EDIT_BODY: {
+      const rows = db.select(`SELECT sqlite_table FROM items WHERE item_id=?`, [p.itemId]);
+      if (rows.length === 0) throw new Error(`store: edit_body 目标不存在 ${p.itemId}`);
+      const st = toStr(rows[0].sqlite_table);
+      if (st !== "articles") throw new Error(`store: edit_body 仅支持 article 载体，不支持 ${st}`);
+      const hash = sha256Hex(utf8(p.bodyMd));
+      if (storeKey === null && p.bodyMd !== "") {
+        throw new Error(`store: 加密改写正文 ${p.itemId}: 无 store 密钥`);
+      }
+      const bodyEnc = encText(storeKey as Uint8Array, p.bodyMd);
+      db.execute(`UPDATE articles SET body_md=?,content_hash=?,source_rev=? WHERE item_id=?`, [
+        bodyEnc,
+        hash,
+        hash.slice(0, 16),
+        p.itemId,
+      ]);
+      db.execute(
+        `UPDATE items SET content_hash=?,source_rev=?,updated_at=?,author_id='',author_sig='' WHERE item_id=?`,
+        [hash, hash.slice(0, 16), nowUTC(), p.itemId],
+      );
+      return "edited_body_author_cleared";
+    }
+    case GOVERN_ACTION_EDIT_CATEGORY: {
+      db.execute(`UPDATE items SET dist_class=? WHERE item_id=?`, [p.distClass, p.itemId]);
+      return "edited_category";
+    }
+    case GOVERN_ACTION_EDIT_TAGS: {
+      db.execute(`UPDATE items SET tags_json=? WHERE item_id=?`, [p.tagsJson, p.itemId]);
+      return "edited_tags";
+    }
+    case GOVERN_ACTION_EDIT_INSTRUCTOR: {
+      db.execute(`UPDATE items SET instructor=? WHERE item_id=?`, [p.instructor, p.itemId]);
+      return "edited_instructor";
+    }
+    case GOVERN_ACTION_HIGHLIGHT:
+      return setPinLevelTx(db, p.itemId, 1);
+    case GOVERN_ACTION_PIN:
+      return setPinLevelTx(db, p.itemId, 2);
+    case GOVERN_ACTION_RECOMMEND:
+      return setPinLevelTx(db, p.itemId, 3);
+    case GOVERN_ACTION_FEATURE:
+      return setPinLevelTx(db, p.itemId, 4);
     default:
       throw new Error(`store: 不支持的治理动作 ${JSON.stringify(p.action)}`);
   }
+}
+
+/** setPinLevelTx（govern.go:832-844）：给条目设置 pin_level + pinned_at。 */
+function setPinLevelTx(db: Db, itemId: string, level: number): string {
+  const now = Date.now();
+  db.execute(`UPDATE items SET pin_level=?,pinned_at=? WHERE item_id=?`, [level, now, itemId]);
+  return `pin_level_${level}`;
 }
 
 /** isCourseID（free_remove.go:60-63）。 */

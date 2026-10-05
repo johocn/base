@@ -15,11 +15,13 @@ export const schemaStatements: string[] = [
 \t\tcontent_hash TEXT NOT NULL,
 \t\tsqlite_table TEXT NOT NULL,
 \t\tdist_class   TEXT NOT NULL DEFAULT 'public',
-\t\tstate            TEXT    NOT NULL DEFAULT 'active',
-\t\tpin_level        INTEGER NOT NULL DEFAULT 0,
-\t\tpinned_at        INTEGER,
-\t\thighlight_until  INTEGER,
-\t\tupdated_at       TEXT    NOT NULL
+\t\tinstructor   TEXT NOT NULL DEFAULT '',
+\t\tstate              TEXT    NOT NULL DEFAULT 'active',
+\t\tpin_level          INTEGER NOT NULL DEFAULT 0,
+\t\tpinned_at          INTEGER,
+\t\thighlight_until    INTEGER,
+\t\ttags_json          TEXT    NOT NULL DEFAULT '[]',
+\t\tupdated_at         TEXT    NOT NULL
 \t)`,
 
   `CREATE TABLE IF NOT EXISTS articles(
@@ -173,6 +175,9 @@ export const schemaStatements: string[] = [
 \t\ttitle             TEXT    NOT NULL DEFAULT '',
 \t\tbody_md           TEXT    NOT NULL DEFAULT '',
 \t\tlinks_json        TEXT    NOT NULL DEFAULT '', -- #37 册子 §3.5：tag 型 edit 的载荷（links[] 的规范 JSON）
+\t\ttags_json         TEXT    NOT NULL DEFAULT '', -- Spec v2 §3: edit_tags 载荷（items.tags_json 的全量覆盖）
+\t\tdist_class        TEXT    NOT NULL DEFAULT '', -- Spec v2 §3: edit_category 载荷
+\t\tinstructor        TEXT    NOT NULL DEFAULT '', -- Spec v2 §3: edit_instructor 载荷
 \t\tbase_content_hash TEXT    NOT NULL,
 \t\tcreated_at        INTEGER NOT NULL,
 \t\texecuted_at       INTEGER NOT NULL DEFAULT 0,
@@ -187,15 +192,17 @@ export const schemaStatements: string[] = [
 \t)`,
 
   `CREATE TABLE IF NOT EXISTS govern_votes(
+\t\tid          INTEGER PRIMARY KEY AUTOINCREMENT,
 \t\tproposal_id INTEGER NOT NULL,
 \t\tvoter_id    TEXT    NOT NULL,
 \t\tvote_weight INTEGER NOT NULL DEFAULT 1,
 \t\tvote_type   TEXT    NOT NULL DEFAULT 'approve',
 \t\tdate        TEXT    NOT NULL DEFAULT '',
 \t\tcreated_at  INTEGER NOT NULL,
-\t\tsource_event_id TEXT,
-\t\tPRIMARY KEY(proposal_id, voter_id)
+\t\tsource_event_id TEXT
 \t)`,
+
+  `CREATE INDEX IF NOT EXISTS idx_govern_votes_proposal_voter ON govern_votes(proposal_id, voter_id)`,
 
   `CREATE INDEX IF NOT EXISTS idx_govern_proposals_item ON govern_proposals(item_id, action)`,
 
@@ -279,6 +286,8 @@ export const itemColumnMigrations: { column: string; ddl: string }[] = [
   { column: "pin_level", ddl: `ALTER TABLE items ADD COLUMN pin_level INTEGER NOT NULL DEFAULT 0` },
   { column: "pinned_at", ddl: `ALTER TABLE items ADD COLUMN pinned_at INTEGER` },
   { column: "highlight_until", ddl: `ALTER TABLE items ADD COLUMN highlight_until INTEGER` },
+  { column: "instructor", ddl: `ALTER TABLE items ADD COLUMN instructor TEXT NOT NULL DEFAULT ''` },
+  { column: "tags_json", ddl: `ALTER TABLE items ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'` },
 ];
 
 // groups 表的后加列（#33 册子 §3.8）。
@@ -347,6 +356,22 @@ export const governColumnMigrations: { table: string; column: string; ddl: strin
     table: "govern_proposals",
     column: "circle_id",
     ddl: `ALTER TABLE govern_proposals ADD COLUMN circle_id TEXT`,
+  },
+  // V2: govern_proposals 补 tags_json/dist_class/instructor（Spec v2 §3）
+  {
+    table: "govern_proposals",
+    column: "tags_json",
+    ddl: `ALTER TABLE govern_proposals ADD COLUMN tags_json TEXT NOT NULL DEFAULT ''`,
+  },
+  {
+    table: "govern_proposals",
+    column: "dist_class",
+    ddl: `ALTER TABLE govern_proposals ADD COLUMN dist_class TEXT NOT NULL DEFAULT ''`,
+  },
+  {
+    table: "govern_proposals",
+    column: "instructor",
+    ddl: `ALTER TABLE govern_proposals ADD COLUMN instructor TEXT NOT NULL DEFAULT ''`,
   },
 ];
 
