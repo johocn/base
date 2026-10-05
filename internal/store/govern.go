@@ -328,13 +328,66 @@ func (s *Store) restoredRosterAuthors(revokedRev int64) (map[string]bool, error)
 
 // CreateProposal 单事务写入提案行与提案人的第 1 票（册子 §2.3），返回新 proposal_id。
 //
-// 刻意**不做**生效判定：门槛最小为 2（册子 §2.1），此刻有效票恒为 1，判定必然 pending。
+// Spec v2 §3.5 新增免票选快速路径：创建提案前先调 shouldFreeExec，如果作者本人 + 无互动 + active 条目 →
+// 跳过投票管线，直接执行 governApplyTx 并记 executed_at=now。governed_result 记 "free_exec" 区分于
+// 投票生效的 executed_result。前置条件（content_hash 匹配 / state 匹配）仍会过——漂移即记 voided_at。
+//
+// 正常路径：刻意**不做**生效判定：门槛最小为 2（册子 §2.1），此刻有效票恒为 1，判定必然 pending。
 func (s *Store) CreateProposal(p Proposal) (int64, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// ============ Spec v2 §3.5 免票选快速路径 ============
+	free, ferr := shouldFreeExec(tx, p.ItemID, p.ProposerID, p.Action)
+	if ferr != nil {
+		// 查询异常 fail-closed：退回正常投票路径
+		free = false
+	}
+	if free {
+		now := time.Now().UnixMilli()
+		// 跑前置条件（防止 content_hash 漂移或 state 突变）
+		met, err := governPreconditionTx(tx, p)
+		if err != nil {
+			return 0, err
+		}
+		cv, _ := contentVersionTx(tx)
+		rv, _ := maxRevokedRevTx(tx)
+		if !met {
+			// 前置不满足 → 直接记 void 提案，不执行
+			res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,tags_json,dist_class,instructor,base_content_hash,created_at,voided_at,content_version,revoked_rev,governance_level,category,circle_id)
+				VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				p.Action, p.ItemID, p.ProposerID, p.Reason, p.Title, p.BodyMD, p.LinksJSON,
+				p.TagsJSON, p.DistClass, p.Instructor,
+				p.BaseContentHash, p.CreatedAt, now, cv, rv,
+				p.GovernanceLevel, p.Category, p.CircleID)
+			if err != nil {
+				return 0, fmt.Errorf("store: 写免票选 void 提案: %w", err)
+			}
+			id, _ := res.LastInsertId()
+			return id, tx.Commit()
+		}
+		// 前置满足 → 直接执行动作
+		result, err := governApplyTx(tx, s, p)
+		if err != nil {
+			return 0, err
+		}
+		res, err := tx.Exec(`INSERT INTO govern_proposals(action,item_id,proposer_id,reason,title,body_md,links_json,tags_json,dist_class,instructor,base_content_hash,created_at,executed_at,executed_result,content_version,revoked_rev,governance_level,category,circle_id)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			p.Action, p.ItemID, p.ProposerID, p.Reason, p.Title, p.BodyMD, p.LinksJSON,
+			p.TagsJSON, p.DistClass, p.Instructor,
+			p.BaseContentHash, p.CreatedAt, now, "free_exec:"+result, cv, rv,
+			p.GovernanceLevel, p.Category, p.CircleID)
+		if err != nil {
+			return 0, fmt.Errorf("store: 写免票选已执行提案: %w", err)
+		}
+		id, _ := res.LastInsertId()
+		return id, tx.Commit()
+	}
+
+	// ============ 正常投票路径 ============
 	// 提案建时固化快照水位（册子 §4.3）：content_version 记当前版本，revoked_rev 记当前墓碑高水位。
 	// 之后票权按此水位复算，名册中途变化不改判（AC 12）。老路径不产事件，source_event_id 留 NULL。
 	cv, err := contentVersionTx(tx)

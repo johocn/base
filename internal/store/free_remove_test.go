@@ -78,7 +78,8 @@ func TestFreeRemoveEligible(t *testing.T) {
 	}
 }
 
-// 无课时课程：remove 提案投影后 settle 立即生效、executed_result 记 'free_remove'、条目下架（AC 5）。
+// 无课时课程：Spec v2 §3.5 shouldFreeExec 在 CreateProposal 层直接生效（不再依赖 Settle）。
+// executed_result 记 "free_exec:removed"（前缀标识免票选，后缀是 governApplyTx 的返回值）。
 func TestFreeRemoveSettlesImmediately(t *testing.T) {
 	st := openTemp(t)
 	seedCourse(t, st, "course/c6", authorA, nil)
@@ -93,15 +94,20 @@ func TestFreeRemoveSettlesImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProposal: %v", err)
 	}
-	if err := st.SettleGovernProposal(id, govRoster(), false); err != nil {
-		t.Fatalf("SettleGovernProposal: %v", err)
-	}
+	// CreateProposal 里 shouldFreeExec 应已直接执行 → executed_at 非零
 	p, _, err := st.GetProposal(id)
 	if err != nil {
 		t.Fatalf("GetProposal: %v", err)
 	}
-	if p.ExecutedAt == 0 || p.ExecutedResult != freeRemoveExecutedResult {
-		t.Fatalf("无课时应免票选立即生效且记 free_remove: %+v", p)
+	if p.ExecutedAt == 0 {
+		t.Fatalf("shouldFreeExec 应在 CreateProposal 层直接生效: %+v", p)
+	}
+	if p.ExecutedResult != "free_exec:removed" {
+		t.Fatalf("executed_result 应为 free_exec:removed, 得 %q", p.ExecutedResult)
+	}
+	// SettleGovernProposal 应幂等跳过（已定案）
+	if err := st.SettleGovernProposal(id, govRoster(), false); err != nil {
+		t.Fatalf("SettleGovernProposal: %v", err)
 	}
 	after, ok, err := st.GetItem("course/c6")
 	if err != nil || !ok || after.State != "removed" {

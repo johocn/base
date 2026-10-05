@@ -10,7 +10,84 @@ import (
 // freeRemoveExecutedResult 是免票选删除生效后的 executed_result（诊断信息，不构成契约，本册 §5）。
 const freeRemoveExecutedResult = "free_remove"
 
+// shouldFreeExec 判定某治理提案是否可不经票选直接执行（Spec v2 §3.5 免票选重写）。
+// 判据（全部满足才返回 true，fail-open 查询异常返回 false）：
+//  1. action != directory_add（目录条款永远不免票选）
+//  2. items.author_id == proposerID（作者本人）
+//  3. items.state == 'active'（目标条目必须 active）
+//  4. P = 0 — progress 中无他人学习（course 容器扩展到 course + 所有 lessons）
+//  5. F = 0 — favorites 中无他人收藏（course 容器扩展到 course + 所有 lessons）
+// 免票选仅适用于 active 条目（所有 pin/edit 类 action 的 GovernRequiredState 都是 active）；
+// remove 动作也可用免票选（同老 freeRemoveEligible 语义，只是范围更广不限于容器）。
+func shouldFreeExec(e sqlExec, itemID, proposerID, action string) (bool, error) {
+	// 1. 目录条款永不免票选
+	if action == GovernActionDirectoryAdd {
+		return false, nil
+	}
+	// 2+3: 读 items.author_id + state
+	var authorID, state string
+	err := e.QueryRow(`SELECT author_id,state FROM items WHERE item_id=?`, itemID).Scan(&authorID, &state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: shouldFreeExec 读 items: %w", err)
+	}
+	// 必须有归属（导入/老数据 author_id 为空 → 不免）且与 proposer 一致
+	if authorID == "" || authorID != proposerID {
+		return false, nil
+	}
+	if state != "active" {
+		return false, nil
+	}
+	// 构造 progress/favorites 的查询范围：目标自身 + course 容器的所有 lessons
+	targets := []string{itemID}
+	if isCourseID(itemID) {
+		lessons, lerr := courseLessonIDs(e, itemID)
+		if lerr != nil {
+			return false, lerr
+		}
+		targets = append(targets, lessons...)
+	}
+	// 4: P = 0（无他人学习，course 容器查 course + 所有 lessons）
+	P, perr := otherLearnerCount(e, targets, proposerID)
+	if perr != nil {
+		return false, perr
+	}
+	if P > 0 {
+		return false, nil
+	}
+	// 5: F = 0（无他人收藏 —— 同容器范围）
+	otherFavs, ferr := otherFavoriteCount(e, targets, proposerID)
+	if ferr != nil {
+		return false, ferr
+	}
+	if otherFavs > 0 {
+		return false, nil
+	}
+	return true, nil
+}
+
+// otherFavoriteCount 统计 favorites 中「item_id IN targets 且 id != proposer」的行数。
+func otherFavoriteCount(e sqlExec, targets []string, proposer string) (int, error) {
+	placeholders := make([]string, len(targets))
+	args := make([]any, 0, len(targets)+1)
+	for i, id := range targets {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, proposer)
+	q := `SELECT COUNT(*) FROM favorites WHERE item_id IN (` + strings.Join(placeholders, ",") + `) AND id<>?`
+	var n int
+	if err := e.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: 统计他人收藏: %w", err)
+	}
+	return n, nil
+}
+
 // freeRemoveEligible 判定一条 remove 提案是否可不经票选直接生效（本册 §5「免票选自由删除」）。
+// Deprecated: Spec v2 §3.5 已被 shouldFreeExec 取代（适用所有 action，不再仅限 remove 且仅限容器）。
+// 保留以兼容老投票路径（addVoteTx 里的 remove 免票选旁路）；新代码统一走 shouldFreeExec。
 //
 // 判据（顺序即短路顺序）：
 //  1. 目标须是容器（course/<cid> 或 course/<cid>/lesson/<lid>），否则 false；
