@@ -272,7 +272,7 @@ func (s *Server) handleProposalPost(w http.ResponseWriter, r *http.Request) {
 		"action":      req.Action,
 		"item_id":     req.ItemID,
 		"vote_count":  1,
-		"threshold":   store.GovernThreshold(req.Action),
+		"threshold":   store.GovernThresholdLegacy(req.Action),
 		"status":      store.GovernStatusPending,
 	})
 }

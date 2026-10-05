@@ -50,6 +50,12 @@ func governThresholdLegacy(action string) int {
 	return governDefaultThreshold
 }
 
+// GovernThresholdLegacy 是旧签名（只传 action）的导出 wrapper，内部调 governThresholdLegacy。
+// 后续 Task 会彻底替换成新公式；httpapi handler 层尚未引入活跃度/互动度数据，暂用此函数让编译通过。
+func GovernThresholdLegacy(action string) int {
+	return governThresholdLegacy(action)
+}
+
 // GovernThreshold 计算门槛公式值（Spec v2 §4）。
 // level: "base" | "enhanced"
 // m = 活跃 7 天用户数，P = 他人学习去重数，F = 他人收藏去重数。

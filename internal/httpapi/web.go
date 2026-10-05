@@ -328,8 +328,8 @@ func (s *Server) handleGovernancePage(w http.ResponseWriter, r *http.Request) {
 		PairingCode:     s.opt.PairingCode,
 		Fingerprint:     s.opt.FingerprintHex,
 		RosterReady:     rosterOK,
-		RemoveThreshold: store.GovernThreshold(store.GovernActionRemove),
-		EditThreshold:   store.GovernThreshold(store.GovernActionEdit),
+		RemoveThreshold: store.GovernThresholdLegacy(store.GovernActionRemove),
+		EditThreshold:   store.GovernThresholdLegacy(store.GovernActionEdit),
 	}
 	if contribs, err := s.st.ContributorRoster(); err == nil {
 		for _, c := range contribs {
