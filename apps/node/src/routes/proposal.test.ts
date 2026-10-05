@@ -628,7 +628,7 @@ describe("GET /v1/proposal", () => {
     expect(text(res)).toBe(`{"proposals":[]}\n`);
   });
 
-  it("多提案：proposalDTO 字段全量 + 键序逐字节", async () => {
+  it("多提案：proposalDTO 字段全量 + 键序逐字节（Spec v2）", async () => {
     const G = "a1".repeat(16);
     db2.execute(
       `INSERT INTO govern_proposals(proposal_id,action,item_id,proposer_id,reason,title,body_md,links_json,base_content_hash,created_at,executed_at,voided_at,executed_result,source_event_id,content_version,revoked_rev)
@@ -649,10 +649,12 @@ describe("GET /v1/proposal", () => {
 
     const res = await list();
     expect(res.status).toBe(200);
+    // db2 无 identities/progress/favorites 表 → V2 动态公式 m=0,P=0,F=0 → threshold=10, quorum=10
+    // directory_add 小节点豁免（名册空 < 10）→ threshold=0, quorum=0
     expect(text(res)).toBe(
       `{"proposals":[` +
-        `{"proposal_id":"1","action":"remove","item_id":"article/x","proposer_id":"p1","reason":"r1","title":"T1","body_md":"","status":"pending","votes":["${G}"],"vote_count":1,"threshold":3,"created_at":1000,"executed_at":0,"voided_at":0,"content_version":7,"revoked_rev":0},` +
-        `{"proposal_id":"2","action":"directory_add","item_id":"dir/tag/0000000000000000","proposer_id":"p2","reason":"","title":"T2","body_md":"","status":"pending","votes":[],"vote_count":0,"threshold":2,"created_at":2000,"executed_at":0,"voided_at":0,"content_version":0,"revoked_rev":0}` +
+        `{"proposal_id":"1","action":"remove","item_id":"article/x","proposer_id":"p1","reason":"r1","title":"T1","body_md":"","status":"pending","votes":["${G}"],"vote_count":1,"threshold":10,"quorum":10,"approve_weight":1,"reject_weight":0,"net_weight":1,"governance_level":"base","category":"","circle_id":"","created_at":1000,"executed_at":0,"voided_at":0,"content_version":7,"revoked_rev":0},` +
+        `{"proposal_id":"2","action":"directory_add","item_id":"dir/tag/0000000000000000","proposer_id":"p2","reason":"","title":"T2","body_md":"","status":"pending","votes":[],"vote_count":0,"threshold":0,"quorum":0,"approve_weight":0,"reject_weight":0,"net_weight":0,"governance_level":"base","category":"","circle_id":"","created_at":2000,"executed_at":0,"voided_at":0,"content_version":0,"revoked_rev":0}` +
         `]}\n`,
     );
   });

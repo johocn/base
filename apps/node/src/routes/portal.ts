@@ -1177,7 +1177,7 @@ function proposalPageRow(db: Db, v: ProposalView, names: Map<string, string>): P
     ItemState: "",
     ItemStateLabel: "",
     Reason: v.reason,
-    VoteCount: v.votes.length,
+    VoteCount: v.voterCount,
     Threshold: v.threshold,
     Percent: 0,
     Status: v.status,

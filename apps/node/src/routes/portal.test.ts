@@ -282,12 +282,13 @@ describe("governancePageData", () => {
     expect(reasons).toEqual(["p7", "p6", "p5", "p4", "p3", "p2", "p1"]);
   });
 
-  it("Percent 整数截断并封顶 100；Threshold 用 governThreshold", () => {
+  it("Percent 整数截断并封顶 100；Threshold 用 Spec v2 动态公式（m=0,P=0,F=0 → base=10）", () => {
     const props = governancePageData(db, deps).Proposals!;
     const byReason = new Map(props.map((p) => [p.Reason, p]));
-    expect(byReason.get("p1")).toMatchObject({ VoteCount: 3, Threshold: 3, Percent: 100 });
-    expect(byReason.get("p2")).toMatchObject({ VoteCount: 3, Threshold: 2, Percent: 100 });
-    expect(byReason.get("p7")).toMatchObject({ VoteCount: 1, Threshold: 3, Percent: 33 });
+    // db 无 identities/progress/favorites → V2 动态公式 m=0,P=0,F=0 → GovernThreshold("base") = 10
+    expect(byReason.get("p1")).toMatchObject({ VoteCount: 3, Threshold: 10, Percent: 30 });
+    expect(byReason.get("p2")).toMatchObject({ VoteCount: 3, Threshold: 10, Percent: 30 });
+    expect(byReason.get("p7")).toMatchObject({ VoteCount: 1, Threshold: 10, Percent: 10 });
   });
 
   it("directory_add 渲染 TermName / TermPending", () => {

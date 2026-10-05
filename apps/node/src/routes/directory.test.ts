@@ -70,6 +70,9 @@ const PROPOSALS_DDL = `CREATE TABLE govern_proposals(
 	title             TEXT    NOT NULL DEFAULT '',
 	body_md           TEXT    NOT NULL DEFAULT '',
 	links_json        TEXT    NOT NULL DEFAULT '',
+	tags_json         TEXT    NOT NULL DEFAULT '',
+	dist_class        TEXT    NOT NULL DEFAULT '',
+	instructor        TEXT    NOT NULL DEFAULT '',
 	base_content_hash TEXT    NOT NULL,
 	created_at        INTEGER NOT NULL,
 	executed_at       INTEGER NOT NULL DEFAULT 0,
@@ -77,14 +80,20 @@ const PROPOSALS_DDL = `CREATE TABLE govern_proposals(
 	executed_result   TEXT    NOT NULL DEFAULT '',
 	source_event_id   TEXT,
 	content_version   INTEGER NOT NULL DEFAULT 0,
-	revoked_rev       INTEGER NOT NULL DEFAULT 0
+	revoked_rev       INTEGER NOT NULL DEFAULT 0,
+	governance_level  TEXT    NOT NULL DEFAULT 'base',
+	category          TEXT    NOT NULL DEFAULT '',
+	circle_id         TEXT    NOT NULL DEFAULT ''
 )`;
 const VOTES_DDL = `CREATE TABLE govern_votes(
-	proposal_id INTEGER NOT NULL,
-	voter_id    TEXT    NOT NULL,
-	created_at  INTEGER NOT NULL,
-	source_event_id TEXT,
-	PRIMARY KEY(proposal_id, voter_id)
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	proposal_id  INTEGER NOT NULL,
+	voter_id     TEXT    NOT NULL,
+	vote_weight  INTEGER NOT NULL DEFAULT 1,
+	vote_type    TEXT    NOT NULL DEFAULT 'approve',
+	date         TEXT    NOT NULL DEFAULT '',
+	created_at   INTEGER NOT NULL,
+	source_event_id TEXT
 )`;
 
 const V = "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv";

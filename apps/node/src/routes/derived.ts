@@ -604,6 +604,119 @@ export function NetWeight(approveSum: number, rejectSum: number): number {
   return approveSum - rejectSum;
 }
 
+// ========= Spec v2 §6 governContextParams（govern.go:976-1055） =========
+
+/** countActiveInIDs（govern.go:1024-1039）：给定 id 列表内活跃的独立身份数。 */
+function countActiveInIDs(db: Db, ids: string[], cutoff: number): number {
+  if (ids.length === 0) return 0;
+  const rows = db.select(
+    `SELECT COUNT(DISTINCT id) AS c FROM identities WHERE last_seen_at > ? AND id IN (${placeholders(ids.length)})`,
+    [cutoff, ...ids],
+  );
+  return Number(rows[0]?.c ?? 0);
+}
+
+/** countItemInIDs（govern.go:1042-1055）：给定表 (progress / favorites) 中 item_id=? AND id!=proposer AND id IN (ids) 的去重 id 数。 */
+function countItemInIDs(
+  db: Db,
+  table: "progress" | "favorites",
+  itemId: string,
+  proposerID: string,
+  ids: string[],
+): number {
+  if (ids.length === 0) return 0;
+  const rows = db.select(
+    `SELECT COUNT(DISTINCT id) AS c FROM ${table} WHERE item_id=? AND id != ? AND id IN (${placeholders(ids.length)})`,
+    [itemId, proposerID, ...ids],
+  );
+  return Number(rows[0]?.c ?? 0);
+}
+
+/** governNodeParams（govern.go:1012-1021）：节点级默认口径。容错：表不存在时 m/P/F 降级为 0。 */
+function governNodeParams(db: Db, itemId: string, proposerId: string, now: number, sevenDaysMs: number): { m: number; P: number; F: number } {
+  let m = 0;
+  try {
+    m = Number(
+      db.select(`SELECT COUNT(DISTINCT id) AS c FROM identities WHERE last_seen_at > ?`, [
+        now - sevenDaysMs,
+      ])[0]?.c ?? 0,
+    );
+  } catch {
+    m = 0;
+  }
+  let P = 0;
+  let F = 0;
+  if (itemId !== "") {
+    try {
+      P = Number(
+        db.select(`SELECT COUNT(DISTINCT id) AS c FROM progress WHERE item_id=? AND id != ?`, [
+          itemId,
+          proposerId,
+        ])[0]?.c ?? 0,
+      );
+    } catch {
+      P = 0;
+    }
+    try {
+      F = Number(
+        db.select(`SELECT COUNT(DISTINCT id) AS c FROM favorites WHERE item_id=? AND id != ?`, [
+          itemId,
+          proposerId,
+        ])[0]?.c ?? 0,
+      );
+    } catch {
+      F = 0;
+    }
+  }
+  return { m, P, F };
+}
+
+/**
+ * governContextParams（govern.go:981-1008）：按提案语境查 V2 门槛公式的 m/P/F。
+ * category='circle' + circle_id != "" → 圈内活跃成员 + 圈内成员对该 item 的互动；否则 → 节点级全局。
+ * 容错：groups 表不存在/解析失败 → fallback 到节点级。
+ */
+export function governContextParams(
+  db: Db,
+  category: string,
+  circleId: string,
+  itemId: string,
+  proposerId: string,
+  now: number,
+): { m: number; P: number; F: number } {
+  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+  if (category === "circle" && circleId !== "") {
+    try {
+      const gRows = db.select(`SELECT member_ids_json FROM groups WHERE group_id=?`, [circleId]);
+      if (gRows.length > 0) {
+        let members: string[] = [];
+        try {
+          const raw = toStr(gRows[0].member_ids_json);
+          if (raw !== "") {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) members = parsed.map((x) => String(x));
+          }
+        } catch {
+          // fallback below
+        }
+        if (members.length > 0) {
+          const m = countActiveInIDs(db, members, now - sevenDaysMs);
+          let P = 0;
+          let F = 0;
+          if (itemId !== "") {
+            P = countItemInIDs(db, "progress", itemId, proposerId, members);
+            F = countItemInIDs(db, "favorites", itemId, proposerId, members);
+          }
+          return { m, P, F };
+        }
+      }
+    } catch {
+      // groups 表不存在 → fallback 到节点级
+    }
+  }
+  return governNodeParams(db, itemId, proposerId, now, sevenDaysMs);
+}
+
 // ========= Spec v2 §3.5 免票选 shouldFreeExec（free_remove.go:22-...） =========
 
 /** isCourseID（free_remove.go:60-63）。 */
@@ -708,7 +821,7 @@ export function filterRosterAtWatermarkSet(
 }
 
 // 只选读路径用到的列（对齐 proposalColumns 的取值口径；links_json 等与目录派生无关）。
-const PROPOSAL_COLUMNS = `proposal_id,action,item_id,proposer_id,reason,title,body_md,content_version,created_at,executed_at,voided_at,revoked_rev`;
+const PROPOSAL_COLUMNS = `proposal_id,action,item_id,proposer_id,reason,title,body_md,content_version,created_at,executed_at,voided_at,revoked_rev,COALESCE(governance_level,'base') AS governance_level,COALESCE(category,'') AS category,COALESCE(circle_id,'') AS circle_id`;
 
 export interface ProposalView {
   proposalId: number;
@@ -726,9 +839,19 @@ export interface ProposalView {
   voidedAt: number;
   contentVersion: number;
   revokedRev: number;
+  // Spec v2 字段
+  governanceLevel: string;
+  category: string;
+  circleId: string;
+  quorum: number;
+  voterCount: number;
+  approveWeight: number;
+  rejectWeight: number;
+  netWeight: number;
 }
 
-/** ListProposalViews（govern.go:385-427）：按 proposal_id 升序，票按快照水位复判过滤。 */
+/** ListProposalViews（govern.go:385-427 + Spec v2）：按 proposal_id 升序，票按快照水位复判过滤。
+ * V2：同时返回 quorum / voter_count / approve_weight / reject_weight / net_weight / governance_level / category / circle_id。 */
 export function listProposalViews(
   db: Db,
   storeKey: Uint8Array | null,
@@ -749,11 +872,41 @@ export function listProposalViews(
     voidedAt: Number(r.voided_at ?? 0),
     contentVersion: Number(r.content_version ?? 0),
     revokedRev: Number(r.revoked_rev ?? 0),
+    governanceLevel: toStr(r.governance_level) || "base",
+    category: toStr(r.category),
+    circleId: toStr(r.circle_id),
   }));
   const out: ProposalView[] = [];
+  const now = Date.now();
   for (const p of proposals) {
     const voters = proposalVoters(db, p.proposalId);
     const restored = restoredRosterAuthors(db, storeKey, p.revokedRev);
+
+    // V2 实时指标：语境化 m/P/F → Threshold → Quorum；独立 voter + 票权聚合
+    const { m, P, F } = governContextParams(db, p.category, p.circleId, p.itemId, p.proposerId, now);
+    const gl = p.governanceLevel || "base";
+    let v2Threshold = GovernThreshold(gl, m, P, F);
+    // 小节点豁免（目录动作）——同 settleGovernProposal
+    if (p.action === GOVERN_ACTION_DIRECTORY_ADD && roster.size < DIRECTORY_SMALL_NODE_ROSTER_MAX) {
+      v2Threshold = 0;
+    }
+    const quorum = GovernQuorum(v2Threshold, m);
+    const voterCount = Number(
+      db.select(`SELECT COUNT(DISTINCT voter_id) AS c FROM govern_votes WHERE proposal_id=?`, [
+        p.proposalId,
+      ])[0]?.c ?? 0,
+    );
+    const sumRow = db.select(
+      `SELECT
+        COALESCE(SUM(CASE WHEN vote_type='approve' THEN vote_weight ELSE 0 END),0) AS a,
+        COALESCE(SUM(CASE WHEN vote_type='reject' THEN vote_weight ELSE 0 END),0) AS r
+        FROM govern_votes WHERE proposal_id=?`,
+      [p.proposalId],
+    )[0];
+    const approveSum = Number(sumRow?.a ?? 0);
+    const rejectSum = Number(sumRow?.r ?? 0);
+    const net = NetWeight(approveSum, rejectSum);
+
     out.push({
       proposalId: p.proposalId,
       action: p.action,
@@ -765,11 +918,20 @@ export function listProposalViews(
       createdAt: p.createdAt,
       status: proposalStatus(p.executedAt, p.voidedAt),
       votes: filterRosterAtWatermarkSet(voters, roster, restored),
-      threshold: governThreshold(p.action),
+      threshold: v2Threshold,
       executedAt: p.executedAt,
       voidedAt: p.voidedAt,
       contentVersion: p.contentVersion,
       revokedRev: p.revokedRev,
+      // Spec v2 字段
+      governanceLevel: gl,
+      category: p.category,
+      circleId: p.circleId,
+      quorum,
+      voterCount,
+      approveWeight: approveSum,
+      rejectWeight: rejectSum,
+      netWeight: net,
     });
   }
   return out;
