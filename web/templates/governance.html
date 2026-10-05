@@ -32,14 +32,12 @@
 		</h2>
 		<div class="small">{{.Reason}}</div>
 
-		{{/* 进度条 1：voter_count / quorum */}}
 		<div class="bar"><i style="width:{{.Percent}}%"></i></div>
 
-		{{/* 净票权信息行：赞成 vs 反对 vs 净票权 */}}
 		{{if .HasVoteWeight}}
 		<div class="bar2">
-			{{if gt .ApproveWeight 0}}<span class="bar-approve" style="width:{{.ApproveBar}}%"></span>{{end}}
-			{{if gt .RejectWeight 0}}<span class="bar-reject" style="width:{{.RejectBar}}%"></span>{{end}}
+			{{if .ApproveWeight}}<span class="bar-approve" style="width:{{.ApproveBar}}%"></span>{{end}}
+			{{if .RejectWeight}}<span class="bar-reject" style="width:{{.RejectBar}}%"></span>{{end}}
 		</div>
 		{{end}}
 
