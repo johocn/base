@@ -49,6 +49,10 @@
         <view v-if="(tagsByEvent[floor.item.eventId] ?? []).length > 0" class="cmt-tags">
           <text v-for="(t, i) in tagsByEvent[floor.item.eventId] ?? []" :key="i" class="cmt-tag">{{ t }}</text>
         </view>
+        <view class="row-acts">
+          <text class="like-btn" :class="{ liked: likedSet.has(floor.item.eventId) }" @click="toggleLike(floor.item)">♥ {{ floor.item.likeCount > 0 ? floor.item.likeCount : '' }}</text>
+          <text class="report-btn" @click="openReport(floor.item.eventId)">举报</text>
+        </view>
         <!-- 子回复（depth=1）：缩进块 -->
         <view v-for="sub in floor.children" :key="sub.item.eventId" class="cmt-sub">
           <view class="cmt-sub-head">
@@ -58,6 +62,10 @@
             <text class="cmt-meta">· {{ rel(sub.item.createdAt) }}</text>
           </view>
           <text class="cmt-text">{{ sub.item.text }}</text>
+          <view class="row-acts">
+            <text class="like-btn" :class="{ liked: likedSet.has(sub.item.eventId) }" @click="toggleLike(sub.item)">♥ {{ sub.item.likeCount > 0 ? sub.item.likeCount : '' }}</text>
+            <text class="report-btn" @click="openReport(sub.item.eventId)">举报</text>
+          </view>
         </view>
       </view>
       <text v-if="loading" class="hint">加载中…</text>
@@ -75,6 +83,24 @@
       <button size="mini" :disabled="!canSend" @click="send">{{ sending ? '发表中…' : '发表' }}</button>
     </view>
     <text v-if="notice" class="hint">{{ notice }}</text>
+
+    <!-- 举报弹层：四原因单选（#79 §7.2） -->
+    <view v-if="showReport" class="modal-mask" @click.self="showReport = false">
+      <view class="modal">
+        <text class="modal-title">举报这条评论</text>
+        <view
+          v-for="(label, key) in REPORT_LABEL"
+          :key="key"
+          class="report-opt"
+          :class="{ 'report-opt-on': reportReason === key }"
+          @click="pickReason(key)"
+        >{{ label }}</view>
+        <view class="modal-actions">
+          <view class="modal-btn" @click="showReport = false">取消</view>
+          <view class="modal-btn primary" @click="submitReport">提交</view>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -82,6 +108,7 @@
 import { computed, ref } from 'vue';
 import { onReachBottom, onShow } from '@dcloudio/uni-app';
 
+import { sendLike, sendReport, type ReportReason } from '@base/core-ts/like';
 import { buildCommentTree, type CommentTreeNode } from '../../core/comment-tree';
 import {
   fetchCommentText,
@@ -122,6 +149,15 @@ const sending = ref(false);
 const draft = ref('');
 /** eventId → 该评论已有标签的标题列表（空数组/无键 = 不显示，不占位） */
 const tagsByEvent = ref<Record<string, string[]>>({});
+
+const likedSet = ref<Set<string>>(new Set()); // 本会话高亮态（进页时由 like_out 初始化）
+const likeBusy = ref<Set<string>>(new Set()); // 防抖：发送中禁点
+const showReport = ref(false);
+const reportTarget = ref('');
+const reportReason = ref<ReportReason>('spam');
+const REPORT_LABEL: Record<ReportReason, string> = {
+  spam: '垃圾广告', abuse: '辱骂攻击', illegal: '违法违规', other: '其他',
+};
 
 /** 楼中楼：扁平投影 → 楼层根（含子回复）纯本地派生，零网络 */
 const tree = computed<CommentTreeNode<Row>[]>(() => buildCommentTree(list.value));
@@ -193,6 +229,7 @@ async function refresh() {
     const page = await listComments(opts.value, { targetId: target.value });
     nextCursor.value = page.nextCursor;
     list.value = await withText(visible(page.items), opts.value);
+    await initLikes();
     await attachTags(list.value);
     await loadNames(list.value.map((r) => r.actor), opts.value);
   } catch (e) {
@@ -211,6 +248,7 @@ async function loadMore() {
     const page = await listComments(opts.value, { targetId: target.value, cursor: nextCursor.value });
     nextCursor.value = page.nextCursor;
     list.value = [...list.value, ...(await withText(visible(page.items), opts.value))];
+    await initLikes();
     await attachTags(list.value);
     await loadNames(list.value.map((r) => r.actor), opts.value);
   } catch (e) {
@@ -242,6 +280,54 @@ async function attachTags(rows: Row[]) {
     (map[l.targetId] ??= []).push(t?.title || l.tagId);
   }
   tagsByEvent.value = map;
+}
+
+async function initLikes() {
+  const ids = list.value.map((r) => r.eventId);
+  const s = new Set<string>();
+  for (const id of ids) if (await opts.value!.repo.getLikeOut(id) === 'like') s.add(id);
+  likedSet.value = s;
+}
+
+async function toggleLike(row: Row) {
+  if (!opts.value || likeBusy.value.has(row.eventId)) return;
+  const wasLiked = likedSet.value.has(row.eventId);
+  const action = wasLiked ? 'unlike' : 'like';
+  likeBusy.value.add(row.eventId);
+  try {
+    await sendLike(opts.value, row.eventId, action);
+    await opts.value.repo.upsertLikeOut(row.eventId, action);
+    // 本地计数 ±1（下次拉列表以服务端为准）
+    row.likeCount = Math.max(0, row.likeCount + (action === 'like' ? 1 : -1));
+    const s = new Set(likedSet.value);
+    if (action === 'like') s.add(row.eventId); else s.delete(row.eventId);
+    likedSet.value = s;
+  } catch (e) {
+    uni.showToast({ title: e instanceof Error ? e.message : '操作失败', icon: 'none' });
+  } finally {
+    likeBusy.value.delete(row.eventId);
+  }
+}
+
+function openReport(eventId: string) {
+  reportTarget.value = eventId;
+  reportReason.value = 'spam';
+  showReport.value = true;
+}
+
+function pickReason(key: string) {
+  reportReason.value = key as ReportReason;
+}
+
+async function submitReport() {
+  if (!opts.value || !reportTarget.value) return;
+  try {
+    await sendReport(opts.value, reportTarget.value, reportReason.value);
+    showReport.value = false;
+    uni.showToast({ title: '已提交，感谢反馈', icon: 'none' });
+  } catch (e) {
+    uni.showToast({ title: e instanceof Error ? e.message : '提交失败', icon: 'none' });
+  }
 }
 
 function pick(itemId: string) {
@@ -350,4 +436,16 @@ onReachBottom(() => {
 .blocked { display: block; margin-bottom: 8px; color: #c05621; font-size: 13px; }
 .composer { position: fixed; left: 0; right: 0; bottom: 0; display: flex; align-items: center; padding: 8px 12px; background: #ffffff; border-top: 1px solid #eeeeee; }
 .input { flex: 1; height: 36px; margin-right: 8px; padding: 0 10px; background: #f5f5f5; border-radius: 6px; font-size: 14px; }
+.row-acts { display: flex; align-items: center; margin-top: 6px; }
+.like-btn { margin-right: 16px; color: #888888; font-size: 13px; }
+.like-btn.liked { color: #e53e3e; }
+.report-btn { color: #888888; font-size: 13px; }
+.modal-mask { position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, 0.5); display: flex; align-items: flex-end; }
+.modal { width: 100%; max-height: 80vh; overflow-y: auto; padding: 16px; background: #ffffff; border-radius: 12px 12px 0 0; }
+.modal-title { display: block; margin-bottom: 12px; font-size: 16px; font-weight: 600; }
+.report-opt { margin-bottom: 8px; padding: 10px 12px; border: 1px solid #eeeeee; border-radius: 6px; font-size: 14px; color: #555555; }
+.report-opt-on { border-color: #2b6cb0; background: #ebf8ff; color: #2b6cb0; }
+.modal-actions { display: flex; margin-top: 12px; }
+.modal-btn { flex: 1; padding: 10px; text-align: center; background: #f0f0f0; border-radius: 6px; font-size: 14px; color: #555555; }
+.modal-btn.primary { margin-left: 12px; background: #2b6cb0; color: #ffffff; }
 </style>
