@@ -39,6 +39,19 @@ const PACKS_DDL = `CREATE TABLE packs(
 	created_at      TEXT NOT NULL
 )`;
 
+// events 表：#79 §5.2 起 catalog 每页要按页聚合 like_count（store/like.ts），库内须有此表。
+const EVENTS_DDL = `CREATE TABLE events(
+	event_id    TEXT PRIMARY KEY,
+	id          TEXT NOT NULL,
+	type        TEXT NOT NULL,
+	body_json   TEXT NOT NULL,
+	created_at  INTEGER NOT NULL,
+	received_at INTEGER NOT NULL,
+	target_id   TEXT,
+	payload_cid TEXT,
+	reply_to    TEXT
+)`;
+
 interface HttpResponse {
   status: number;
   contentType: string | undefined;
@@ -73,6 +86,7 @@ beforeAll(async () => {
   db = openDb(join(dir, "base.db"));
   db.execute(ITEMS_DDL);
   db.execute(PACKS_DDL);
+  db.execute(EVENTS_DDL);
 
   const adapters: ServerAdapters = {
     http: createHttpServerAdapter(),
@@ -157,7 +171,7 @@ describe("冒烟：真实 listen + HTTP 请求", () => {
     const res = await get(`${base}/v1/catalog`);
     expect(res.status).toBe(200);
     expect(res.body).toBe(
-      `{"pack_id":"pack-7","content_version":7,"items":[{"item_id":"a-1","source":"src","type":"article","title":"A","content_hash":"h1","source_rev":"r1"}],"next_cursor":null}\n`,
+      `{"pack_id":"pack-7","content_version":7,"items":[{"item_id":"a-1","source":"src","type":"article","title":"A","content_hash":"h1","source_rev":"r1","like_count":0}],"next_cursor":null}\n`,
     );
   });
 
@@ -167,5 +181,52 @@ describe("冒烟：真实 listen + HTTP 请求", () => {
     const body = JSON.parse(res.body) as { items: unknown[]; next_cursor: unknown };
     expect(body.items).toEqual([]);
     expect(body.next_cursor).toBeNull();
+  });
+
+  it("条目对象内联 like_count：有赞=实际数、unlike 后回落 0（#79 §5.2）", async () => {
+    const insertItem = (itemId: string, title: string, hash: string, rev: string): void => {
+      db.execute(
+        `INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at,author_id,author_sig)
+				VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [itemId, "src", "article", title, rev, hash, "articles", "public", "active", "2024-01-03T00:00:00Z", "", ""],
+      );
+    };
+    const insertLike = (eventId: string, actor: string, target: string, action: string, at: number): void => {
+      db.execute(
+        `INSERT INTO events(event_id,id,type,body_json,created_at,received_at,target_id,payload_cid,reply_to)
+				VALUES(?,?,?,?,?,?,?,?,?)`,
+        [eventId, actor, "like.v1", `{"action":"${action}","target_id":"${target}","sig":"00"}`, at, at, target, "", null],
+      );
+    };
+    // a-2：A、B 各赞 → 2；a-3：A 赞后 unlike → 0（§4.1 LWW）。已墓碑的 b-1 不进可见集也不聚合。
+    insertItem("a-2", "C", "h3", "r3");
+    insertItem("a-3", "D", "h4", "r4");
+    insertLike("1".repeat(32), "A", "a-2", "like", 2000);
+    insertLike("2".repeat(32), "B", "a-2", "like", 2001);
+    insertLike("3".repeat(32), "A", "a-3", "like", 2002);
+    insertLike("4".repeat(32), "A", "a-3", "unlike", 2003);
+
+    const res = await get(`${base}/v1/catalog`);
+    expect(res.status).toBe(200);
+    expect(res.body).toBe(
+      `{"pack_id":"pack-7","content_version":7,"items":[` +
+        `{"item_id":"a-1","source":"src","type":"article","title":"A","content_hash":"h1","source_rev":"r1","like_count":0},` +
+        `{"item_id":"a-2","source":"src","type":"article","title":"C","content_hash":"h3","source_rev":"r3","like_count":2},` +
+        `{"item_id":"a-3","source":"src","type":"article","title":"D","content_hash":"h4","source_rev":"r4","like_count":0}` +
+        `],"next_cursor":null}\n`,
+    );
+    // 条目行键集恰为七个，零 report / likers 键（§5.4）。
+    const parsed = JSON.parse(res.body) as { items: Array<Record<string, unknown>> };
+    for (const row of parsed.items) {
+      expect(Object.keys(row).sort()).toEqual([
+        "content_hash",
+        "item_id",
+        "like_count",
+        "source",
+        "source_rev",
+        "title",
+        "type",
+      ]);
+    }
   });
 });

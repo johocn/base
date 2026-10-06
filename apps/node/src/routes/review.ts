@@ -16,6 +16,7 @@ import {
 import { decodeStrict } from "./decode";
 import { isHexN } from "./derived";
 import { jsonResponse } from "./json";
+import { listReportedComments } from "../store/like";
 
 /** 审核面依赖：路由层的 Db + 块目录与 store 密钥（取正文需解密）。 */
 export interface ReviewDeps {
@@ -78,6 +79,32 @@ export function reviewFetchHandler(deps: ReviewDeps): ServerHandler {
       return errResponse(err);
     }
     return jsonResponse(200, { payload_cid: cid, text: Buffer.from(plain).toString("utf8") });
+  };
+}
+
+/**
+ * handleReviewReported（comment.go:139-173）：被举报评论列表（#79 §5.3）。
+ * 只聚合呈现，处置仍走既有 fetch→reject；无参数（空体 {}），列表短小不分页。
+ */
+export function reviewReportedHandler(deps: ReviewDeps): ServerHandler {
+  return async () => {
+    try {
+      const rows = listReportedComments(deps.db);
+      return jsonResponse(200, {
+        reports: rows.map((c) => ({
+          event_id: c.eventId,
+          actor: c.actor,
+          target_id: c.targetId,
+          payload_cid: c.payloadCid,
+          reply_to: c.replyTo === "" ? null : c.replyTo,
+          created_at: c.createdAt,
+          report_count: c.reportCount,
+          reporters: c.reporters,
+        })),
+      });
+    } catch (err) {
+      return errResponse(err);
+    }
   };
 }
 

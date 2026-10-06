@@ -1,6 +1,7 @@
 // 逐行对齐 internal/httpapi/comment.go 的 handleCommentList / parseCommentCursor（:16-85）。
 import type { ServerHandler } from "@base/core-ts";
 import type { Db } from "../db";
+import { likeCountsByTargets } from "../store/like";
 import { isHexN, parseGoInt, parseGoInt64, toStr } from "./derived";
 import { jsonResponse } from "./json";
 
@@ -77,6 +78,9 @@ export function commentHandler(db: Db): ServerHandler {
       const cur = parseCommentCursor(req.query.cursor ?? "");
       const rows = listComments(db, req.query.target_id ?? "", cur.ts, cur.id, limit);
 
+      // #79 §5.1：按页聚合 like_count（禁 N+1），无赞行 map 缺键按 0 填。
+      const targets = rows.map((c) => c.eventId);
+      const likeMap = likeCountsByTargets(db, targets);
       const comments = rows.map((c) => ({
         event_id: c.eventId,
         actor: c.actor,
@@ -84,6 +88,7 @@ export function commentHandler(db: Db): ServerHandler {
         payload_cid: c.payloadCid,
         reply_to: c.replyTo === "" ? null : c.replyTo,
         created_at: c.createdAt,
+        like_count: likeMap.get(c.eventId) ?? 0,
       }));
 
       // 满页才给游标：不满页即已到底。

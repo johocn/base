@@ -1,6 +1,7 @@
 // 逐行对齐 internal/httpapi/public.go 的 handleCatalog（:41-110）。
 import type { ServerHandler, ServerResponse } from "@base/core-ts";
 import type { Db } from "../db";
+import { likeCountsByTargets } from "../store/like";
 
 const encoder = new TextEncoder();
 
@@ -11,6 +12,7 @@ interface CatalogItem {
   title: string;
   content_hash: string;
   source_rev: string;
+  like_count: number;
 }
 
 interface CatalogResponse {
@@ -98,6 +100,16 @@ export function catalogHandler(db: Db): ServerHandler {
         next = toStr((items[limit - 1] as Record<string, unknown>).item_id);
       }
 
+      // #79 §5.2：对已通过 active/public 过滤的条目 id 集合做一次聚合（禁 N+1），无赞缺键按 0 填。
+      const visibleIDs: string[] = [];
+      for (const it of items) {
+        if (toStr(it.state) !== "active" || toStr(it.dist_class) !== "public") {
+          continue;
+        }
+        visibleIDs.push(toStr(it.item_id));
+      }
+      const likeMap = likeCountsByTargets(db, visibleIDs);
+
       for (const it of items) {
         if (toStr(it.state) !== "active" || toStr(it.dist_class) !== "public") {
           continue;
@@ -109,6 +121,7 @@ export function catalogHandler(db: Db): ServerHandler {
           title: toStr(it.title),
           content_hash: toStr(it.content_hash),
           source_rev: toStr(it.source_rev),
+          like_count: likeMap.get(toStr(it.item_id)) ?? 0,
         });
       }
 

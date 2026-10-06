@@ -379,6 +379,8 @@ export const eventIndexStatements: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_events_target ON events(target_id, created_at DESC, event_id DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_events_recent ON events(created_at DESC, event_id DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_events_received ON events(received_at ASC, event_id ASC)`,
+  // #79 §4.3：服务评论页/catalog 按页聚合与 reported 列表的 report 计数（同 Go schema.go 迁移行）。
+  `CREATE INDEX IF NOT EXISTS idx_events_type_target ON events(type, target_id)`,
 ];
 
 /** `PRAGMA table_info(<table>)` 的列名集合（表名为包内字面量，非外部输入）。 */

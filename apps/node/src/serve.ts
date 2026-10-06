@@ -18,7 +18,12 @@ import { releaseHandler } from "./routes/release";
 import { contributorsHandler } from "./routes/contributors";
 import { directoryHandler } from "./routes/directory";
 import { commentHandler } from "./routes/comment";
-import { requireReviewKey, reviewFetchHandler, reviewRejectHandler } from "./routes/review";
+import {
+  requireReviewKey,
+  reviewFetchHandler,
+  reviewRejectHandler,
+  reviewReportedHandler,
+} from "./routes/review";
 import { dmHandler } from "./routes/dm";
 import { groupGetHandler } from "./routes/group";
 import {
@@ -166,6 +171,10 @@ export function mountPublicRoutes(adapters: ServerAdapters, db: Db, opts: Server
     adapters.http.handle(
       "POST /v1/admin/review/fetch",
       requireReviewKey(reviewKey, reviewFetchHandler(reviewDeps)),
+    );
+    adapters.http.handle(
+      "POST /v1/admin/review/reported",
+      requireReviewKey(reviewKey, reviewReportedHandler(reviewDeps)),
     );
     adapters.http.handle(
       "POST /v1/admin/review/reject",

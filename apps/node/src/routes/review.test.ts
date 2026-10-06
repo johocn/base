@@ -260,7 +260,87 @@ describe("POST /v1/admin/review/reject", () => {
     // 被审核删的 EV_OK 已从列表消失，仅剩另一条种子（无 payload_cid 的那条）。
     expect(res.body.toString("utf8")).toBe(
       `{"comments":[{"event_id":"${EV_NO_PAYLOAD}","actor":"actorA","target_id":"t1",` +
-        `"payload_cid":"","reply_to":null,"created_at":300}],"next_cursor":null}\n`,
+        `"payload_cid":"","reply_to":null,"created_at":300,"like_count":0}],"next_cursor":null}\n`,
     );
+  });
+});
+
+// ---------- #79 §5.3：POST /v1/admin/review/reported（对齐 Go TestHandleReviewReported） ----------
+describe("POST /v1/admin/review/reported", () => {
+  const EV_REP = "9".repeat(32);
+  const R1 = "a".repeat(32);
+  const R2 = "b".repeat(32);
+
+  const insertEvent = (
+    eventId: string,
+    actor: string,
+    type: string,
+    target: string,
+    createdAt: number,
+  ): void => {
+    db.execute(
+      `INSERT INTO events(event_id,id,type,body_json,created_at,received_at,target_id,payload_cid,reply_to)
+				VALUES(?,?,?,?,?,?,?,?,?)`,
+      [eventId, actor, type, "{}", createdAt, createdAt, target, "", null],
+    );
+  };
+
+  it("未配置 reviewKey：路由不存在 → 404", async () => {
+    const res = await post(`${noKey}/v1/admin/review/reported`, "{}");
+    expect(res.status).toBe(404);
+  });
+
+  it("无头 / 错头 → 404 not_found（不暴露存在性）", async () => {
+    const res = await post(`${withKey}/v1/admin/review/reported`, "{}");
+    expect(res.status).toBe(404);
+    const wrong = await post(`${withKey}/v1/admin/review/reported`, "{}", {
+      "X-Base-Review-Key": "wrong",
+    });
+    expect(wrong.status).toBe(404);
+    expect(wrong.body.toString("utf8")).toBe(`{"error":"not_found"}\n`);
+  });
+
+  it("正确头 + 空体 {} → 200：report_count 降序、reporters 去重、墓碑评论不在列", async () => {
+    // 被举报评论（本地已同步）；既有库中 EV_OK 已被上方用例审核删（墓碑）。
+    insertEvent(EV_REP, "actorA", "comment.v1", "t9", 310);
+    const insertReport = (eventId: string, reporter: string, target: string, at: number): void => {
+      db.execute(
+        `INSERT INTO events(event_id,id,type,body_json,created_at,received_at,target_id,payload_cid,reply_to)
+				VALUES(?,?,?,?,?,?,?,?,?)`,
+        [eventId, reporter, "report.v1", `{"reason":"spam","target_id":"${target}","sig":"00"}`, at, at, target, "", null],
+      );
+    };
+    // c1：R1、R2、R1（同人换 event_id 再报，重复举报不拒）→ report_count=2 去重。
+    insertReport("c1".repeat(16), R1, EV_REP, 2000);
+    insertReport("c2".repeat(16), R2, EV_REP, 2001);
+    insertReport("c3".repeat(16), R1, EV_REP, 2002);
+    // 墓碑评论 EV_OK 的举报行 → 不在列。
+    insertReport("c4".repeat(16), R1, EV_OK, 2003);
+
+    const res = await post(`${withKey}/v1/admin/review/reported`, "{}", HDR);
+    expect(res.status).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    const body = JSON.parse(res.body.toString("utf8")) as {
+      reports: Array<Record<string, unknown>>;
+    };
+    expect(body.reports.length).toBe(1);
+    const row = body.reports[0];
+    expect(row.event_id).toBe(EV_REP);
+    expect(row.actor).toBe("actorA");
+    expect(row.target_id).toBe("t9");
+    expect(row.report_count).toBe(2);
+    expect([...(row.reporters as string[])].sort()).toEqual([R1, R2].sort());
+    expect(row.reply_to).toBeNull();
+    // 字段集与 §5.3 响应契约逐一对照（零多键零缺键）。
+    expect(Object.keys(row).sort()).toEqual([
+      "actor",
+      "created_at",
+      "event_id",
+      "payload_cid",
+      "reply_to",
+      "report_count",
+      "reporters",
+      "target_id",
+    ]);
   });
 });
