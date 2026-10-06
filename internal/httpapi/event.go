@@ -29,6 +29,8 @@ var eventTypeRegistry = map[string]struct{}{
 	"govern.v1":   {},
 	"progress.v1": {},
 	"circle.v1":   {},
+	"like.v1":     {},
+	"report.v1":   {},
 }
 
 type eventReq struct {
@@ -79,6 +81,12 @@ func (s *Server) handleEventPost(w http.ResponseWriter, r *http.Request) {
 		return
 	case "circle.v1":
 		s.handleCircleEvent(w, actor, req, createdAt)
+		return
+	case "like.v1":
+		s.handleLikeEvent(w, actor, req, createdAt)
+		return
+	case "report.v1":
+		s.handleReportEvent(w, actor, req, createdAt)
 		return
 	}
 	s.putBareEvent(w, actor, req, createdAt)
@@ -257,4 +265,190 @@ func validTargetID(s string) bool {
 		}
 	}
 	return true
+}
+
+// likeBody 是 like.v1 的两字段（#79 §3.1）。target 两形态：16 hex=评论事件 id；路径式=条目 item_id。
+type likeBody struct {
+	TargetID string
+	Action   string // "like" | "unlike"
+}
+
+// parseLikeBody 严格键集 {target_id,action}；返回 map 保留客户端原始键集（验签语义同 parseCommentBody）。
+func parseLikeBody(raw json.RawMessage) (map[string]any, likeBody, bool) {
+	var lb likeBody
+	if len(raw) == 0 {
+		return nil, lb, false
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, lb, false
+	}
+	for k := range m {
+		switch k {
+		case "target_id", "action":
+		default:
+			return nil, lb, false
+		}
+	}
+	target, ok := m["target_id"].(string)
+	if !ok || !validTargetID(target) {
+		return nil, lb, false
+	}
+	action, ok := m["action"].(string)
+	if !ok || (action != "like" && action != "unlike") {
+		return nil, lb, false
+	}
+	return m, likeBody{TargetID: target, Action: action}, true
+}
+
+// isCommentTarget 评论 target 形态判别：16 hex = 评论 event_id；否则为条目路径式。
+func isCommentTarget(target string) bool { return isHexN(target, 16) }
+
+// checkLikeReportTarget 校验 target 本地存在性（#79 §3.3）；失败已写好响应并返回 false。
+// 反熵接收侧不重放此校验（投影落行不经这里，与 comment.v1 同口径）。
+func (s *Server) checkLikeReportTarget(w http.ResponseWriter, target string) bool {
+	if isCommentTarget(target) {
+		ev, ok, err := s.st.GetEventByID(target)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return false
+		}
+		if !ok || ev.Type != "comment.v1" {
+			s.writeError(w, http.StatusNotFound, "target_not_found")
+			return false
+		}
+		gone, err := s.st.IsRevokedEvent(target)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return false
+		}
+		if gone {
+			s.writeError(w, http.StatusGone, "target_gone")
+			return false
+		}
+		return true
+	}
+	active, err := s.st.ActiveItemExists(target)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	if !active {
+		s.writeError(w, http.StatusNotFound, "target_not_found")
+		return false
+	}
+	return true
+}
+
+// handleLikeEvent 校验 body → 验签 → target 校验 → 落行（target_id 投影列必填，无 payload）→ 200。
+func (s *Server) handleLikeEvent(w http.ResponseWriter, actor string, req eventReq, createdAt int64) {
+	rawBody, lb, ok := parseLikeBody(req.Body)
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, "event_param_invalid")
+		return
+	}
+	if !s.verifyEventSig(w, actor, req, rawBody) {
+		return
+	}
+	if !s.checkLikeReportTarget(w, lb.TargetID) {
+		return
+	}
+	bodyJSON, err := protocol.Canonicalize(map[string]any{
+		"target_id": lb.TargetID, "action": lb.Action, "sig": req.Sig,
+	})
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	now := time.Now().UnixMilli()
+	if err := s.st.PutEvent(store.Event{
+		EventID: req.EventID, ID: actor, Type: req.Type, BodyJSON: string(bodyJSON),
+		CreatedAt: createdAt, ReceivedAt: now, TargetID: lb.TargetID,
+	}); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// 回读 received_at：同 event_id 重发时它是首次值，响应必须给权威值（幂等，#79 §3.4）。
+	if ev, ok, err := s.st.GetEventByID(req.EventID); err == nil && ok {
+		now = ev.ReceivedAt
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"event_id": req.EventID, "received_at": now})
+}
+
+// reportBody 是 report.v1 的两字段（#79 §3.2）。
+type reportBody struct {
+	TargetID string
+	Reason   string
+}
+
+// validReportReason 严格四值（#79 §3.2）。
+func validReportReason(r string) bool {
+	switch r {
+	case "spam", "abuse", "illegal", "other":
+		return true
+	}
+	return false
+}
+
+// parseReportBody 严格键集 {target_id,reason}；report 只收评论 target（16 hex）。
+func parseReportBody(raw json.RawMessage) (map[string]any, reportBody, bool) {
+	var rb reportBody
+	if len(raw) == 0 {
+		return nil, rb, false
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, rb, false
+	}
+	for k := range m {
+		switch k {
+		case "target_id", "reason":
+		default:
+			return nil, rb, false
+		}
+	}
+	target, ok := m["target_id"].(string)
+	// report 只收评论 target（#79 §3.2）：非 16 hex 即拒。
+	if !ok || !isHexN(target, 16) {
+		return nil, rb, false
+	}
+	reason, ok := m["reason"].(string)
+	if !ok || !validReportReason(reason) {
+		return nil, rb, false
+	}
+	return m, reportBody{TargetID: target, Reason: reason}, true
+}
+
+// handleReportEvent 同 handleLikeEvent，body 键集 {target_id,reason}；重复举报不拒（计数去重在聚合层）。
+func (s *Server) handleReportEvent(w http.ResponseWriter, actor string, req eventReq, createdAt int64) {
+	rawBody, rb, ok := parseReportBody(req.Body)
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, "event_param_invalid")
+		return
+	}
+	if !s.verifyEventSig(w, actor, req, rawBody) {
+		return
+	}
+	if !s.checkLikeReportTarget(w, rb.TargetID) {
+		return
+	}
+	bodyJSON, err := protocol.Canonicalize(map[string]any{
+		"target_id": rb.TargetID, "reason": rb.Reason, "sig": req.Sig,
+	})
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	now := time.Now().UnixMilli()
+	if err := s.st.PutEvent(store.Event{
+		EventID: req.EventID, ID: actor, Type: req.Type, BodyJSON: string(bodyJSON),
+		CreatedAt: createdAt, ReceivedAt: now, TargetID: rb.TargetID,
+	}); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if ev, ok, err := s.st.GetEventByID(req.EventID); err == nil && ok {
+		now = ev.ReceivedAt
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"event_id": req.EventID, "received_at": now})
 }

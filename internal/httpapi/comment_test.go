@@ -172,8 +172,8 @@ func TestCommentWriteBlobAndIdempotent(t *testing.T) {
 		t.Fatalf("公开读应只出现一条: %v", items)
 	}
 
-	// 未登记类型仍 400 event_type_unknown
-	bad := `{"event_id":"` + eventIDOf(9) + `","type":"like.v1","created_at":1,"body":{}}`
+	// 未登记类型仍 400 event_type_unknown（like.v1 已被 #79 放行，反例改用 bogus.v1）
+	bad := `{"event_id":"` + eventIDOf(9) + `","type":"bogus.v1","created_at":1,"body":{}}`
 	status, out = sendAuth(t, signedRequest(t, testSeed, http.MethodPost, n.public+"/v1/event", bad))
 	if status != http.StatusBadRequest || out["error"] != "event_type_unknown" {
 		t.Fatalf("未登记类型 status=%d out=%v", status, out)
