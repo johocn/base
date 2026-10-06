@@ -517,7 +517,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 |---|---|
 | `POST /v1/identity/register` | 登记公钥（首次出现即登记，节点回执 id） |
 | `GET /v1/identity/:id` | 取公钥（用于验签他人事件与私信） |
-| `POST /v1/event` | 提交评论/进度/小组/私信事件；签名头管**准入**，事件体另带**内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`）管**归属**；节点验签后落库（2026-09-27 补）。已登记类型（`eventTypeRegistry`）：`comment.v1`、`group.v1`（2026-09-29 补——`action=msg` 密文发言落密文块、`action=roster` 名单落投影并携带 `sigs[]` / `envelopes[]`；圈内 roster 多签签名域 **`base/group-roster-v2`**，**旧单签仍按旧域接受**；② 类**不新开 blob 上传面**）、`govern.v1`（2026-09-29 §0.7 补——`action=proposal` / `action=vote`，**沿用通用事件内容签名，不新增签名域常量**，随反熵跨节点传播） |
+| `POST /v1/event` | 提交评论/进度/小组/私信事件；签名头管**准入**，事件体另带**内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`）管**归属**；节点验签后落库（2026-09-27 补）。已登记类型（`eventTypeRegistry`）：`comment.v1`、`group.v1`（2026-09-29 补——`action=msg` 密文发言落密文块、`action=roster` 名单落投影并携带 `sigs[]` / `envelopes[]`；圈内 roster 多签签名域 **`base/group-roster-v2`**，**旧单签仍按旧域接受**；② 类**不新开 blob 上传面**）、`govern.v1`（2026-09-29 §0.7 补——`action=proposal` / `action=vote`，**沿用通用事件内容签名，不新增签名域常量**，随反熵跨节点传播）、`like.v1` / `report.v1`（2026-10-06 册子 #79 补——点赞含 unlike 走 LWW 计数、举报四值 reason 去重计数；**无 payload 不落块**，target_id 投影列必填；沿用通用事件内容签名，不新增签名域；计数读时聚合见 #79 §4） |
 | `POST /v1/blob` | **① 类二进制上传**（2026-09-30 §0.9 补）：`multipart/form-data` 单块（字段名 `file`），服务端算 `blob_id` 落块并返回 `{"blob_id"}`；同字节幂等去重；上限 8 MiB（超限 `413 blob_too_large`）；资格 = 有效签名头。**② 类仍禁用此面** |
 | `GET /v1/identity/escrow/:username` | 取密码托管的加密私钥密文（换设备取回） |
 | `PUT /v1/identity/escrow/:username` | 写入/更新托管密文 |
