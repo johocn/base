@@ -356,3 +356,43 @@ like / report **仅在线**；离线点击 toast，不进 `comment_out` 队列�
 1. `docs/README.md`：§3 表加第 79 行（本册）；§5 末尾追加一段「评论挂账四功能之点赞/举报已立册」。
 2. 总纲 `specs/2026-09-25-base-distributed-learning-design.md` §9 写路由表 `POST /v1/event` 行：`eventTypeRegistry` 枚举追加 `like.v1`、`report.v1`（2026-10-06 #79 补）。
 3. #19 `specs/2026-09-27-base-comment-event-sync-design.md`：§1 L87「不做点赞、举报…」与 §9 L573 挂账行各加注「2026-10-06 由 #79 解挂」。
+
+## 13. 实施实况（2026-10-06 回填）
+
+**实施计划**：`plans/2026-10-06-base-like-report-plan.md`（18 Task + G1-G8 门禁）；**实施日期**：2026-10-06；**commit 范围**：`53aa3d1..9fee02a`（T1–T15 各一 commit，T7 为纯门禁无提交）。
+
+| Task | 内容 | commit |
+|---|---|---|
+| T1 | Go store：`idx_events_type_target` 索引 + LWW 计数/条目校验/举报列表查询 | `53aa3d1` |
+| T2 | Go 写面：两类型进 registry + target 校验 + `target_not_found`/`target_gone` | `1acd1cf` |
+| T3 | Go 读面：comment/catalog 内联 `like_count` | `72765a3` |
+| T4 | Go 审核面：`POST /v1/admin/review/reported` | `918d680` |
+| T5 | Go peersync：投影重建扩两分支 | `230577f` |
+| T6 | 跨节点传播与悬空 target 聚合测试 | `84c2c47` |
+| T7 | G1 门禁（go vet / build / test） | （门禁，无提交） |
+| T8 | Node 写面镜像（严格键集 + target 校验 + 错误码） | `0f17279` |
+| T9 | Node 读面 + 审核面镜像 | `f417f20` |
+| T10 | Node peersync 投影 + G2 门禁 | `99f410c` |
+| T11 | 三读面双端 golden 对拍（`plans/fixtures/like-golden.json`） | `c7901a6` |
+| T12 | core-ts：发送核心 + `like_out` 台账 + `items.like_count` 补列 | `6a0db55` |
+| T13 | mobile 评论页点赞与举报 | `dd1736b` |
+| T14 | mobile 阅读页条目点赞与举报快捷提案入口 | `16e6e94` |
+| T15 | mobile 条目举报预填治理 remove 提案 + G5 门禁 | `9fee02a` |
+| T16 | 文档回填（本段 + README 状态行） | 本次 docs commit |
+
+### 门禁判定
+
+| 门禁 | 判定 | 证据 |
+|---|---|---|
+| G1 | **过** | `go vet ./... && go build ./... && go test ./internal/...` 全绿（回填时在 HEAD 复跑确认，httpapi 等全 `ok`） |
+| G2 | **过** | `tsc --noEmit` 0 错；vitest 53 文件 **625 passed / 4 skipped**（回填时复跑确认） |
+| G3 | **过** | Go `golden_like_test.go` ↔ Node `golden-like.test.ts` 断言同一份 `like-golden.json`（comment / catalog / reported 三面），两侧全绿 |
+| G4 | **过** | core-ts：`like.test.ts` 5/5、`govern-prefill.test.ts`、repo/schema 用例全绿；`govern.test.ts` 2 例为**存量失败**（在开工前提交 `8ef4c3a` 上同样失败，属治理 V2 演进遗留，非本册回归——回填时以 pre-#79 worktree 复跑确证） |
+| G5 | **过** | `vue-tsc --noEmit` 0 错、vitest **37/37**、`build:h5` 成功、模板 `.value` 硬检查 0 命中（回填时复跑确认） |
+| G6 | **过** | 本段回填 + `docs/README.md` §3 表 79 行 / §5 状态句更新；`git log --oneline 53aa3d1^..HEAD` 提交链完整 |
+| G7 / G8 | **待执行** | T17 节点双单元部署探活（先升节点、后开事件）、T18 mobile 发布四步 + 真机 3 条（#79 §9.2，待人工）；结果后续回填本节 |
+
+### 偏离点
+
+- 无实质偏离：T1–T15 共 14 个实现 commit 的提交信息与计划逐字一致，落点文件与计划一致。
+- 计划外既有状况如实登记：G4 所述 `govern.test.ts` 2 例存量失败（非本册引入，回填时已确证）。
