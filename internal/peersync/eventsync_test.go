@@ -618,3 +618,27 @@ func TestApplySyncedCircleEventAssignWritesCircleAssignments(t *testing.T) {
 		t.Fatalf("非 circle.v1 应静默返回 written=%v err=%v", written4, err4)
 	}
 }
+
+// #79 §6：like.v1 / report.v1 是无 payload 事件，接收侧投影只填 target_id，
+// payload_cid / reply_to 恒空（EventBlobIndex 白名单不动，同 progress.v1 先例）。
+// 坏 JSON / 缺 target_id ⇒ 零投影（事件仍落行，与既有口径一致）。
+func TestParseEventProjectionLikeReport(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  string
+		body string
+		want commentProjection
+	}{
+		{"like.v1 投影 target_id", "like.v1", `{"action":"like","target_id":"c1","sig":"0"}`,
+			commentProjection{TargetID: "c1"}},
+		{"report.v1 投影 target_id", "report.v1", `{"reason":"spam","target_id":"c1","sig":"0"}`,
+			commentProjection{TargetID: "c1"}},
+		{"坏 JSON 零投影", "like.v1", `{"action":bad`, commentProjection{}},
+		{"缺 target_id 零投影", "report.v1", `{"reason":"spam","sig":"0"}`, commentProjection{}},
+	}
+	for _, tc := range cases {
+		if got := parseEventProjection(tc.typ, tc.body); got != tc.want {
+			t.Fatalf("%s: got %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}

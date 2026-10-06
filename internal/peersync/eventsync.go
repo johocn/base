@@ -231,6 +231,15 @@ func parseEventProjection(typ, bodyJSON string) commentProjection {
 			return commentProjection{}
 		}
 		return commentProjection{TargetID: m.TargetID, PayloadCID: m.PayloadCID, ReplyTo: m.ReplyTo}
+	case "like.v1", "report.v1":
+		// #79 §6：无 payload 事件，投影只填 target_id（EventBlobIndex 白名单不动，同 progress.v1 先例）。
+		var m struct {
+			TargetID string `json:"target_id"`
+		}
+		if err := json.Unmarshal([]byte(bodyJSON), &m); err != nil || m.TargetID == "" {
+			return commentProjection{}
+		}
+		return commentProjection{TargetID: m.TargetID}
 	case "group.v1":
 		// 小组事件的减化 body 是 {group_id,action,epoch,payload_cid,reply_to}（发言）
 		// 或 {group_id,action,epoch,member_ids,name}（名单）；target_id 由 group_id 拼回来。
