@@ -153,6 +153,7 @@ import {
   createProposal,
   listProposals,
   vote,
+  type GovernAction,
   type ProposalItem,
   type GovernOptions,
   type VoteType,
@@ -169,7 +170,7 @@ const myVoteCache = ref<Map<string, VoteType>>(new Map());
 
 const form = reactive({
   itemId: '',
-  action: 'remove' as keyof typeof ACTION_LABEL,
+  action: 'remove' as GovernAction,
   reason: '',
   title: '',
   bodyMd: '',
@@ -202,7 +203,7 @@ async function loadProposals() {
 
 const pendingCount = computed(() => proposals.value.filter(p => p.status === 'pending').length);
 const effectiveCount = computed(() => proposals.value.filter(p => p.status === 'effective').length);
-const voidCount = computed(() => proposals.value.filter(p => p.status === 'voided').length);
+const voidCount = computed(() => proposals.value.filter(p => p.status === 'void').length);
 
 // —— 辅助函数 ——
 function phase1Width(p: ProposalItem): number {
@@ -234,7 +235,7 @@ function votedLabel(p: ProposalItem): string {
   return v === 'approve' ? '赞成 👍' : v === 'reject' ? '反对 👎' : '';
 }
 function gotoItem(itemId: string): void {
-  navigateTo({ url: `/pages/article/article?id=${encodeURIComponent(itemId)}` });
+  uni.navigateTo({ url: `/pages/article/article?id=${encodeURIComponent(itemId)}` });
 }
 
 async function doVote(p: ProposalItem, voteType: VoteType) {
@@ -265,13 +266,16 @@ async function doCreate() {
   }
   submitting.value = true;
   try {
-    await createProposal(opts.value, {
+    const payload: Record<string, unknown> = {
       action: form.action,
       itemId: form.itemId,
       reason: form.reason,
-      title: form.title,
-      bodyMd: form.bodyMd,
-    });
+    };
+    // 旧 edit 动作需要嵌套 edit 载荷；V2 细粒度 edit_* / highlight / pin 等各自独立，无需额外载荷
+    if (form.action === 'edit' && (form.title || form.bodyMd)) {
+      payload.edit = { title: form.title, bodyMd: form.bodyMd };
+    }
+    await createProposal(opts.value, payload as unknown as Parameters<typeof createProposal>[1]);
     showForm.value = false;
     form.itemId = ''; form.reason = ''; form.title = ''; form.bodyMd = ''; form.action = 'remove';
     uni.showToast({ title: '已发起', icon: 'success' });

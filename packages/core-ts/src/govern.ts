@@ -41,6 +41,30 @@ export type GovernAction =
 /** 提案状态三值（#27 §4.4）。 */
 export type GovernStatus = 'pending' | 'effective' | 'void';
 
+/** 提案状态 → 中文标签（与 Go 侧 governStatusLabel 对齐）。 */
+export const STATUS_LABEL: Record<GovernStatus, string> = {
+  pending: '待决',
+  effective: '已生效',
+  void: '已作废',
+};
+
+/** 受审动作 → 中文标签（与 Go 侧 governActionLabel 对齐，Spec v2 全 13 种）。 */
+export const ACTION_LABEL: Record<GovernAction, string> = {
+  remove: '下架',
+  edit: '改写',
+  revive: '复活',
+  directory_add: '新增词条',
+  edit_title: '改标题',
+  edit_body: '改正文',
+  edit_category: '改分类',
+  edit_tags: '改标签',
+  edit_instructor: '改讲师',
+  highlight: '高亮',
+  pin: '置顶',
+  recommend: '推荐',
+  feature: '精华',
+};
+
 /** 投票类型（Spec v2 §4）。 */
 export type VoteType = 'approve' | 'reject';
 
