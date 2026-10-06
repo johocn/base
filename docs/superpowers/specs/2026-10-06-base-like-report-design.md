@@ -380,6 +380,7 @@ like / report **仅在线**；离线点击 toast，不进 `comment_out` 队列�
 | T15 | mobile 条目举报预填治理 remove 提案 + G5 门禁 | `9fee02a` |
 | T16 | 文档回填（本段 + README 状态行） | 本次 docs commit |
 | T17 | 节点双单元部署 + G7 探活（哈希/结果见下方实况小节） | 纯线上操作，无 commit（部署前 HEAD `85f0911`） |
+| T18 | mobile 发布四步 + G8 线上核对（实况见下方「T18 发布实况」） | 纯发布操作，无源码 commit（发布前 HEAD `3a944d4`；版本号 `0.20.5`/`30` 与本段回填同 commit） |
 
 ### 门禁判定
 
@@ -392,7 +393,7 @@ like / report **仅在线**；离线点击 toast，不进 `comment_out` 队列�
 | G5 | **过** | `vue-tsc --noEmit` 0 错、vitest **37/37**、`build:h5` 成功、模板 `.value` 硬检查 0 命中（回填时复跑确认） |
 | G6 | **过** | 本段回填 + `docs/README.md` §3 表 79 行 / §5 状态句更新；`git log --oneline 53aa3d1^..HEAD` 提交链完整 |
 | G7 | **过** | T17 线上双单元探活 21/21 全 PASS + 反熵验证过（详见下方「T17 线上部署实况」） |
-| G8 | **待执行** | T18 mobile 发布四步 + 真机 3 条（#79 §9.2，待人工）；结果后续回填本节 |
+| G8 | **过（发布四步 + 线上核对三项；真机 3 条待人工）** | `GET /v1/release` → `0.20.5` 且 `apk_size`/`apk_sha256` 与本地逐字一致；`HEAD /dl/base-0.20.5.apk` = 200（`Content-Length: 27494129`）；`verifyRelease` → `true`（一次性用例，#28/#59 手法，跑完即删）；详见下方「T18 发布实况」 |
 
 ### T17 线上部署实况（2026-10-06）
 
@@ -427,3 +428,28 @@ like / report **仅在线**；离线点击 toast，不进 `comment_out` 队列�
   - 计划写「Node 走 127.0.0.1:8083」，线上 Node 公共口现为 **7001**（P5 后端口改排）；「Go 走客户端域名」实际客户端入口（nginx:80）反代到 **Node**，故 Go 单元以 `https://127.0.0.1:443` 直连探活、客户端域名口径并入 Node 单元 leg，两口径全测。
   - 计划写「`/v1/blob/zzzz` → 404」，实际 `zzzz` 因 id 格式非法回 **400**（`IsBlobID` 32hex 校验），合法格式不存在 id 才回 404——两者均为契约正确行为，探活两路全测。
   - 线上未配 `BASE_REVIEW_KEY`：reported 探活「带密钥 → 200」分支在本节点不可达（路由不注册回 404），按 §5.3/AC7 属正确形态，如实登记。
+
+### T18 发布实况（2026-10-06）
+
+**版本**：`apps/mobile/src/manifest.json` `0.20.4`/`29` → **`0.20.5`/`30`**（按 #59–#68 先例每版 patch+1 / code+1）；发布前线上 `GET /v1/release` 旧值 = `0.20.4` / apk `base-0.20.4.apk` / 27450925 字节 / sha256 `9101b5ac…83d5b` / min `0.8.0` / issued `2026-10-02T01:44:54Z`。
+
+**发布前状态**：git 干净（HEAD `3a944d4` = T17 回填 commit）；节点侧已先升（T17，P6 红线「先升节点、后开事件」成立）。
+
+**四步发布**（#59/#68 同款参数与手法）：
+
+1. **云打包**：HBuilderX `cli pack --project e:\code\base\apps\mobile --platform android --android.packagename uni.app.UNI936A667 --android.androidpacktype 3`（先 `cli open` 确认 IDE 运行态）。16:01 首跑 cli 长时间无输出且无网络连接（疑似 DCloud 免费队列阻塞），终止后**重试一次即过**（16:43:45 提交 → 16:46:42 成功，队列第 4 位；与 #40 更正 42 同款经历）。**APK 27494129 字节 / sha256 `bead69bae6e73f0fc23f50fb6445d801d9bb7c70b9979eee346a1f2f6b9ea641`**；云端只给临时下载地址（限 5 次），按 #64 手动取回落标准路径 `apps/mobile/dist/release/apk/base-0.20.5.apk`；包内核对 `assets/apps/__UNI__936A667/www/manifest.json` = `"version":{"code":"30","name":"0.20.5"}`；证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.6.0–0.20.4 一致 ⇒ 可覆盖安装）。
+2. **上传**：scp → `/opt/appdl/base-0.20.5.apk`，远端 `sha256sum` 与 `stat -c %s` = 27494129，与本地**逐字一致**。
+3. **落地页**：`/opt/appdl/index.html` 整页重写改指 `base-0.20.5.apk`（meta 行 `版本 0.20.5（versionCode 29→30）· 2026-10-06 · 评论点赞与举报上线…` + 新增点赞/举报使用说明两条 li；旧页备份 `index.html.bak-0.20.4`）；线上 `grep -c '0.20.4'` = **0**、`grep -c '0.20.5'` = 2。
+4. **签发**：`set -a; . /opt/base/base.secret.env; set +a; /opt/base/based release -version-name 0.20.5 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.20.5.apk -apk-file /opt/appdl/base-0.20.5.apk -notes '评论点赞与举报上线' -out /opt/base-cache/data/release.json` → 输出 `apk_size=27494129`、`apk_sha256=bead69ba…`、`public_key 48c33db9…24f4`；`/opt/base/data/release.json` 不存在（无游离副本）。
+
+**G8 线上核对（公网 :80，逐条实测输出）**：
+
+| 检查 | 结果 |
+| --- | --- |
+| `GET /v1/release` | `version_name=0.20.5`、`min_version_name=0.8.0`、`apk_size=27494129`、`apk_sha256=bead69ba…a641`（与本地逐字一致）、`apk_url=…/dl/base-0.20.5.apk`、`issuer=base-node-1`、`issued_at=2026-10-06T08:53:12Z`、`notes=评论点赞与举报上线`、signature 已签发 |
+| `HEAD /dl/base-0.20.5.apk` | `200` / `Content-Type: application/octet-stream` / `Content-Length: 27494129`（与本地字节数一致） |
+| `verifyRelease` | **true**——一次性 vitest 用例 fetch 线上 `/v1/release` 后 `verifyRelease(doc, '48c33db9…24f4')` = true（#28/#59 手法，跑完即删、未入库） |
+
+**真机 3 条（§9.2）：待人工**（登记不阻塞，同 #59–#68 口径）：① 评论页点赞高亮/取消/计数联动 + 举报弹层四原因与成功反馈；② 阅读页条目点赞乐观 ±1、杀进程重进计数保持、断网点赞 toast（文案「无法连接节点，请稍后重试」，失败不落库）；③ 条目举报跳治理页、`remove` 提案预填正确、投票流可走通。
+
+**执行期更正（2 条）**：① `cli pack` 首跑卡死（约 40 分钟无输出、无 socket），终止重试一次即成功——与 #68 更正 3（IDE 未运行态）不同因，本次 IDE 已运行，属云端队列/CLI 侧停滞，重试口径有效；② 云端未自动落盘产物（同 #64 现象），按临时下载地址取回后落标准路径再核对（字节数 / sha256 / 包内版本 / 证书 SHA1 全部通过）。
