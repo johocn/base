@@ -361,3 +361,24 @@ export async function vote(
     threshold: fresh?.threshold ?? 0,
   };
 }
+
+/** 条目举报 → 治理页的预填提案（#79 §7.4）：跳转前由举报入口写入，治理页打开表单时消费。 */
+export interface ProposalPrefill {
+  itemId: string;
+  action: 'remove';
+  reason: string;
+}
+
+/** 治理页是模块级单例页面，不带 query，只能走模块级状态（同 comment.ts `pendingTarget` 手法）。 */
+let pendingPrefill: ProposalPrefill | null = null;
+
+export function setPendingProposalPrefill(p: ProposalPrefill): void {
+  pendingPrefill = p;
+}
+
+/** 消费并清空预填；无则返回 null。 */
+export function takePendingProposalPrefill(): ProposalPrefill | null {
+  const p = pendingPrefill;
+  pendingPrefill = null;
+  return p;
+}

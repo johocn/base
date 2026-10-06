@@ -25,7 +25,7 @@
     </view>
 
     <!-- 发起人按钮 -->
-    <view class="new-btn" @click="showForm = true">发起提案</view>
+    <view class="new-btn" @click="openForm">发起提案</view>
 
     <!-- 空态 -->
     <view v-if="!loading && !error && proposals.length === 0" class="empty">
@@ -152,6 +152,7 @@ import {
   STATUS_LABEL,
   createProposal,
   listProposals,
+  takePendingProposalPrefill,
   vote,
   type GovernAction,
   type ProposalItem,
@@ -175,6 +176,17 @@ const form = reactive({
   title: '',
   bodyMd: '',
 });
+
+// 条目举报快捷提案预填（#79 §7.4）：打开表单时消费举报入口写入的 remove 预填并清理
+function openForm() {
+  const p = takePendingProposalPrefill();
+  if (p) {
+    form.itemId = p.itemId;
+    form.action = p.action;
+    form.reason = p.reason;
+  }
+  showForm.value = true;
+}
 
 onMounted(async () => {
   try {

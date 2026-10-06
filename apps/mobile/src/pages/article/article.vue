@@ -95,6 +95,7 @@ import { childrenOf, lessonOfCarrier } from '../../core/course-tree';
 import { attrsOf } from '../../core/container-view';
 import { setPendingTarget } from '../../core/comment';
 import type { LikeOptions, ReportReason } from '@base/core-ts/like';
+import { setPendingProposalPrefill } from '@base/core-ts/govern';
 import { useItemLike } from '../../composables/useItemLike';
 import { articleDone, articlePosition } from '../../core/progress';
 import { reportProgress } from '../../core/progress-store';
@@ -353,6 +354,12 @@ function pickReason(key: string) {
 
 function submitItemReport() {
   showReport.value = false;
+  // 条目举报快捷提案（#79 §7.4）：预填 remove 提案后跳治理页，表单由治理页打开时消费
+  setPendingProposalPrefill({
+    itemId: itemId.value,
+    action: 'remove',
+    reason: `用户举报（${REPORT_LABEL[reportReason.value]}）`,
+  });
   uni.navigateTo({ url: '/pages/governance/governance' });
 }
 
