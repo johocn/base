@@ -417,6 +417,8 @@ var eventIndexStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_events_target ON events(target_id, created_at DESC, event_id DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_events_recent ON events(created_at DESC, event_id DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_events_received ON events(received_at ASC, event_id ASC)`,
+	// #79 §4.3：like 计数按页聚合、reported 列表按 report target 聚合共用。
+	`CREATE INDEX IF NOT EXISTS idx_events_type_target ON events(type, target_id)`,
 }
 
 // tableColumns 返回表的列名集合（表名为本包内的字面量，非外部输入）。
