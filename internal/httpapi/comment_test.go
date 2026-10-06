@@ -422,6 +422,102 @@ func TestCommentListInlineLikeCount(t *testing.T) {
 	}
 }
 
+// ---------- #79 §5.3：审核面 POST /v1/admin/review/reported（Task 4） ----------
+
+// seedReportEvent 直接落一条 report.v1 事件行（手法同 seedLikeEvent，聚合只读 target_id 与 id）。
+func seedReportEvent(t *testing.T, st *store.Store, id, eventID, target string, createdAt int64) {
+	t.Helper()
+	body, err := protocol.Canonicalize(map[string]any{"target_id": target, "reason": "spam", "sig": "00"})
+	if err != nil {
+		t.Fatalf("Canonicalize: %v", err)
+	}
+	if err := st.PutEvent(store.Event{EventID: eventID, ID: id, Type: "report.v1", BodyJSON: string(body),
+		CreatedAt: createdAt, ReceivedAt: createdAt, TargetID: target}); err != nil {
+		t.Fatalf("PutEvent: %v", err)
+	}
+}
+
+// 验收 6/7/8：未配密钥路由不存在 404、密钥不符 404 not_found、正确密钥 200 按 report_count 降序、
+// reporters 去重、墓碑评论不在列。
+func TestHandleReviewReported(t *testing.T) {
+	// ① 未配置 ReviewKey：路由根本不注册 → Go ServeMux 默认 404。
+	noKey := newCommentNode(t, "")
+	if status, _ := doJSONMap(t, http.MethodPost, noKey.public+"/v1/admin/review/reported", `{}`, nil); status != http.StatusNotFound {
+		t.Fatalf("未配密钥 status=%d, want 404", status)
+	}
+
+	n := newCommentNode(t, "review-key")
+	hdr := map[string]string{"X-Base-Review-Key": "review-key"}
+	postComment(t, n, eventIDOf(1), "article/a", "被两人举报", "")
+	postComment(t, n, eventIDOf(2), "article/a", "被一人举报", "")
+	postComment(t, n, eventIDOf(3), "article/a", "已处置", "")
+
+	// c1：甲、乙、甲（同人换 event_id 再报，重复举报不拒）→ report_count=2。
+	seedReportEvent(t, n.st, "R1", eventIDOf(11), eventIDOf(1), 1000)
+	seedReportEvent(t, n.st, "R2", eventIDOf(12), eventIDOf(1), 1001)
+	seedReportEvent(t, n.st, "R1", eventIDOf(13), eventIDOf(1), 1002)
+	// c2：丙 → 1。c3：被举报后审核删（墓碑）→ 不在列。
+	seedReportEvent(t, n.st, "R3", eventIDOf(14), eventIDOf(2), 1003)
+	seedReportEvent(t, n.st, "R4", eventIDOf(15), eventIDOf(3), 1004)
+	if status, out := doJSONMap(t, http.MethodPost, n.public+"/v1/admin/review/reject",
+		`{"event_id":"`+eventIDOf(3)+`","reason":"违规"}`, hdr); status != http.StatusOK {
+		t.Fatalf("处置 c3 status=%d out=%v", status, out)
+	}
+
+	// ② 配置密钥但无头 / 错头 → 404 not_found（不暴露路由存在性）。
+	if status, out := doJSONMap(t, http.MethodPost, n.public+"/v1/admin/review/reported", `{}`, nil); status != http.StatusNotFound {
+		t.Fatalf("无头 status=%d out=%v, want 404", status, out)
+	}
+	status, out := doJSONMap(t, http.MethodPost, n.public+"/v1/admin/review/reported", `{}`, map[string]string{"X-Base-Review-Key": "wrong"})
+	if status != http.StatusNotFound || out["error"] != "not_found" {
+		t.Fatalf("错头 status=%d out=%v, want 404 not_found", status, out)
+	}
+
+	// ③ 正确头 + 空体 {} → 200：report_count 降序，c1（2 人）在前。
+	status, out = doJSONMap(t, http.MethodPost, n.public+"/v1/admin/review/reported", `{}`, hdr)
+	if status != http.StatusOK {
+		t.Fatalf("reported status=%d out=%v", status, out)
+	}
+	raw, _ := out["reports"].([]any)
+	if len(raw) != 2 {
+		t.Fatalf("应 2 行（墓碑评论不在列）: %v", out)
+	}
+	first, _ := raw[0].(map[string]any)
+	second, _ := raw[1].(map[string]any)
+	if first["event_id"] != eventIDOf(1) || second["event_id"] != eventIDOf(2) {
+		t.Fatalf("report_count 降序错: %v %v", first, second)
+	}
+	if first["report_count"] != float64(2) || second["report_count"] != float64(1) {
+		t.Fatalf("report_count = %v / %v, want 2 / 1", first["report_count"], second["report_count"])
+	}
+	rep, _ := first["reporters"].([]any)
+	if len(rep) != 2 {
+		t.Fatalf("reporters 应去重为 2 人: %v", first["reporters"])
+	}
+	got := map[string]bool{}
+	for _, r := range rep {
+		got[r.(string)] = true
+	}
+	if !got["R1"] || !got["R2"] {
+		t.Fatalf("reporters = %v, want {R1 R2}", rep)
+	}
+
+	// 字段集与 §5.3 响应契约逐一对照（零多键零缺键）。
+	for _, row := range raw {
+		m := row.(map[string]any)
+		for k := range m {
+			switch k {
+			case "event_id", "actor", "target_id", "payload_cid", "reply_to", "created_at", "report_count", "reporters":
+			default:
+				t.Fatalf("reported 行多出键 %q: %v", k, m)
+			}
+		}
+		if m["reply_to"] != nil || m["payload_cid"] == "" || m["actor"] == nil {
+			t.Fatalf("行投影字段异常: %v", m)
+		}
+	}
+}
+
 // 验收 12（护栏 1）：fetch 不返回墓碑中的块。
 func TestFetchSkipsRevokedPayload(t *testing.T) {
 	n := newCommentNode(t, "review-key")

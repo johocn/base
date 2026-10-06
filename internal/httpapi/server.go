@@ -143,10 +143,11 @@ func (s *Server) publicMux() *http.ServeMux {
 	// 目录公开读（册子 #58 §4.1）：与 contributors / proposal 同类匿名接口，复用治理面 IP 限速。
 	mux.HandleFunc("GET /v1/directory", s.handleDirectoryGet)
 
-	// 审核路由：**未配置 BASE_REVIEW_KEY 的节点上这两条根本不存在**（册子 §4.3、风险 9）。
+	// 审核路由：**未配置 BASE_REVIEW_KEY 的节点上这几条根本不存在**（册子 §4.3、风险 9）。
 	if s.opt.ReviewKey != "" {
 		mux.Handle("POST /v1/admin/review/fetch", s.requireReviewKey(s.handleReviewFetch))
 		mux.Handle("POST /v1/admin/review/reject", s.requireReviewKey(s.handleReviewReject))
+		mux.Handle("POST /v1/admin/review/reported", s.requireReviewKey(s.handleReviewReported)) // #79 §5.3
 	}
 
 	mux.HandleFunc("GET /governance", s.handleGovernancePage)

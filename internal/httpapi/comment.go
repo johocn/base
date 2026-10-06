@@ -136,6 +136,42 @@ func (s *Server) handleReviewFetch(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"payload_cid": req.PayloadCID, "text": string(plain)})
 }
 
+// handleReviewReported 被举报评论列表（#79 §5.3）：X-Base-Review-Key 保护（requireReviewKey 同款）。
+// 只聚合呈现，处置仍走既有 fetch→reject；无参数（空体 {}），列表短小不分页。
+func (s *Server) handleReviewReported(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.st.ListReportedComments()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	type reportedDTO struct {
+		EventID     string   `json:"event_id"`
+		Actor       string   `json:"actor"`
+		TargetID    string   `json:"target_id"`
+		PayloadCID  string   `json:"payload_cid"`
+		ReplyTo     *string  `json:"reply_to"`
+		CreatedAt   int64    `json:"created_at"`
+		ReportCount int64    `json:"report_count"`
+		Reporters   []string `json:"reporters"`
+	}
+	resp := struct {
+		Reports []reportedDTO `json:"reports"`
+	}{Reports: []reportedDTO{}}
+	for _, c := range rows {
+		dto := reportedDTO{
+			EventID: c.EventID, Actor: c.Actor, TargetID: c.TargetID,
+			PayloadCID: c.PayloadCID, CreatedAt: c.CreatedAt,
+			ReportCount: c.ReportCount, Reporters: c.Reporters,
+		}
+		if c.ReplyTo != "" {
+			reply := c.ReplyTo
+			dto.ReplyTo = &reply
+		}
+		resp.Reports = append(resp.Reports, dto)
+	}
+	s.writeJSON(w, http.StatusOK, resp)
+}
+
 type reviewRejectReq struct {
 	EventID string `json:"event_id"`
 	Reason  string `json:"reason"`
