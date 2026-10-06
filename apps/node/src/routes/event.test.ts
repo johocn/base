@@ -83,6 +83,24 @@ const CHECKIN_DDL = `CREATE TABLE checkin_days(
 		created_at     INTEGER NOT NULL,
 		PRIMARY KEY(id, day)
 	)`;
+// 条目表（schema.ts items 同构，裁剪注释）：like.v1 的条目 target 校验（activeItemExists）需要。
+const ITEMS_DDL = `CREATE TABLE items(
+		item_id      TEXT PRIMARY KEY,
+		source       TEXT NOT NULL,
+		type         TEXT NOT NULL,
+		title        TEXT NOT NULL DEFAULT '',
+		source_rev   TEXT NOT NULL DEFAULT '',
+		content_hash TEXT NOT NULL,
+		sqlite_table TEXT NOT NULL,
+		dist_class   TEXT NOT NULL DEFAULT 'public',
+		instructor   TEXT NOT NULL DEFAULT '',
+		state              TEXT    NOT NULL DEFAULT 'active',
+		pin_level          INTEGER NOT NULL DEFAULT 0,
+		pinned_at          INTEGER,
+		highlight_until    INTEGER,
+		tags_json          TEXT    NOT NULL DEFAULT '[]',
+		updated_at         TEXT    NOT NULL
+	)`;
 
 const SEED_A = "a1".repeat(32);
 const SEED_B = "b2".repeat(32);
@@ -213,6 +231,7 @@ beforeAll(async () => {
   db.execute(TOMBSTONE_DDL);
   db.execute(PROGRESS_DDL);
   db.execute(CHECKIN_DDL);
+  db.execute(ITEMS_DDL);
   for (const [seed, id] of [
     [SEED_A, ID_A],
     [SEED_B, ID_B],
@@ -576,5 +595,264 @@ describe("POST /v1/event 限速", () => {
     expect(last?.body.toString("utf8")).toBe(
       `{"code":"event_rate_limited","error":"发言过于频繁"}\n`,
     );
+  });
+});
+
+// ---------- #79 §3：like.v1 / report.v1 写面验收（镜像 Go TestHandleEventLikeReport 三用例） ----------
+// 事件限速是令牌桶（30/min，burst 10），故与 Go 同口径自起专用服务（全新令牌桶），
+// 三个用例分摊到三个身份，单个身份的 POST /v1/event 次数留在桶内。
+
+describe("POST /v1/event like.v1 / report.v1", () => {
+  let lrListener: Listener;
+  let lrBase: string;
+
+  beforeAll(async () => {
+    lrListener = await startServer(adapters(), db, { host: "127.0.0.1", port: 0, dataDir: dir });
+    lrBase = `http://${lrListener.addr()}`;
+  });
+
+  afterAll(async () => {
+    await lrListener.close();
+  });
+
+  function postLR(seed: string, id: string, bodyText: string): Promise<Res> {
+    const body = new Uint8Array(Buffer.from(bodyText, "utf8"));
+    return post(`${lrBase}/v1/event`, authHeaders(seed, id, body), body);
+  }
+
+  function seedComment(
+    seed: string,
+    id: string,
+    eventId: string,
+    target: string,
+    text: string,
+  ): Promise<Res> {
+    return postLR(
+      seed,
+      id,
+      makeEnvelope(seed, eventId, "comment.v1", String(TS), { target_id: target, text }),
+    );
+  }
+
+  /** ①like 评论成功落行（投影只填 target_id）＋②幂等＋⑧重复举报不拒＋⑨未登记类型回归。 */
+  it("①like 落行 ②幂等 ⑧重复举报 ⑨like.v2 未登记", async () => {
+    const C1 = "51".repeat(16);
+    const seeded = await seedComment(SEED_A, ID_A, C1, "article/a", "被赞评论");
+    expect(seeded.status).toBe(200);
+
+    // ① like 评论：200 {event_id, received_at}，无 payload_cid 键。
+    const likeWire = makeEnvelope(SEED_A, "61".repeat(16), "like.v1", String(TS), {
+      target_id: C1,
+      action: "like",
+    });
+    const first = await postLR(SEED_A, ID_A, likeWire);
+    expect(first.status).toBe(200);
+    const parsed = JSON.parse(first.body.toString("utf8")) as Record<string, unknown>;
+    expect(parsed.event_id).toBe("61".repeat(16));
+    expect(typeof parsed.received_at).toBe("number");
+    expect("payload_cid" in parsed).toBe(false);
+    const rows = db.select(`SELECT * FROM events WHERE event_id=?`, ["61".repeat(16)]);
+    expect(rows.length).toBe(1);
+    expect(String(rows[0].target_id)).toBe(C1);
+    expect(String(rows[0].payload_cid)).toBe("");
+    expect(String(rows[0].reply_to)).toBe("");
+    const envSig = (JSON.parse(likeWire) as { sig: string }).sig;
+    expect(String(rows[0].body_json)).toBe(
+      canonicalize({ target_id: C1, action: "like", sig: envSig }),
+    );
+
+    // ② 幂等：同 event_id 重发 → 200 同 received_at。
+    const replay = await postLR(SEED_A, ID_A, likeWire);
+    expect(replay.status).toBe(200);
+    const replayed = JSON.parse(replay.body.toString("utf8")) as Record<string, unknown>;
+    expect(replayed.received_at).toBe(parsed.received_at);
+
+    // ⑧ 重复举报两条不同 event_id → 均 200（重复举报本身是信号，节点不拒）。
+    for (const [i, reason] of [["62", "spam"], ["63", "abuse"]] as const) {
+      const wire = makeEnvelope(SEED_A, i.repeat(16), "report.v1", String(TS), {
+        target_id: C1,
+        reason,
+      });
+      const res = await postLR(SEED_A, ID_A, wire);
+      expect(res.status, reason).toBe(200);
+      if (i === "62") {
+        const sig = (JSON.parse(wire) as { sig: string }).sig;
+        const r = db.select(`SELECT * FROM events WHERE event_id=?`, [i.repeat(16)]);
+        expect(r.length).toBe(1);
+        expect(String(r[0].target_id)).toBe(C1);
+        expect(String(r[0].payload_cid)).toBe("");
+        expect(String(r[0].body_json)).toBe(canonicalize({ target_id: C1, reason, sig }));
+      }
+    }
+
+    // ⑨ 未登记类型回归：type=like.v2 → 400 event_type_unknown。
+    const v2 = await postLR(
+      SEED_A,
+      ID_A,
+      makeEnvelope(SEED_A, "64".repeat(16), "like.v2", String(TS), {
+        target_id: C1,
+        action: "like",
+      }),
+    );
+    expect(v2.status).toBe(400);
+    expect(v2.body.toString("utf8")).toBe(`{"error":"event_type_unknown"}\n`);
+  });
+
+  /** ③评论 target 不存在 404＋④墓碑 410＋⑤条目 target 校验＋⑥like body 严格键集。 */
+  it("③target 404 ④墓碑 410 ⑤条目 target ⑥like 严格键集", async () => {
+    const C2 = "52".repeat(16);
+    const seeded = await seedComment(SEED_B, ID_B, C2, "article/b", "会被删的评论");
+    expect(seeded.status).toBe(200);
+
+    // ③ 评论 target 不存在 → 404 target_not_found。
+    const missing = await postLR(
+      SEED_B,
+      ID_B,
+      makeEnvelope(SEED_B, "65".repeat(16), "like.v1", String(TS), {
+        target_id: "5f".repeat(16),
+        action: "like",
+      }),
+    );
+    expect(missing.status).toBe(404);
+    expect(missing.body.toString("utf8")).toBe(`{"error":"target_not_found"}\n`);
+
+    // ④ target 已墓碑 → 410 target_gone（like 与 report 同口径；Go 用 review reject 产生，此处同状态直达）。
+    db.execute(
+      `INSERT INTO comment_tombstone(event_id,payload_cid,reason,at,received_at) VALUES(?,?,?,?,?)`,
+      [C2, "cid", "违规", TS, TS],
+    );
+    const gone = await postLR(
+      SEED_B,
+      ID_B,
+      makeEnvelope(SEED_B, "66".repeat(16), "like.v1", String(TS), {
+        target_id: C2,
+        action: "like",
+      }),
+    );
+    expect(gone.status).toBe(410);
+    expect(gone.body.toString("utf8")).toBe(`{"error":"target_gone"}\n`);
+
+    // ⑤ 条目 target：不存在 → 404；active → 200；下架（removed）→ 404。
+    const noItem = await postLR(
+      SEED_B,
+      ID_B,
+      makeEnvelope(SEED_B, "67".repeat(16), "like.v1", String(TS), {
+        target_id: "article/nope",
+        action: "like",
+      }),
+    );
+    expect(noItem.status).toBe(404);
+    expect(noItem.body.toString("utf8")).toBe(`{"error":"target_not_found"}\n`);
+    db.execute(
+      `INSERT INTO items(item_id,source,type,content_hash,sqlite_table,updated_at)
+			VALUES('article/a1','test','article','hash','articles','2026-01-01T00:00:00Z')`,
+    );
+    const itemLike = await postLR(
+      SEED_B,
+      ID_B,
+      makeEnvelope(SEED_B, "68".repeat(16), "like.v1", String(TS), {
+        target_id: "article/a1",
+        action: "like",
+      }),
+    );
+    expect(itemLike.status).toBe(200);
+    const itemRows = db.select(`SELECT * FROM events WHERE event_id=?`, ["68".repeat(16)]);
+    expect(String(itemRows[0].target_id)).toBe("article/a1");
+    expect(String(itemRows[0].payload_cid)).toBe("");
+    db.execute(`UPDATE items SET state='removed' WHERE item_id='article/a1'`);
+    const retired = await postLR(
+      SEED_B,
+      ID_B,
+      makeEnvelope(SEED_B, "69".repeat(16), "like.v1", String(TS), {
+        target_id: "article/a1",
+        action: "unlike",
+      }),
+    );
+    expect(retired.status).toBe(404);
+    expect(retired.body.toString("utf8")).toBe(`{"error":"target_not_found"}\n`);
+
+    // ⑥ like body：非法 action / 多未知键 → 400 event_param_invalid。
+    const badAction = await postLR(
+      SEED_B,
+      ID_B,
+      makeEnvelope(SEED_B, "6a".repeat(16), "like.v1", String(TS), {
+        target_id: C2,
+        action: "love",
+      }),
+    );
+    expect(badAction.status).toBe(400);
+    expect(badAction.body.toString("utf8")).toBe(`{"error":"event_param_invalid"}\n`);
+    const extraKey = await postLR(
+      SEED_B,
+      ID_B,
+      makeEnvelope(SEED_B, "6b".repeat(16), "like.v1", String(TS), {
+        target_id: C2,
+        action: "like",
+        text: "多余键",
+      }),
+    );
+    expect(extraKey.status).toBe(400);
+    expect(extraKey.body.toString("utf8")).toBe(`{"error":"event_param_invalid"}\n`);
+  });
+
+  /** ⑦report 四值 reason / 缺键 / 多键 / 非评论形态 target 严格校验＋report 的 target 404。 */
+  it("⑦report body 严格校验 + report target 404", async () => {
+    const C3 = "53".repeat(16);
+    const seeded = await seedComment(SEED_C, ID_C, C3, "article/c", "被举报评论");
+    expect(seeded.status).toBe(200);
+
+    // 非法 reason（严格四值 spam/abuse/illegal/other）→ 400 event_param_invalid。
+    const badReason = await postLR(
+      SEED_C,
+      ID_C,
+      makeEnvelope(SEED_C, "71".repeat(16), "report.v1", String(TS), {
+        target_id: C3,
+        reason: "hate",
+      }),
+    );
+    expect(badReason.status).toBe(400);
+    expect(badReason.body.toString("utf8")).toBe(`{"error":"event_param_invalid"}\n`);
+    // 缺 reason 键 → 400。
+    const noReason = await postLR(
+      SEED_C,
+      ID_C,
+      makeEnvelope(SEED_C, "72".repeat(16), "report.v1", String(TS), { target_id: C3 }),
+    );
+    expect(noReason.status).toBe(400);
+    expect(noReason.body.toString("utf8")).toBe(`{"error":"event_param_invalid"}\n`);
+    // 多未知键 → 400。
+    const extraKey = await postLR(
+      SEED_C,
+      ID_C,
+      makeEnvelope(SEED_C, "73".repeat(16), "report.v1", String(TS), {
+        target_id: C3,
+        reason: "spam",
+        text: "多余键",
+      }),
+    );
+    expect(extraKey.status).toBe(400);
+    expect(extraKey.body.toString("utf8")).toBe(`{"error":"event_param_invalid"}\n`);
+    // report 只收评论 target（16 hex）：路径式 → 400 event_param_invalid。
+    const pathTarget = await postLR(
+      SEED_C,
+      ID_C,
+      makeEnvelope(SEED_C, "74".repeat(16), "report.v1", String(TS), {
+        target_id: "article/b",
+        reason: "spam",
+      }),
+    );
+    expect(pathTarget.status).toBe(400);
+    expect(pathTarget.body.toString("utf8")).toBe(`{"error":"event_param_invalid"}\n`);
+    // report 的 target 不存在 → 404 target_not_found（与 like 同口径）。
+    const missing = await postLR(
+      SEED_C,
+      ID_C,
+      makeEnvelope(SEED_C, "75".repeat(16), "report.v1", String(TS), {
+        target_id: "5e".repeat(16),
+        reason: "spam",
+      }),
+    );
+    expect(missing.status).toBe(404);
+    expect(missing.body.toString("utf8")).toBe(`{"error":"target_not_found"}\n`);
   });
 });

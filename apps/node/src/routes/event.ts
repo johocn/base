@@ -13,6 +13,7 @@ import { dmEventHandler } from "./dm";
 import { governEventHandler } from "./governEvent";
 import { groupEventHandler } from "./groupEvent";
 import { circleEventHandler } from "./circleEvent";
+import { likeEventHandler, reportEventHandler } from "./likeEvent";
 import { jsonResponse } from "./json";
 import { progressEventHandler } from "./progress";
 
@@ -25,14 +26,16 @@ export const EVENT_BURST_PER_IP = 30;
 // maxCommentBytes（event.go:14）：单条评论正文的 UTF-8 字节上限。
 const MAX_COMMENT_BYTES = 8192;
 
-// eventTypeRegistry（event.go:25-31）：节点放行的事件类型表，5 条全抄。
+// eventTypeRegistry（event.go:25-34）：节点放行的事件类型表，全量对抄。
 export const EVENT_TYPES: ReadonlySet<string> = new Set([
   "circle.v1",
   "comment.v1",
   "dm.v1",
   "govern.v1",
   "group.v1",
+  "like.v1",
   "progress.v1",
+  "report.v1",
 ]);
 
 // 客户端 IP 维度的退化单桶键（ServerRequest 未暴露远端地址）。
@@ -287,6 +290,10 @@ export function eventPostHandler(deps: EventDeps): AuthedHandler {
         return governEventHandler(deps, actor, env, createdAt);
       case "circle.v1":
         return circleEventHandler(deps, actor, env, createdAt);
+      case "like.v1":
+        return likeEventHandler(deps, actor, env, createdAt);
+      case "report.v1":
+        return reportEventHandler(deps, actor, env, createdAt);
     }
     return putBareEvent(deps, actor, env, createdAt);
   };

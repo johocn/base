@@ -82,6 +82,12 @@ export function isRevokedEvent(db: Db, eventId: string): boolean {
   return rows.length > 0;
 }
 
+/** ActiveItemExists（store/like.go 同口径，#79 §3.3）：items 存在且 state='active'。 */
+export function activeItemExists(db: Db, itemId: string): boolean {
+  const rows = db.select(`SELECT 1 FROM items WHERE item_id=? AND state='active' LIMIT 1`, [itemId]);
+  return rows.length > 0;
+}
+
 /**
  * HasCommentEvent（tag.go:186-190）：event_id 是否为本节点已收到的 comment.v1 事件。
  * 硬过滤 type='comment.v1'：② 类（group.v1 / dm.v1）由此**天然被排除**（册子 §3.7 红线）。
