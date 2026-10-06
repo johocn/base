@@ -1,0 +1,65 @@
+{
+  "comment": {
+    "comments": [
+      {
+        "event_id": "00000000000000000000000000000001",
+        "actor": "actorA",
+        "target_id": "article/a1",
+        "payload_cid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reply_to": null,
+        "created_at": 300,
+        "like_count": 2
+      },
+      {
+        "event_id": "00000000000000000000000000000002",
+        "actor": "actorB",
+        "target_id": "article/a1",
+        "payload_cid": "dddddddddddddddddddddddddddddddd",
+        "reply_to": null,
+        "created_at": 200,
+        "like_count": 0
+      }
+    ],
+    "next_cursor": null
+  },
+  "catalog": {
+    "pack_id": "pack-golden-0001",
+    "content_version": 1,
+    "items": [
+      {
+        "item_id": "article/a1",
+        "source": "article",
+        "type": "article",
+        "title": "甲",
+        "content_hash": "5e1dbbee004de53c2650ada799e958efebba4e48866ffdd370177116547b512f",
+        "source_rev": "rev-1",
+        "like_count": 2
+      }
+    ],
+    "next_cursor": null
+  },
+  "reported": {
+    "reports": [
+      {
+        "event_id": "00000000000000000000000000000001",
+        "actor": "actorA",
+        "target_id": "article/a1",
+        "payload_cid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reply_to": null,
+        "created_at": 300,
+        "report_count": 2,
+        "reporters": ["R1", "R2"]
+      },
+      {
+        "event_id": "00000000000000000000000000000002",
+        "actor": "actorB",
+        "target_id": "article/a1",
+        "payload_cid": "dddddddddddddddddddddddddddddddd",
+        "reply_to": null,
+        "created_at": 200,
+        "report_count": 1,
+        "reporters": ["R3"]
+      }
+    ]
+  }
+}
