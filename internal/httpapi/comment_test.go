@@ -369,6 +369,59 @@ func TestEventSyncOnlyOnPeerHandler(t *testing.T) {
 	}
 }
 
+// ---------- #79 §5.1：comment 读面内联 like_count（Task 3） ----------
+
+// seedLikeEvent 直接落一条 like.v1 事件行（手法同 store 层 like_test.go，计数只读 action）。
+func seedLikeEvent(t *testing.T, st *store.Store, id, eventID, target, action string, createdAt int64) {
+	t.Helper()
+	body, err := protocol.Canonicalize(map[string]any{"target_id": target, "action": action, "sig": "00"})
+	if err != nil {
+		t.Fatalf("Canonicalize: %v", err)
+	}
+	if err := st.PutEvent(store.Event{EventID: eventID, ID: id, Type: "like.v1", BodyJSON: string(body),
+		CreatedAt: createdAt, ReceivedAt: createdAt, TargetID: target}); err != nil {
+		t.Fatalf("PutEvent: %v", err)
+	}
+}
+
+// 有赞=实际数（LWW 取消回落 0）、无赞=0；§5.4 隐私：公开行零 report 字段、零点赞者名单。
+func TestCommentListInlineLikeCount(t *testing.T) {
+	n := newCommentNode(t, "")
+	postComment(t, n, eventIDOf(1), "article/a", "被赞评论", "")
+	postComment(t, n, eventIDOf(2), "article/a", "无赞评论", "")
+
+	seedLikeEvent(t, n.st, "A", eventIDOf(11), eventIDOf(1), "like", 1000)
+	seedLikeEvent(t, n.st, "B", eventIDOf(12), eventIDOf(1), "like", 1001)
+	// A 对 c2 点赞后取消 → 计数回落 0（§4.1 LWW）。
+	seedLikeEvent(t, n.st, "A", eventIDOf(13), eventIDOf(2), "like", 1002)
+	seedLikeEvent(t, n.st, "A", eventIDOf(14), eventIDOf(2), "unlike", 1003)
+	// 举报事件在库，但公开读面绝不能出现任何 report 痕迹（§5.4）。
+	if err := n.st.PutEvent(store.Event{EventID: eventIDOf(21), ID: "C", Type: "report.v1",
+		BodyJSON: `{"reason":"spam","target_id":"` + eventIDOf(1) + `","sig":"00"}`,
+		CreatedAt: 1004, ReceivedAt: 1004, TargetID: eventIDOf(1)}); err != nil {
+		t.Fatalf("PutEvent(report): %v", err)
+	}
+
+	items, _ := listComments(t, n.public, "?target_id=article/a")
+	if len(items) != 2 {
+		t.Fatalf("应 2 条评论: %v", items)
+	}
+	want := map[string]float64{eventIDOf(1): 2, eventIDOf(2): 0}
+	for _, it := range items {
+		id, _ := it["event_id"].(string)
+		if it["like_count"] != want[id] {
+			t.Fatalf("%s like_count = %v, want %v", id, it["like_count"], want[id])
+		}
+		for k := range it {
+			switch k {
+			case "event_id", "actor", "target_id", "payload_cid", "reply_to", "created_at", "like_count":
+			default:
+				t.Fatalf("公开行多出键 %q（违反 §5.4）: %v", k, it)
+			}
+		}
+	}
+}
+
 // 验收 12（护栏 1）：fetch 不返回墓碑中的块。
 func TestFetchSkipsRevokedPayload(t *testing.T) {
 	n := newCommentNode(t, "review-key")

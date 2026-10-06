@@ -25,6 +25,7 @@ type commentDTO struct {
 	PayloadCID string  `json:"payload_cid"`
 	ReplyTo    *string `json:"reply_to"`
 	CreatedAt  int64   `json:"created_at"`
+	LikeCount  int64   `json:"like_count"`
 }
 
 type commentListResponse struct {
@@ -48,10 +49,21 @@ func (s *Server) handleCommentList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := commentListResponse{Comments: []commentDTO{}}
+	// #79 §5.1：按页聚合 like_count（禁 N+1），无赞行 map 缺键按 0 填。
+	targets := make([]string, 0, len(rows))
+	for _, c := range rows {
+		targets = append(targets, c.EventID)
+	}
+	likeMap, err := s.st.LikeCountsByTargets(targets)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	for _, c := range rows {
 		dto := commentDTO{
 			EventID: c.EventID, Actor: c.Actor, TargetID: c.TargetID,
 			PayloadCID: c.PayloadCID, CreatedAt: c.CreatedAt,
+			LikeCount: likeMap[c.EventID],
 		}
 		if c.ReplyTo != "" {
 			reply := c.ReplyTo

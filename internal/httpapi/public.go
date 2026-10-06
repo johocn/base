@@ -45,6 +45,7 @@ type catalogItem struct {
 	Title       string `json:"title"`
 	ContentHash string `json:"content_hash"`
 	SourceRev   string `json:"source_rev"`
+	LikeCount   int64  `json:"like_count"`
 }
 
 type catalogResponse struct {
@@ -94,6 +95,19 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		items = items[:limit]
 		next = items[len(items)-1].ItemID
 	}
+	// #79 §5.2：对已通过 active/public 过滤的条目 id 集合做一次聚合（禁 N+1），无赞缺键按 0 填。
+	var visibleIDs []string
+	for _, it := range items {
+		if it.State != "active" || it.DistClass != "public" {
+			continue
+		}
+		visibleIDs = append(visibleIDs, it.ItemID)
+	}
+	likeMap, err := s.st.LikeCountsByTargets(visibleIDs)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	for _, it := range items {
 		if it.State != "active" || it.DistClass != "public" {
 			continue
@@ -101,6 +115,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		resp.Items = append(resp.Items, catalogItem{
 			ItemID: it.ItemID, Source: it.Source, Type: it.Type, Title: it.Title,
 			ContentHash: it.ContentHash, SourceRev: it.SourceRev,
+			LikeCount: likeMap[it.ItemID],
 		})
 	}
 	if next != "" {
