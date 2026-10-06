@@ -247,6 +247,24 @@ describe("parseEventProjection", () => {
     expect(parseEventProjection("dm.v1", JSON.stringify({ to: "" }))).toEqual(ZERO);
     expect(parseEventProjection("unknown.v1", JSON.stringify({ x: 1 }))).toEqual(ZERO);
   });
+
+  // #79 §6：like.v1 / report.v1 是无 payload 事件，接收侧投影只填 target_id，
+  // payload_cid / reply_to 恒空（EventBlobIndex 白名单不动，同 progress.v1 先例）。
+  // 坏 JSON / 缺 target_id ⇒ 零投影（事件仍落行，与既有口径一致）。
+  it("like.v1 / report.v1 投影只填 target_id；坏 JSON / 缺 target_id 零投影", () => {
+    expect(parseEventProjection("like.v1", JSON.stringify({ action: "like", target_id: "c1", sig: "0" }))).toEqual({
+      targetId: "c1",
+      payloadCid: "",
+      replyTo: "",
+    });
+    expect(parseEventProjection("report.v1", JSON.stringify({ reason: "spam", target_id: "c1", sig: "0" }))).toEqual({
+      targetId: "c1",
+      payloadCid: "",
+      replyTo: "",
+    });
+    expect(parseEventProjection("like.v1", '{"action":bad')).toEqual(ZERO);
+    expect(parseEventProjection("report.v1", JSON.stringify({ reason: "spam", sig: "0" }))).toEqual(ZERO);
+  });
 });
 
 describe("applySyncedGroupEvent", () => {

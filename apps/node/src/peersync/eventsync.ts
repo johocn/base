@@ -403,6 +403,15 @@ export function parseEventProjection(typ: string, bodyJSON: string): EventProjec
       if (!target.ok || !payload.ok || !reply.ok) return ZERO_PROJECTION;
       return { targetId: target.value, payloadCid: payload.value, replyTo: reply.value };
     }
+    case "like.v1":
+    case "report.v1": {
+      // #79 §6：无 payload 事件，投影只填 target_id。
+      const g = goObj(bodyJSON);
+      if (!g.ok) return ZERO_PROJECTION;
+      const target = goStr(g.obj, "target_id");
+      if (!target.ok || target.value === "") return ZERO_PROJECTION;
+      return { targetId: target.value, payloadCid: "", replyTo: "" };
+    }
     case "group.v1": {
       const g = goObj(bodyJSON);
       if (!g.ok) return ZERO_PROJECTION;
