@@ -247,6 +247,23 @@ export class MemoryRepo implements LocalRepo {
     this.commentOut.delete(eventId);
   }
 
+  likeOut = new Map<string, { action: 'like' | 'unlike'; updatedAt: number }>(); // targetId -> 台账行
+  likeCounts = new Map<string, number>(); // itemId -> items.like_count
+
+  async getLikeOut(targetId: string): Promise<'like' | 'unlike' | null> {
+    return this.likeOut.get(targetId)?.action ?? null;
+  }
+  async upsertLikeOut(targetId: string, action: 'like' | 'unlike'): Promise<void> {
+    this.likeOut.set(targetId, { action, updatedAt: Date.now() });
+  }
+  async getItemLikeCount(itemId: string): Promise<number> {
+    return this.likeCounts.get(itemId) ?? 0;
+  }
+  async adjustItemLikeCount(itemId: string, delta: number): Promise<void> {
+    // 与 SqlRepo 的 MAX(0, like_count + ?) 同义：无行视作 0，且不越负
+    this.likeCounts.set(itemId, Math.max(0, (this.likeCounts.get(itemId) ?? 0) + delta));
+  }
+
   groups = new Map<string, GroupRow>(); // groupId -> row
   groupKeys = new Map<string, GroupKeyRow>(); // `${groupId}:${epoch}` -> row
 

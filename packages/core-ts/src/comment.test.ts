@@ -171,6 +171,7 @@ describe('comment', () => {
       payloadCid: 'c1'.repeat(16),
       replyTo: 'e0'.repeat(16),
       createdAt: 1790000000000,
+      likeCount: 0,
     });
     expect(page.items[1]!.replyTo).toBeNull();
     expect(page.items[1]!.actor).toBe('');

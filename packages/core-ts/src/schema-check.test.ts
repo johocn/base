@@ -356,7 +356,7 @@ describe('本地库 SQL 列名 ↔ DDL 一致性', () => {
     // 至少要覆盖 repo.ts 里实际用到的表
     const expectedTables = [
       'config', 'items', 'articles', 'blob_index', 'tombstone', 'user_state',
-      'quizzes', 'quiz_attempt', 'comment_out', 'segments', 'my_submissions',
+      'quizzes', 'quiz_attempt', 'comment_out', 'like_out', 'segments', 'my_submissions',
       'groups', 'group_keys', 'dm_keys', 'tag_links', 'progress', 'checkin_days',
     ];
     for (const t of expectedTables) {

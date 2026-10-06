@@ -11,3 +11,4 @@ export * from "./importer/quiz";
 export * from "./importer/container";
 export * from "./importer/video";
 export * from "./packexport";
+export * from "./like";

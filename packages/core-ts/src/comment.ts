@@ -35,6 +35,7 @@ export interface CommentItem {
   payloadCid: string;
   replyTo: string | null;
   createdAt: number;
+  likeCount: number;
 }
 
 export interface CommentList {
@@ -158,6 +159,7 @@ export async function listComments(
     payloadCid: String(c.payload_cid ?? ''),
     replyTo: c.reply_to === null || c.reply_to === undefined ? null : String(c.reply_to),
     createdAt: Number(c.created_at ?? 0),
+    likeCount: Number(c.like_count ?? 0),
   }));
   return { items, nextCursor: page.next_cursor ?? null };
 }

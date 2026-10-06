@@ -11,6 +11,7 @@ function c(eventId: string, replyTo: string | null, createdAt: number, actor = '
     payloadCid: 'cid-' + eventId,
     replyTo,
     createdAt,
+    likeCount: 0,
   };
 }
 

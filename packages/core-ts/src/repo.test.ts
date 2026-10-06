@@ -27,25 +27,27 @@ class ColumnsDb implements LocalDb {
 }
 
 describe('items 表的后加列', () => {
-  it('新建库：建表语句自带 author_id / author_sig / tags_json', () => {
+  it('新建库：建表语句自带 author_id / author_sig / tags_json / like_count', () => {
     const ddl = SCHEMA_SQL.find((s) => s.includes('CREATE TABLE IF NOT EXISTS items'));
     expect(ddl).toContain('author_id');
     expect(ddl).toContain('author_sig');
     expect(ddl).toContain('tags_json');
+    expect(ddl).toContain('like_count');
   });
 
-  it('存量库：缺列时幂等补齐三列', async () => {
+  it('存量库：缺列时幂等补齐四列', async () => {
     const db = new ColumnsDb(['item_id', 'source', 'type', 'title', 'rev', 'content_hash', 'state', 'updated_at']);
     await ensureItemsColumns(db);
     expect(db.alters).toEqual([
       `ALTER TABLE items ADD COLUMN author_id TEXT NOT NULL DEFAULT ''`,
       `ALTER TABLE items ADD COLUMN author_sig TEXT NOT NULL DEFAULT ''`,
       `ALTER TABLE items ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'`,
+      `ALTER TABLE items ADD COLUMN like_count INTEGER NOT NULL DEFAULT 0`,
     ]);
   });
 
   it('已补过：不重复 ALTER', async () => {
-    const db = new ColumnsDb(['item_id', 'author_id', 'author_sig', 'tags_json']);
+    const db = new ColumnsDb(['item_id', 'author_id', 'author_sig', 'tags_json', 'like_count']);
     await ensureItemsColumns(db);
     expect(db.alters).toEqual([]);
   });

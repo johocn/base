@@ -80,6 +80,14 @@ export interface LocalRepo {
   markCommentOutFailed(eventId: string, reason: string): Promise<void>;
   /** 删一条：用户对失败项点「删除」，或补发成功后清行。 */
   removeCommentOut(eventId: string): Promise<void>;
+  /** 我的点赞台账（#79 §7.1）：某 target 的最新动作；没点过返回 null。 */
+  getLikeOut(targetId: string): Promise<'like' | 'unlike' | null>;
+  /** 台账 upsert：同 target 覆盖为最新动作（高亮态唯一来源）。 */
+  upsertLikeOut(targetId: string, action: 'like' | 'unlike'): Promise<void>;
+  /** 条目点赞本地计数（items.like_count，离线阅读页可见）；无行返回 0。 */
+  getItemLikeCount(itemId: string): Promise<number>;
+  /** 乐观 ±1；下限 0 不越负（与 SQL `MAX(0, like_count + ?)` 同义）。 */
+  adjustItemLikeCount(itemId: string, delta: number): Promise<void>;
   /** 写/更新一个小组成员行（入组、续期、读回写都走它）。 */
   saveGroup(row: GroupRow): Promise<void>;
   /** 全部小组，按 `joined_at ASC`。 */
@@ -152,7 +160,8 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS items(
      item_id TEXT PRIMARY KEY, source TEXT, type TEXT, title TEXT, rev TEXT,
      content_hash TEXT, state TEXT, updated_at TEXT, tags_json TEXT NOT NULL DEFAULT '[]',
-     author_id TEXT NOT NULL DEFAULT '', author_sig TEXT NOT NULL DEFAULT '')`,
+     author_id TEXT NOT NULL DEFAULT '', author_sig TEXT NOT NULL DEFAULT '',
+     like_count INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS articles(
      item_id TEXT PRIMARY KEY, title TEXT, digest TEXT, published_at TEXT,
      tags_json TEXT, body_md TEXT, content_hash TEXT, rev TEXT)`,
@@ -176,6 +185,8 @@ export const SCHEMA_SQL: string[] = [
      event_id TEXT PRIMARY KEY, target_id TEXT NOT NULL, text TEXT NOT NULL, reply_to TEXT,
      wire TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, queued_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS idx_comment_out_queued ON comment_out(queued_at)`,
+  `CREATE TABLE IF NOT EXISTS like_out(
+     target_id TEXT PRIMARY KEY, action TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS segments(
      item_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL,
      content_hash TEXT NOT NULL, PRIMARY KEY(item_id, seq))`,
@@ -237,6 +248,9 @@ export async function ensureItemsColumns(db: LocalDb): Promise<void> {
   }
   if (!cols.has('tags_json')) {
     await db.execute(`ALTER TABLE items ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'`);
+  }
+  if (!cols.has('like_count')) {
+    await db.execute(`ALTER TABLE items ADD COLUMN like_count INTEGER NOT NULL DEFAULT 0`);
   }
 }
 
@@ -622,6 +636,29 @@ export class SqlRepo implements LocalRepo {
 
   async removeCommentOut(eventId: string): Promise<void> {
     await this.db.execute(`DELETE FROM comment_out WHERE event_id=?`, [eventId]);
+  }
+
+  async getLikeOut(targetId: string) {
+    const rows = await this.db.select(`SELECT action FROM like_out WHERE target_id=?`, [targetId]);
+    if (rows.length === 0) return null;
+    return String(rows[0].action) === 'like' ? 'like' : 'unlike';
+  }
+
+  async upsertLikeOut(targetId: string, action: 'like' | 'unlike') {
+    await this.db.execute(
+      `INSERT INTO like_out(target_id,action,updated_at) VALUES(?,?,?)
+       ON CONFLICT(target_id) DO UPDATE SET action=excluded.action, updated_at=excluded.updated_at`,
+      [targetId, action, Date.now()],
+    );
+  }
+
+  async getItemLikeCount(itemId: string) {
+    const rows = await this.db.select(`SELECT like_count FROM items WHERE item_id=?`, [itemId]);
+    return rows.length === 0 ? 0 : Number(rows[0].like_count ?? 0);
+  }
+
+  async adjustItemLikeCount(itemId: string, delta: number) {
+    await this.db.execute(`UPDATE items SET like_count = MAX(0, like_count + ?) WHERE item_id=?`, [delta, itemId]);
   }
 
   async saveGroup(row: GroupRow): Promise<void> {
