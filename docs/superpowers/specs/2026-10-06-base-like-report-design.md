@@ -379,6 +379,7 @@ like / report **仅在线**；离线点击 toast，不进 `comment_out` 队列�
 | T14 | mobile 阅读页条目点赞与举报快捷提案入口 | `16e6e94` |
 | T15 | mobile 条目举报预填治理 remove 提案 + G5 门禁 | `9fee02a` |
 | T16 | 文档回填（本段 + README 状态行） | 本次 docs commit |
+| T17 | 节点双单元部署 + G7 探活（哈希/结果见下方实况小节） | 纯线上操作，无 commit（部署前 HEAD `85f0911`） |
 
 ### 门禁判定
 
@@ -390,9 +391,39 @@ like / report **仅在线**；离线点击 toast，不进 `comment_out` 队列�
 | G4 | **过** | core-ts：`like.test.ts` 5/5、`govern-prefill.test.ts`、repo/schema 用例全绿；`govern.test.ts` 2 例为**存量失败**（在开工前提交 `8ef4c3a` 上同样失败，属治理 V2 演进遗留，非本册回归——回填时以 pre-#79 worktree 复跑确证） |
 | G5 | **过** | `vue-tsc --noEmit` 0 错、vitest **37/37**、`build:h5` 成功、模板 `.value` 硬检查 0 命中（回填时复跑确认） |
 | G6 | **过** | 本段回填 + `docs/README.md` §3 表 79 行 / §5 状态句更新；`git log --oneline 53aa3d1^..HEAD` 提交链完整 |
-| G7 / G8 | **待执行** | T17 节点双单元部署探活（先升节点、后开事件）、T18 mobile 发布四步 + 真机 3 条（#79 §9.2，待人工）；结果后续回填本节 |
+| G7 | **过** | T17 线上双单元探活 21/21 全 PASS + 反熵验证过（详见下方「T17 线上部署实况」） |
+| G8 | **待执行** | T18 mobile 发布四步 + 真机 3 条（#79 §9.2，待人工）；结果后续回填本节 |
+
+### T17 线上部署实况（2026-10-06）
+
+**前置**：git 干净且与 origin/master 同步（`85f0911`）；部署前 `GET /v1/release` = apk `base-0.20.4.apk` / sha256 `9101b5ac…83d5b` / 27450925 字节 / issued 2026-10-02T01:44:54Z。
+
+**产物与替换**（先升节点、后发客户端；上传→远端哈希核对→`.bak-pre-like` 备份→同目录 `mv` 原子替换）：
+
+| 产物 | 字节 | sha256 | 落位 |
+|---|---|---|---|
+| based-pre-like（Go，linux/amd64，CGO_ENABLED=0） | 22124049 | `5fdb1a0fb8b72fde072176c280e345ff4b970b1f4677703a4d6eb5fbbc02bcf8` | `/opt/base/based`（旧件 `/opt/base/based.bak-pre-like`） |
+| based-node.mjs（esbuild bundle） | 564878 | `fd3f4a3889a81668b2ae13bc4a663b2a7c59ea38616f6c302990e232a29f3a1d` | `/opt/base-node/based-node.mjs`（旧件 `.bak-pre-like`） |
+
+**重启**：`systemctl restart base base-cache` 双 **active**（PID 271917 / 271918）；监听 7001/7002（node）+ 7003/443（based）全 LISTEN。
+
+**G7 探活**（冒烟脚本跑在服务器，Go 走 `https://127.0.0.1:443` 直连、Node 走 `http://127.0.0.1:7001` 直连、客户端域名口径 `http://118.190.217.242`（nginx:80→Node））：21/21 全 PASS——
+
+1. `/healthz` 200（Go/Node 双直连；客户端域名口径 `/v1/comment` 200——nginx:80 的 `/healthz` 由 SPA 静态兜底，非节点路由）。
+2. like.v1 签名事件双单元 200 `{"event_id":…,"received_at":…}` 且**无 `payload_cid` 键**（Go 侧 `6797c1d7095895387e62296d8505b9dc`、Node 侧 `d49265b447c18a0d3d2c146da3a9d912`，冒烟身份 `e2a14cad41a3dcab6a098560e394c95f`）。
+3. `GET /v1/comment?target_id=selfcheck` 目标评论行 `like_count:1`（基线 0）。
+4. `GET /v1/catalog` 全部条目带 `like_count`（Go 3/3、Node 11/11）。
+5. `POST /v1/admin/review/reported` 无密钥/带密钥均 **404**——线上两单元均未配 `BASE_REVIEW_KEY`，路由不注册，按 §5.3 契约即正确形态（AC7「无密钥节点 404」分支；带密钥 200 形态已由 G3 golden 覆盖）。
+6. 反向对照：`GET /v1/blob/zzzz` → 400 `非法 blob_id`（格式校验正确拒绝）；合法格式不存在 id → 404 `块不存在`；`type=like.v2` → 400 `event_type_unknown`。
+7. `journalctl` 双单元近 6 分钟 **0 panic、0 event_type_unknown**。
+
+**反熵验证（AC 11-2 线上版）**：重启后首轮 event_sync（15:52:07）`events=2`；`sqlite3` 直查两库均含上述两条 like.v1（Go 发的 `6797c1d7…` 已到 base-cache，Node 发的 `d49265b4…` 已到 base）；收敛后双端 `like_count=1` 一致（同 actor 同 target 按 LWW 去重）。
 
 ### 偏离点
 
 - 无实质偏离：T1–T15 共 14 个实现 commit 的提交信息与计划逐字一致，落点文件与计划一致。
 - 计划外既有状况如实登记：G4 所述 `govern.test.ts` 2 例存量失败（非本册引入，回填时已确证）。
+- T17 执行口径与计划的差异（拓扑与实况，非实现偏离）：
+  - 计划写「Node 走 127.0.0.1:8083」，线上 Node 公共口现为 **7001**（P5 后端口改排）；「Go 走客户端域名」实际客户端入口（nginx:80）反代到 **Node**，故 Go 单元以 `https://127.0.0.1:443` 直连探活、客户端域名口径并入 Node 单元 leg，两口径全测。
+  - 计划写「`/v1/blob/zzzz` → 404」，实际 `zzzz` 因 id 格式非法回 **400**（`IsBlobID` 32hex 校验），合法格式不存在 id 才回 404——两者均为契约正确行为，探活两路全测。
+  - 线上未配 `BASE_REVIEW_KEY`：reported 探活「带密钥 → 200」分支在本节点不可达（路由不注册回 404），按 §5.3/AC7 属正确形态，如实登记。
