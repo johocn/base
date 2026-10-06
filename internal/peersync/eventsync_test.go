@@ -642,3 +642,129 @@ func TestParseEventProjectionLikeReport(t *testing.T) {
 		}
 	}
 }
+
+// seedLikeEvent / seedReportEvent 直落一条无 payload 事件行（写路径验签由 internal/httpapi 覆盖，
+// 这里只造既成事实）；body_json 与写侧落库形态一致：canonical({target_id,action|reason,sig})。
+func seedLikeEvent(t *testing.T, st *store.Store, eventID, actor string, createdAt int64, target, action string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"action":%q,"sig":"00","target_id":%q}`, action, target)
+	if err := st.PutEvent(store.Event{
+		EventID: eventID, ID: actor, Type: "like.v1", BodyJSON: body,
+		CreatedAt: createdAt, TargetID: target,
+	}); err != nil {
+		t.Fatalf("PutEvent(%s): %v", eventID, err)
+	}
+}
+
+func seedReportEvent(t *testing.T, st *store.Store, eventID, actor string, createdAt int64, target, reason string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"reason":%q,"sig":"00","target_id":%q}`, reason, target)
+	if err := st.PutEvent(store.Event{
+		EventID: eventID, ID: actor, Type: "report.v1", BodyJSON: body,
+		CreatedAt: createdAt, TargetID: target,
+	}); err != nil {
+		t.Fatalf("PutEvent(%s): %v", eventID, err)
+	}
+}
+
+// #79 AC 11（Task 6）：like.v1 / report.v1 经 event-sync 从源节点传播到缓存节点后，
+// 接收侧投影重建 target_id，LikeCountsByTargets / ListReportedComments 在对端与源节点一致。
+// LWW（like 后 unlike 不计）与举报去重（同人重复举报只计一次）跨节点不变形。
+func TestSyncEventsLikeReportAggregatesOnPeer(t *testing.T) {
+	src, url, tr, pub := newSourceNode(t)
+
+	// 源节点：评论 c1 + 甲（like→unlike，最新态 unlike ⇒ 不计）+ 乙（like ⇒ 计 1）；
+	// 举报：甲重复举报两次（去重 1 人）+ 丙一次 ⇒ report_count=2。
+	c1 := eventIDHex(1)
+	cid := seedComment(t, src, c1, "article/a", "被点赞被举报的正文", "")
+	seedLikeEvent(t, src, eventIDHex(2), commentActor, 1000, c1, "like")
+	seedLikeEvent(t, src, eventIDHex(3), commentActor, 2000, c1, "unlike")
+	likerB := "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+	seedLikeEvent(t, src, eventIDHex(4), likerB, 1000, c1, "like")
+	seedReportEvent(t, src, eventIDHex(5), commentActor, 1000, c1, "spam")
+	seedReportEvent(t, src, eventIDHex(6), commentActor, 1001, c1, "abuse")
+	reporterC := "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"
+	seedReportEvent(t, src, eventIDHex(7), reporterC, 1000, c1, "other")
+
+	dst := openTemp(t)
+	cfg := Config{TransportFor: tr, IssuerPubKeys: map[string]string{srcIssuer: pub}}
+	ev, err := cfg.SyncEvents(context.Background(), dst, Peer{URL: url})
+	if err != nil || ev.Events != 7 {
+		t.Fatalf("反熵一轮应搬来 7 条事件 ev=%+v err=%v", ev, err)
+	}
+
+	// like 计数两端一致：甲最新为 unlike 不计，乙计 1。
+	for _, node := range []struct {
+		name string
+		st   *store.Store
+	}{{"源节点", src}, {"缓存节点", dst}} {
+		got, err := node.st.LikeCountsByTargets([]string{c1})
+		if err != nil || got[c1] != 1 {
+			t.Fatalf("%s like_count 不符 err=%v got=%+v", node.name, err, got)
+		}
+	}
+
+	// 接收侧投影：like 行只填 target_id，payload 列恒空（#79 §6）。
+	le, ok, err := dst.GetEventByID(eventIDHex(2))
+	if err != nil || !ok {
+		t.Fatalf("缓存节点应有 like 事件 ok=%v err=%v", ok, err)
+	}
+	if le.TargetID != c1 || le.PayloadCID != "" || le.ReplyTo != "" {
+		t.Fatalf("like 投影列不符: %+v", le)
+	}
+
+	// 举报列表两端一致：被举报评论一行，report_count=2（甲去重），reporters 两名。
+	wantReporters := map[string]bool{commentActor: true, reporterC: true}
+	for _, node := range []struct {
+		name string
+		st   *store.Store
+	}{{"源节点", src}, {"缓存节点", dst}} {
+		rows, err := node.st.ListReportedComments()
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("%s reported 列表不符 err=%v rows=%+v", node.name, err, rows)
+		}
+		r := rows[0]
+		if r.EventID != c1 || r.Actor != commentActor || r.TargetID != "article/a" ||
+			r.PayloadCID != cid || r.ReportCount != 2 {
+			t.Fatalf("%s reported 行不符: %+v", node.name, r)
+		}
+		got := map[string]bool{}
+		for _, id := range r.Reporters {
+			got[id] = true
+		}
+		if !reflect.DeepEqual(got, wantReporters) {
+			t.Fatalf("%s reporters 去重不符: %v", node.name, r.Reporters)
+		}
+	}
+}
+
+// #79 AC 11 对造用例：对端只拉到 like/report 事件、评论事件从未到达（悬空 target）——
+// 计数聚合不崩（事件行自足），举报列表不出现该行（JOIN 无评论事件，§5.3 风险 4 口径）。
+func TestSyncEventsDanglingLikeReportTargetDoesNotCrash(t *testing.T) {
+	src, url, tr, pub := newSourceNode(t)
+	ghost := eventIDHex(9) // 任何节点都没有该评论事件
+	seedLikeEvent(t, src, eventIDHex(8), commentActor, 1000, ghost, "like")
+	seedReportEvent(t, src, eventIDHex(10), commentActor, 1000, ghost, "spam")
+
+	dst := openTemp(t)
+	cfg := Config{TransportFor: tr, IssuerPubKeys: map[string]string{srcIssuer: pub}}
+	ev, err := cfg.SyncEvents(context.Background(), dst, Peer{URL: url})
+	if err != nil || ev.Events != 2 {
+		t.Fatalf("反熵一轮应搬来 2 条事件 ev=%+v err=%v", ev, err)
+	}
+
+	got, err := dst.LikeCountsByTargets([]string{ghost})
+	if err != nil {
+		t.Fatalf("悬空 target 计数聚合不应报错: %v", err)
+	}
+	if got[ghost] != 1 {
+		t.Fatalf("悬空 target 计数不符: %+v", got)
+	}
+	rows, err := dst.ListReportedComments()
+	if err != nil {
+		t.Fatalf("悬空 target 举报列表不应报错: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("评论未同步的举报行不应出现在列表: %+v", rows)
+	}
+}
