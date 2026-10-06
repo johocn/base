@@ -98,8 +98,31 @@
             <text class="nav-sub">{{ nextLesson.no > 0 ? `第 ${nextLesson.no} 讲` : '' }} · {{ nextLesson.title }}</text>
           </view>
         </view>
+
+        <!-- 页脚：条目点赞 + 举报入口（#79 §7.3-7.4） -->
+        <view class="like-bar">
+          <text class="like-btn" :class="{ liked: liked }" @click="toggle">♥ {{ likeCount > 0 ? likeCount : '' }}</text>
+          <text class="report-btn" @click="openItemReport">举报此条目</text>
+        </view>
       </block>
     </block>
+    <!-- 条目举报弹层：四原因单选，确认后跳治理页（#79 §7.4） -->
+    <view v-if="showReport" class="modal-mask" @click.self="showReport = false">
+      <view class="modal">
+        <text class="modal-title">举报此条目</text>
+        <view
+          v-for="(label, key) in REPORT_LABEL"
+          :key="key"
+          class="report-opt"
+          :class="{ 'report-opt-on': reportReason === key }"
+          @click="pickReason(key)"
+        >{{ label }}</view>
+        <view class="modal-actions">
+          <view class="modal-btn" @click="showReport = false">取消</view>
+          <view class="modal-btn primary" @click="submitItemReport">提交</view>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -115,6 +138,8 @@ import { renderMarkdown } from '../../core/markdown';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
 import { containerFormFromLedger } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
+import type { LikeOptions, ReportReason } from '@base/core-ts/like';
+import { useItemLike } from '../../composables/useItemLike';
 import { useAuthorBar } from '../../core/useAuthorBar';
 import { bootstrap } from '../../platform';
 
@@ -125,6 +150,14 @@ interface CarrierVM {
 }
 
 const lessonId = ref('');
+// 条目点赞 + 举报入口（#79 §7.3-7.4）：高亮/计数读本地台账，点击在线发 like.v1，离线 toast
+const likeOpts = ref<LikeOptions | null>(null);
+const { likeCount, liked, loadLocal, toggle } = useItemLike(likeOpts, lessonId);
+const showReport = ref(false);
+const reportReason = ref<ReportReason>('spam');
+const REPORT_LABEL: Record<ReportReason, string> = {
+  spam: '垃圾广告', abuse: '辱骂攻击', illegal: '违法违规', other: '其他',
+};
 const courseId = ref('');
 const lessonLabel = ref('');
 const instructor = ref('');
@@ -165,6 +198,7 @@ onLoad(async (query) => {
   lessonId.value = raw;
   try {
     const { opts, repo } = await bootstrap();
+    likeOpts.value = { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl };
     directory.value = await loadDirectory(repo);
     // from=ledger：从「我创建的」区进入 → 只用台账行集渲染，不读包表（册子 #51 §3.3）。
     if (q.from === 'ledger') {
@@ -188,6 +222,7 @@ onLoad(async (query) => {
       carriers.value = form.children.map((c) => ({ itemId: c.itemId, type: c.kind, title: c.itemId }));
       attachments.value = form.attachments;
       canEdit.value = sub.state === 'sent';
+      await loadLocal();
       loaded.value = true;
       return;
     }
@@ -278,6 +313,7 @@ onLoad(async (query) => {
     governor.value = await canGovern({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
     // 编辑入口的可见性：包内 items 不含 author_id，用本地台账代理（state='sent' 才算「我建的」）
     canEdit.value = (await repo.getSubmission(lid))?.state === 'sent';
+    await loadLocal();
     loaded.value = true;
   } catch (e) {
     error.value = (e as Error).message;
@@ -360,6 +396,21 @@ function openEdit() {
   uni.navigateTo({
     url: `/pages/lesson/edit?courseId=${encodeURIComponent(courseId.value)}&lessonId=${encodeURIComponent(lessonId.value)}`,
   });
+}
+
+/** 条目举报（#79 §7.4）：不进 report.v1，弹四原因后跳治理页；remove 提案预填由治理页接线（Task 15）。 */
+function openItemReport() {
+  reportReason.value = 'spam';
+  showReport.value = true;
+}
+
+function pickReason(key: string) {
+  reportReason.value = key as ReportReason;
+}
+
+function submitItemReport() {
+  showReport.value = false;
+  uni.navigateTo({ url: '/pages/governance/governance' });
 }
 
 function openCarrier(c: CarrierVM) {
@@ -664,4 +715,18 @@ async function openAttachment(a: AttachmentVM) {
 .dark .nav-arrow { border-color: #4a5568; }
 .dark .nav-label { color: #718096; }
 .dark .nav-sub { color: #e2e8f0; }
+
+/* 页脚点赞条 + 条目举报弹层（#79 §7.3-7.4，样式沿用评论页 T13 手法） */
+.like-bar { display: flex; align-items: center; margin: 16px 16px 8px; }
+.like-btn { margin-right: 16px; color: #888888; font-size: 14px; }
+.like-btn.liked { color: #e53e3e; }
+.report-btn { color: #888888; font-size: 14px; }
+.modal-mask { position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, 0.5); display: flex; align-items: flex-end; }
+.modal { width: 100%; max-height: 80vh; overflow-y: auto; padding: 16px; background: #ffffff; border-radius: 12px 12px 0 0; }
+.modal-title { display: block; margin-bottom: 12px; font-size: 16px; font-weight: 600; }
+.report-opt { margin-bottom: 8px; padding: 10px 12px; border: 1px solid #eeeeee; border-radius: 6px; font-size: 14px; color: #555555; }
+.report-opt-on { border-color: #2b6cb0; background: #ebf8ff; color: #2b6cb0; }
+.modal-actions { display: flex; margin-top: 12px; }
+.modal-btn { flex: 1; padding: 10px; text-align: center; background: #f0f0f0; border-radius: 6px; font-size: 14px; color: #555555; }
+.modal-btn.primary { margin-left: 12px; background: #2b6cb0; color: #ffffff; }
 </style>

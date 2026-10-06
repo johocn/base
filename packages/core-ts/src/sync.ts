@@ -14,6 +14,8 @@ export interface CatalogItem {
   title: string;
   content_hash: string;
   source_rev: string;
+  /** 条目点赞计数（#79 §5.2/§7.3）：老节点响应无此键，缺省 0 */
+  like_count?: number;
 }
 
 export interface Catalog {
@@ -253,6 +255,8 @@ async function syncContentOnce(o: SyncOptions): Promise<SyncResult> {
   // 但 manifest 可能比 catalog 多 media_meta/segments 条目——按 catalog 的 item_id 集合过滤，
   // 保持 ItemRow 语义（article/quiz/course/lesson）与原逻辑一致。
   const catIds = new Set(cat.items.map((it) => it.item_id));
+  // like_count 随 catalog 内联值写回 items（#79 §7.3）：manifest 不带计数，只认 catalog 行，缺省 0
+  const likeByItem = new Map(cat.items.map((it) => [it.item_id, Number(it.like_count ?? 0)] as [string, number]));
   const items: ItemRow[] = man.entries
     .filter((e) => catIds.has(e.item_id))
     .map((e) => ({
@@ -266,6 +270,7 @@ async function syncContentOnce(o: SyncOptions): Promise<SyncResult> {
       updatedAt: now,
       authorId: e.author_id ?? '',
       authorSig: e.author_sig ?? '',
+      likeCount: likeByItem.get(e.item_id) ?? 0,
     }));
   const tombstones: TombstoneRow[] = man.tombstone.map((t) => ({ itemId: t.item_id, revokedRev: t.revoked_rev }));
 

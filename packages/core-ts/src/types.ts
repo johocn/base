@@ -11,6 +11,8 @@ export interface ItemRow {
   /** 归属缓存（治理册 §2.1）；空串表示该条目未验签归属 */
   authorId: string;
   authorSig: string;
+  /** 条目点赞计数（#79 §7.3）：随 catalog 内联值落库，缺省 0；页面乐观 ±1 走 repo.adjustItemLikeCount */
+  likeCount?: number;
 }
 
 export interface ArticleRow {

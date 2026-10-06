@@ -353,12 +353,12 @@ export class SqlRepo implements LocalRepo {
     }
     for (const it of p.items) {
       stmts.push({
-        sql: `INSERT INTO items(item_id,source,type,title,rev,content_hash,state,updated_at,author_id,author_sig)
-              VALUES(?,?,?,?,?,?,?,?,?,?)
+        sql: `INSERT INTO items(item_id,source,type,title,rev,content_hash,state,updated_at,author_id,author_sig,like_count)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(item_id) DO UPDATE SET source=excluded.source,type=excluded.type,title=excluded.title,
                 rev=excluded.rev,content_hash=excluded.content_hash,state=excluded.state,updated_at=excluded.updated_at,
-                author_id=excluded.author_id,author_sig=excluded.author_sig`,
-        params: [it.itemId, it.source, it.type, it.title, it.rev, it.contentHash, it.state, it.updatedAt, it.authorId, it.authorSig],
+                author_id=excluded.author_id,author_sig=excluded.author_sig,like_count=excluded.like_count`,
+        params: [it.itemId, it.source, it.type, it.title, it.rev, it.contentHash, it.state, it.updatedAt, it.authorId, it.authorSig, it.likeCount ?? 0],
       });
     }
     for (const a of p.articles) {

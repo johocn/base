@@ -72,7 +72,11 @@ export class MemoryRepo implements LocalRepo {
         if (b.itemId === t.itemId) this.blobs.delete(id);
       }
     }
-    for (const it of p.items) this.items.set(it.itemId, it);
+    // 与 SqlRepo 的 items upsert 同义：like_count 随 pack 覆盖为 catalog 内联值（#79 §7.3）
+    for (const it of p.items) {
+      this.items.set(it.itemId, it);
+      this.likeCounts.set(it.itemId, it.likeCount ?? 0);
+    }
     for (const a of p.articles) this.articles.set(a.itemId, a);
     for (const q of p.quizzes) this.quizzes.set(q.itemId, q);
     const segItems = new Set(p.segments.map((s) => s.itemId));

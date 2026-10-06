@@ -51,7 +51,29 @@
           <text class="related-meta">{{ ra.sharedTags }} 个共同标签</text>
         </view>
       </block>
+      <!-- 页脚：条目点赞 + 举报入口（#79 §7.3-7.4） -->
+      <view class="like-bar">
+        <text class="like-btn" :class="{ liked: liked }" @click="toggle">♥ {{ likeCount > 0 ? likeCount : '' }}</text>
+        <text class="report-btn" @click="openItemReport">举报此条目</text>
+      </view>
     </block>
+    <!-- 条目举报弹层：四原因单选，确认后跳治理页（#79 §7.4） -->
+    <view v-if="showReport" class="modal-mask" @click.self="showReport = false">
+      <view class="modal">
+        <text class="modal-title">举报此条目</text>
+        <view
+          v-for="(label, key) in REPORT_LABEL"
+          :key="key"
+          class="report-opt"
+          :class="{ 'report-opt-on': reportReason === key }"
+          @click="pickReason(key)"
+        >{{ label }}</view>
+        <view class="modal-actions">
+          <view class="modal-btn" @click="showReport = false">取消</view>
+          <view class="modal-btn primary" @click="submitItemReport">提交</view>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -72,6 +94,8 @@ import {
 import { childrenOf, lessonOfCarrier } from '../../core/course-tree';
 import { attrsOf } from '../../core/container-view';
 import { setPendingTarget } from '../../core/comment';
+import type { LikeOptions, ReportReason } from '@base/core-ts/like';
+import { useItemLike } from '../../composables/useItemLike';
 import { articleDone, articlePosition } from '../../core/progress';
 import { reportProgress } from '../../core/progress-store';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
@@ -105,6 +129,14 @@ const untagged = ref<Set<string>>(new Set());
 const governor = ref(false);
 const pendingTag = computed(() => governor.value && untagged.value.has(itemId.value));
 const itemId = ref('');
+// 条目点赞 + 举报入口（#79 §7.3-7.4）：高亮/计数读本地台账，点击在线发 like.v1，离线 toast
+const likeOpts = ref<LikeOptions | null>(null);
+const { likeCount, liked, loadLocal, toggle } = useItemLike(likeOpts, itemId);
+const showReport = ref(false);
+const reportReason = ref<ReportReason>('spam');
+const REPORT_LABEL: Record<ReportReason, string> = {
+  spam: '垃圾广告', abuse: '辱骂攻击', illegal: '违法违规', other: '其他',
+};
 // 作者栏（三级降级链 + roster + profile API）抽到共享 composable
 const { authorId, authorDisplay, avatarHue, fetchAuthorBar, setAuthorId } = useAuthorBar();
 // 图章与标题色（册子 #53 §2.5）：文章不产属性行，无载体行时自然为空（设计册登记的事实）
@@ -126,6 +158,7 @@ onLoad(async (query) => {
   itemId.value = raw;
   try {
     const { opts, repo } = await bootstrap();
+    likeOpts.value = { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl };
     directory.value = await loadDirectory(repo);
     // from=ledger：从「我创建的」区进入 → 正文取台账行，不读包表（册子 #51 §3.3）。
     if (q.from === 'ledger') {
@@ -149,6 +182,7 @@ onLoad(async (query) => {
       theme.value = normalizeTheme(await repo.getConfig('reader_theme'));
       fontScale.value = normalizeFontScale(await repo.getConfig('reader_font_scale'));
       fav.value = await repo.isFavorite(sub.itemId);
+      await loadLocal();
       await restoreProgress(sub.itemId);
       await nextTick();
       measure();
@@ -177,6 +211,7 @@ onLoad(async (query) => {
     theme.value = normalizeTheme(await repo.getConfig('reader_theme'));
     fontScale.value = normalizeFontScale(await repo.getConfig('reader_font_scale'));
     fav.value = await repo.isFavorite(row.itemId);
+    await loadLocal();
     // 文章页的答题入口：文章所属课时内的姊妹 quiz；文章无课程归属时无此入口（册子 §4）
     const lessonId = lessonOfCarrier(row.itemId);
     if (lessonId) {
@@ -304,6 +339,21 @@ onUnload(() => {
 async function toggleFav() {
   const { repo } = await bootstrap();
   fav.value = await repo.toggleFavorite(itemId.value, new Date().toISOString());
+}
+
+/** 条目举报（#79 §7.4）：不进 report.v1，弹四原因后跳治理页；remove 提案预填由治理页接线（Task 15）。 */
+function openItemReport() {
+  reportReason.value = 'spam';
+  showReport.value = true;
+}
+
+function pickReason(key: string) {
+  reportReason.value = key as ReportReason;
+}
+
+function submitItemReport() {
+  showReport.value = false;
+  uni.navigateTo({ url: '/pages/governance/governance' });
 }
 
 async function cycleFont() {
@@ -441,6 +491,20 @@ function decodedId(raw: string): string {
 .term-badge { display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 6px; background: #edf2f7; color: #718096; font-size: 11px; }
 .chips { display: flex; flex-wrap: wrap; margin-top: 4px; }
 .badge { display: inline-block; font-size: 12px; color: #666666; border: 1px solid #dddddd; border-radius: 10px; padding: 0 8px; margin-right: 6px; }
+
+/* 页脚点赞条 + 条目举报弹层（#79 §7.3-7.4，样式沿用评论页 T13 手法） */
+.like-bar { display: flex; align-items: center; margin: 16px 0 8px; }
+.like-btn { margin-right: 16px; color: #888888; font-size: 14px; }
+.like-btn.liked { color: #e53e3e; }
+.report-btn { color: #888888; font-size: 14px; }
+.modal-mask { position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, 0.5); display: flex; align-items: flex-end; }
+.modal { width: 100%; max-height: 80vh; overflow-y: auto; padding: 16px; background: #ffffff; border-radius: 12px 12px 0 0; }
+.modal-title { display: block; margin-bottom: 12px; font-size: 16px; font-weight: 600; }
+.report-opt { margin-bottom: 8px; padding: 10px 12px; border: 1px solid #eeeeee; border-radius: 6px; font-size: 14px; color: #555555; }
+.report-opt-on { border-color: #2b6cb0; background: #ebf8ff; color: #2b6cb0; }
+.modal-actions { display: flex; margin-top: 12px; }
+.modal-btn { flex: 1; padding: 10px; text-align: center; background: #f0f0f0; border-radius: 6px; font-size: 14px; color: #555555; }
+.modal-btn.primary { margin-left: 12px; background: #2b6cb0; color: #ffffff; }
 
 /* 护眼：米黄纸底 + 暖褐字，介于浅色与深色之间 */
 .wrap.sepia { background: #f4ecd8; color: #4a4034; }
