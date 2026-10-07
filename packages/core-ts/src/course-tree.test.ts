@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  categoryCandidates,
   childrenOf,
   coursesOfCategory,
   groupCoursesByCategory,
@@ -403,5 +404,27 @@ describe('groupCoursesByCategory：分组读取（双来源 + attr.category 优�
     const got = groupCoursesByCategory([article, math], segMap([]));
     expect(got.groups).toEqual([]);
     expect(got.unclassified).toEqual([]);
+  });
+});
+
+describe('categoryCandidates：内置默认分类（#80 §3.5）', () => {
+  it('首项恒为「从零开始」，本机词条其后追加', () => {
+    const items = [item('category/math', 'category'), item('category/zzz', 'category')];
+    // item() 的 title=itemId，手动改题：
+    items[0]!.title = '数学';
+    const cands = categoryCandidates(items);
+    expect(cands[0]).toEqual({ slug: '从零开始', label: '从零开始（默认）' });
+    expect(cands.slice(1).map((c) => c.slug)).toEqual(['math', 'zzz']);
+  });
+
+  it('本机已有同名词条时去重（内置优先，不重复出现）', () => {
+    const items = [item('category/从零开始', 'category'), item('category/math', 'category')];
+    const slugs = categoryCandidates(items).map((c) => c.slug);
+    expect(slugs.filter((s) => s === '从零开始')).toHaveLength(1);
+    expect(slugs[0]).toBe('从零开始');
+  });
+
+  it('空本机词条：只有内置默认一项（空态不空）', () => {
+    expect(categoryCandidates([])).toEqual([{ slug: '从零开始', label: '从零开始（默认）' }]);
   });
 });

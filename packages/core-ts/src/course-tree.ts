@@ -135,3 +135,21 @@ export function groupCoursesByCategory(
     .map((slug) => ({ slug, title: titleBySlug.get(slug) || slug, courses: bySlug.get(slug) as ItemRow[] }));
   return { groups, unclassified };
 }
+
+/** 内置默认分类（#80 §3.5）：选中即写 `attr.category`，词条由节点 directory 投影自动生成。 */
+export const DEFAULT_CATEGORY = '从零开始';
+
+/**
+ * 分类 picker 候选（#80 §3.5）：内置默认首项 + 本机 `category/<slug>` 词条，按 slug 去重（内置优先）。
+ * 空态（本机无任何分类词条）下候选不空。
+ */
+export function categoryCandidates(items: ItemRow[]): Array<{ slug: string; label: string }> {
+  const local = splitCategories(items).map((c) => {
+    const slug = c.itemId.replace(/^category\//, '');
+    return { slug, label: c.title || slug };
+  });
+  return [
+    { slug: DEFAULT_CATEGORY, label: `${DEFAULT_CATEGORY}（默认）` },
+    ...local.filter((c) => c.slug !== DEFAULT_CATEGORY),
+  ];
+}

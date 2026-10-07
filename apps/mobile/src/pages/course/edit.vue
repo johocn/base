@@ -154,7 +154,7 @@ import { BADGE_WORDS, BADGE_WORDS_AUTHOR, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, 
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
 import { myIdentityId, roster } from '../../core/contribution';
 import { decodeSafe, loadContainerForm, saveContainer, startNewCourse, uploadAndStoreBlob, type ChildRow, type ContainerForm } from '../../core/course-edit';
-import { splitCategories } from '../../core/course-tree';
+import { categoryCandidates as categoryCandidatesOf } from '../../core/course-tree';
 import { normalizeTermKey } from '../../core/directory';
 import { containerFormFromLedger, statusLabelOf } from '../../core/my-created';
 import { recordEditFailure, type EditStage } from '../../core/editlog';
@@ -231,10 +231,7 @@ onLoad(async (query) => {
     coverPreview.value = coverFile ? (coverFile.startsWith('file://') ? coverFile : `file://${coverFile}`) : '';
     const items = await ctx.repo.listItems();
     lessonTitles.value = Object.fromEntries(items.map((i) => [i.itemId, i.title || i.itemId]));
-    categoryAll.value = splitCategories(items).map((c) => {
-      const slug = c.itemId.replace(/^category\//, '');
-      return { slug, label: c.title || slug };
-    });
+    categoryAll.value = categoryCandidatesOf(items);
     // 治理者身份按 #23 名册实时派生；联网失败一律按作者档（4 种），不阻塞编辑
     try {
       const o = { adapters: ctx.opts.adapters, repo: ctx.repo, nodeBaseUrl: ctx.opts.nodeBaseUrl };
