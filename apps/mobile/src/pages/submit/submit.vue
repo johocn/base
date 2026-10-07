@@ -169,7 +169,7 @@ import {
   type BlobSearchRow,
   type ItemSearchRow,
 } from '../../core/editor-dialogs';
-import { uploadAndStoreBlob } from '../../core/course-edit';
+import { decodeSafe, uploadAndStoreBlob } from '../../core/course-edit';
 import { renderMarkdown } from '../../core/markdown';
 import { resolveCaret } from '../../core/editor-caret';
 import {
@@ -181,7 +181,7 @@ import {
   type ToolbarAction,
 } from '../../core/markdown-toolbar';
 import { buildQuestionJSON, draftsFromQuestionJSON, emptyDraft, type QuestionDraft } from '../../core/quizdoc';
-import { enqueueOrSend, newItemID, type SubmitDraft } from '../../core/submit';
+import { enqueueOrSend, loadItemDraft, newItemID, type SubmitDraft } from '../../core/submit';
 import { bytesToBase64, pickLocalFile, type PickedFile } from '../../platform/uni';
 import { bootstrap, type AppContext } from '../../platform';
 import { syncOnce } from '../../core/sync';
@@ -484,16 +484,28 @@ onLoad(async (query) => {
     const ctx = await bootstrap();
     editCtx = ctx;
     if (raw === '') return;
-    const row = await ctx.repo.getSubmission(raw);
-    if (!row) {
-      error.value = '本地台账没有这条记录';
+    const wanted = decodeSafe(raw);
+    // 两级回退（册子 §4.2）：本机台账（可能有 pending/failed 未送达修改）优先 → items 表已同步版本回退
+    const row = await ctx.repo.getSubmission(wanted);
+    if (row) {
+      itemId.value = row.itemId;
+      type.value = row.type === 'quiz' ? 'quiz' : 'article';
+      title.value = row.title;
+      bodyMd.value = row.bodyMd;
+      const loaded = row.type === 'quiz' ? draftsFromQuestionJSON(row.questionJson) : [];
+      drafts.value = loaded.length > 0 ? loaded : [emptyDraft()];
       return;
     }
-    itemId.value = row.itemId;
-    type.value = row.type === 'quiz' ? 'quiz' : 'article';
-    title.value = row.title;
-    bodyMd.value = row.bodyMd;
-    const loaded = row.type === 'quiz' ? draftsFromQuestionJSON(row.questionJson) : [];
+    const item = await loadItemDraft(ctx.repo, wanted);
+    if (!item) {
+      error.value = '本地没有这条记录';
+      return;
+    }
+    itemId.value = item.itemId;
+    type.value = item.type;
+    title.value = item.title;
+    bodyMd.value = item.bodyMd;
+    const loaded = item.type === 'quiz' ? draftsFromQuestionJSON(item.questionJson) : [];
     drafts.value = loaded.length > 0 ? loaded : [emptyDraft()];
   } catch (e) {
     error.value = (e as Error).message;
