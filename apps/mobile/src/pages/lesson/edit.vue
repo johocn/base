@@ -758,6 +758,10 @@ async function submit() {
       setTimeout(() => uni.navigateBack(), 600);
       return;
     }
+    if (out.ledgerState === 'failed') {
+      // 失败必须弹（#80 §3.4）：行内小字在长页底部不可见，真机曾静默
+      uni.showToast({ title: out.message, icon: 'none' });
+    }
     notice.value = out.message;
     await logSubmit(out.message);
   } catch (e) {

@@ -472,6 +472,10 @@ async function submit() {
       return;
     }
     // pending 会自动补发；failed 需回「我的条目」删除后重投
+    if (out.ledgerState === 'failed') {
+      // 失败必须弹（#80 §3.4）：行内小字在长页底部不可见，真机曾静默
+      uni.showToast({ title: out.message, icon: 'none' });
+    }
     notice.value = out.message;
     await logSubmit(out.message);
   } catch (e) {
