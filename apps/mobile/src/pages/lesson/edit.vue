@@ -246,7 +246,7 @@ import { computed, nextTick, ref } from 'vue';
 import { BADGE_WORDS, BADGE_WORDS_AUTHOR, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO, TITLE_COLORS } from '../../core/attrs';
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
 import { myIdentityId, roster } from '../../core/contribution';
-import { loadContainerForm, saveContainer, startNewLesson, uploadAndStoreBlob, type ContainerForm } from '../../core/course-edit';
+import { decodeSafe, loadContainerForm, saveContainer, startNewLesson, uploadAndStoreBlob, type ContainerForm } from '../../core/course-edit';
 import {
   composeBlobImg,
   composeExternalLink,
@@ -542,9 +542,9 @@ let ctx: AppContext | null = null;
 
 onLoad(async (query) => {
   const q = (query as Record<string, string> | undefined) ?? {};
-  // 先解码（册子 #61 §2.2）：跳转方传 `encodeURIComponent(courseId)`，不解码会拼出 `course%2F…/lesson/…` 的坏 id
-  courseId.value = decodedId(String(q.courseId ?? ''));
-  const lessonId = String(q.lessonId ?? '');
+  // 先解码（册子 #61 §2.2 + #80 §3.2）：跳转方传 `encodeURIComponent(id)`，不解码会拼出坏 id
+  courseId.value = decodeSafe(String(q.courseId ?? ''));
+  const lessonId = decodeSafe(String(q.lessonId ?? ''));
   try {
     ctx = await bootstrap();
     caps.value = ctx.capabilities;
@@ -575,15 +575,6 @@ onLoad(async (query) => {
     error.value = (e as Error).message;
   }
 });
-
-/** 解码路由参数；坏编码回落原样（与详情页 `resolveBy` 同口径）。 */
-function decodedId(raw: string): string {
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
 
 function difficultyLabel(d: string): string {
   if (d === DIFFICULTY_INTRO) return '入门';

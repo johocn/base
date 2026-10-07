@@ -153,7 +153,7 @@ import { computed, ref } from 'vue';
 import { BADGE_WORDS, BADGE_WORDS_AUTHOR, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO, TITLE_COLORS } from '../../core/attrs';
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
 import { myIdentityId, roster } from '../../core/contribution';
-import { loadContainerForm, saveContainer, startNewCourse, uploadAndStoreBlob, type ChildRow, type ContainerForm } from '../../core/course-edit';
+import { decodeSafe, loadContainerForm, saveContainer, startNewCourse, uploadAndStoreBlob, type ChildRow, type ContainerForm } from '../../core/course-edit';
 import { splitCategories } from '../../core/course-tree';
 import { normalizeTermKey } from '../../core/directory';
 import { containerFormFromLedger, statusLabelOf } from '../../core/my-created';
@@ -206,8 +206,8 @@ let ctx: AppContext | null = null;
 
 onLoad(async (query) => {
   const q = (query as Record<string, string> | undefined) ?? {};
-  const courseId = String(q.courseId ?? '');
-  const rebuildFrom = String(q.rebuildFrom ?? '');
+  const courseId = decodeSafe(String(q.courseId ?? ''));
+  const rebuildFrom = decodeSafe(String(q.rebuildFrom ?? ''));
   try {
     ctx = await bootstrap();
     caps.value = ctx.capabilities;
