@@ -3,6 +3,7 @@
     <text v-if="error" class="error">{{ error }}</text>
     <block v-else-if="current">
       <text class="progress">{{ index + 1 }} / {{ questions.length }}</text>
+      <text v-if="canEdit" class="edit-link" @click="openEdit">编辑此题库</text>
       <text class="q">{{ current.q }}</text>
       <view
         v-for="(opt, i) in current.options"
@@ -32,6 +33,7 @@ import { gradeAnswer, parseQuestionDoc, shuffleAll, type ShuffledQuestion } from
 import { quizDone, quizPosition } from '../../core/progress';
 import { reportProgress } from '../../core/progress-store';
 import { bootstrap } from '../../platform';
+import { peekLocalIdentity } from '../../core/identity';
 
 const questions = ref<ShuffledQuestion[]>([]);
 const index = ref(0);
@@ -42,6 +44,7 @@ const error = ref('');
 const itemId = ref('');
 /** 续位时读到的本地已有 position（历史最好值）：上报不回退，避免抹掉已完成态 */
 const restoredPosition = ref(0);
+const canEdit = ref(false);
 
 const current = computed<ShuffledQuestion | null>(() => questions.value[index.value] ?? null);
 
@@ -49,7 +52,7 @@ onLoad(async (query) => {
   const q = (query as Record<string, string> | undefined) ?? {};
   const raw = String(q.itemId ?? '');
   try {
-    const { repo } = await bootstrap();
+    const { opts, repo } = await bootstrap();
     // from=ledger：从「我创建的」区进入 → 题组取台账行，不读包表（册子 #51 §3.3）。
     if (q.from === 'ledger') {
       const sub = await repo.getSubmission(raw);
@@ -65,6 +68,7 @@ onLoad(async (query) => {
       itemId.value = sub.itemId;
       questions.value = shuffleAll(parsed, sub.itemId);
       await restoreProgress();
+      canEdit.value = true; // 台账行即本人投稿
       return;
     }
     const alt = decodedId(raw);
@@ -74,6 +78,13 @@ onLoad(async (query) => {
       return;
     }
     itemId.value = row.itemId;
+    const it = await repo.getItem(row.itemId);
+    try {
+      const ident = await peekLocalIdentity(opts.adapters.storage);
+      canEdit.value = ident !== null && ident.id === (it?.authorId ?? '');
+    } catch {
+      canEdit.value = false; // fail-closed（册子 §8.1）
+    }
     const parsed = parseQuestionDoc(row.questionJson);
     if (parsed === null) {
       error.value = '题目格式不支持，请升级节点内容';
@@ -166,6 +177,10 @@ function restart() {
   correct.value = 0;
 }
 
+function openEdit() {
+  uni.navigateTo({ url: `/pages/submit/submit?itemId=${encodeURIComponent(itemId.value)}` });
+}
+
 /** 页面间传参在个别机型上会保留百分号编码，按原样查不到就按解码后再查 */
 function decodedId(raw: string): string {
   try {
@@ -188,4 +203,5 @@ function decodedId(raw: string): string {
 .score { display: block; font-size: 20px; font-weight: 600; margin-bottom: 20px; }
 .next { margin-top: 8px; }
 .error { color: #c53030; font-size: 13px; }
+.edit-link { display: block; color: #2b6cb0; font-size: 14px; margin-bottom: 8px; }
 </style>
