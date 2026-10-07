@@ -1,5 +1,6 @@
 import { hexToBytes } from '@base/protocol-ts';
 
+import { purgeIllegalContainers } from '../core/course-edit';
 import { ENTROPY_FILL_BYTES, installRandomFallback } from '../core/entropy';
 import { SCHEMA_SQL, SqlRepo, ensureBlobColumns, ensureGroupColumns, ensureItemsColumns, ensureProgressColumns, ensureSubmissionColumns, type LocalRepo } from '../core/repo';
 import { UNKNOWN_FLAGS, type CapabilityFlags, type SelfCheckReport } from '../core/selfcheck';
@@ -91,7 +92,14 @@ async function appBootstrap(): Promise<AppContext> {
 /** 建表 + 组装适配器；重复调用复用同一实例。 */
 export async function bootstrap(): Promise<AppContext> {
   if (cached) return cached;
-  return plusRuntime() !== undefined ? appBootstrap() : h5Bootstrap();
+  const ctx = plusRuntime() !== undefined ? await appBootstrap() : await h5Bootstrap();
+  // 一次性清理编码态孤儿容器行（#80 §3.3）：先于任何列表页读到脏行；失败不阻塞启动，下次启动重试
+  try {
+    await purgeIllegalContainers(ctx.repo);
+  } catch {
+    // 清理失败不阻塞启动
+  }
+  return ctx;
 }
 
 /** 节点地址保存后刷新缓存里的 baseUrl */
