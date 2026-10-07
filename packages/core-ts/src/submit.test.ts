@@ -4,10 +4,10 @@ import { deriveIdentityId, sha256Hex, utf8, verifyAuthorSig, type Json } from '@
 
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { IDENTITY_REGISTERED_KEY } from './comment';
-import { buildArticlePayload, buildContainerPayload, buildQuizPayload, buildTagPayload, contentHashOf, enqueueOrSend, flushSubmissions, newItemID, retrySubmission, submitItem, type SubmitDraft, type SubmitOptions } from './submit';
+import { buildArticlePayload, buildContainerPayload, buildQuizPayload, buildTagPayload, contentHashOf, enqueueOrSend, flushSubmissions, loadItemDraft, newItemID, retrySubmission, submitItem, type SubmitDraft, type SubmitOptions } from './submit';
 import { buildQuestionJSON } from './quizdoc';
 import { decodeUtf8 } from './sync';
-import type { MySubmissionRow } from './types';
+import type { ArticleRow, ItemRow, MySubmissionRow, QuizRow } from './types';
 
 const BASE = 'https://node.test';
 const ID = 'a'.repeat(64);
@@ -495,5 +495,68 @@ describe('retrySubmission：失败行重投（册子 #61 §4.3）', () => {
     c.http.postRoutes.set(`${BASE}/v1/submit`, { status: 400, body: utf8('   ') });
     await c.repo.saveSubmission(containerRow({ state: 'failed', reason: '旧' }));
     expect((await retrySubmission(c.o, 'course/c1')).message).toBe('提交失败（HTTP 400）');
+  });
+});
+
+/** ===== loadItemDraft：items 表回填（册子 2026-10-07 §4.1）===== */
+
+function backfillItem(itemId: string, type: string): ItemRow {
+  return {
+    itemId,
+    source: type,
+    type,
+    title: `标题-${itemId}`,
+    rev: 'rev-1',
+    contentHash: 'h',
+    state: 'active',
+    updatedAt: '2026-01-01T00:00:00Z',
+    authorId: 'author-1',
+    authorSig: 'sig',
+  };
+}
+
+describe('loadItemDraft：items 表回填', () => {
+  it('article：items+articles 有行 → 返回 title/bodyMd，questionJson 恒空', async () => {
+    const repo = new MemoryRepo();
+    repo.items.set('article/a1', backfillItem('article/a1', 'article'));
+    const ar: ArticleRow = {
+      itemId: 'article/a1', title: '标题-article/a1', digest: '', publishedAt: '',
+      tagsJson: '', bodyMd: '# 正文', contentHash: 'h', rev: 'rev-1',
+    };
+    repo.articles.set('article/a1', ar);
+    expect(await loadItemDraft(repo, 'article/a1')).toEqual({
+      itemId: 'article/a1', type: 'article', title: '标题-article/a1', bodyMd: '# 正文', questionJson: '',
+    });
+  });
+
+  it('quiz：items+quizzes 有行 → 返回 title/questionJson，bodyMd 恒空', async () => {
+    const repo = new MemoryRepo();
+    repo.items.set('quiz/q1', backfillItem('quiz/q1', 'quiz'));
+    const qr: QuizRow = { itemId: 'quiz/q1', questionJson: '{"v":1}', contentHash: 'h' };
+    repo.quizzes.set('quiz/q1', qr);
+    expect(await loadItemDraft(repo, 'quiz/q1')).toEqual({
+      itemId: 'quiz/q1', type: 'quiz', title: '标题-quiz/q1', bodyMd: '', questionJson: '{"v":1}',
+    });
+  });
+
+  it('条目不存在 → null', async () => {
+    const repo = new MemoryRepo();
+    expect(await loadItemDraft(repo, 'article/nope')).toBeNull();
+  });
+
+  it('type=course / tag → null（册子 §3.5 排除）', async () => {
+    const repo = new MemoryRepo();
+    repo.items.set('course/c1', backfillItem('course/c1', 'course'));
+    repo.items.set('tag/t1', backfillItem('tag/t1', 'tag'));
+    expect(await loadItemDraft(repo, 'course/c1')).toBeNull();
+    expect(await loadItemDraft(repo, 'tag/t1')).toBeNull();
+  });
+
+  it('有 item 无 articles 行（异常态）→ bodyMd 空串不抛错', async () => {
+    const repo = new MemoryRepo();
+    repo.items.set('article/a2', backfillItem('article/a2', 'article'));
+    expect(await loadItemDraft(repo, 'article/a2')).toEqual({
+      itemId: 'article/a2', type: 'article', title: '标题-article/a2', bodyMd: '', questionJson: '',
+    });
   });
 });

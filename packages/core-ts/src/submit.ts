@@ -93,6 +93,31 @@ export function contentHashOf(draft: SubmitDraft): string {
   return sha256Hex(utf8(draft.type === 'quiz' ? draft.questionJson : draft.bodyMd));
 }
 
+/** items 表回填的编辑草稿（册子 2026-10-07 §4.1）：只读产物，不签名不写库。 */
+export interface ItemDraft {
+  itemId: string;
+  type: 'article' | 'quiz';
+  title: string;
+  /** quiz 恒 '' */
+  bodyMd: string;
+  /** article 恒 '' */
+  questionJson: string;
+}
+
+/**
+ * 从 items 表取已同步条目回填编辑：article 取 `articles.bodyMd`、quiz 取 `quizzes.questionJson`，
+ * title 统一取 `items.title`。条目不存在或类型不支持（course/lesson/tag，册子 §3.5）返回 null。
+ * 只读：不写库、不发请求、不签名。
+ */
+export async function loadItemDraft(repo: LocalRepo, itemId: string): Promise<ItemDraft | null> {
+  const item = await repo.getItem(itemId);
+  if (!item) return null;
+  if (item.type !== 'article' && item.type !== 'quiz') return null;
+  const bodyMd = item.type === 'article' ? ((await repo.getArticle(itemId))?.bodyMd ?? '') : '';
+  const questionJson = item.type === 'quiz' ? ((await repo.getQuiz(itemId))?.questionJson ?? '') : '';
+  return { itemId, type: item.type, title: item.title, bodyMd, questionJson };
+}
+
 /** `article` 请求体字节。键序固定：type → item_id → title → body_md → question_json → author_sig。 */
 export function buildArticlePayload(itemId: string, title: string, bodyMd: string, authorSig: string): Uint8Array {
   return utf8(
