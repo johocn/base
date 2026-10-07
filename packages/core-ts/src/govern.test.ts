@@ -77,6 +77,9 @@ describe('govern', () => {
       createdAt: 1790000000000, executedAt: 0, voidedAt: 0,
       // 服务端 DTO 补了 content_version / revoked_rev 后，水位字段**真实可见**（不再恒 0）。
       contentVersion: 4, revokedRev: 2,
+      // Spec v2 固定映射字段（govern.ts toProposalItem）
+      governanceLevel: 'base', category: '', circleId: '', voterCount: 1,
+      quorum: 0, approveWeight: 0, rejectWeight: 0, netWeight: 0,
     });
     // 空列表返回 []
     http.routes.set(`${BASE}/v1/proposal`, json({ proposals: [] }));
@@ -241,7 +244,7 @@ describe('govern', () => {
     http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'e', received_at: 1 }));
 
     const res = await vote(o, '7');
-    expect(res).toEqual({ proposalId: '7', voteCount: 3, threshold: 3, status: 'effective' });
+    expect(res).toEqual({ proposalId: '7', threshold: 3, status: 'effective' });
     expect(parseEvent(http).body).toEqual({ action: 'vote', proposal_id: 7, choice: 'yes' });
   });
 
