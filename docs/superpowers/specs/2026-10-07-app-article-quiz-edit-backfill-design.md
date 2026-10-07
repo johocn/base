@@ -126,3 +126,31 @@ itemId/type/title/bodyMd ← item；quiz 用 draftsFromQuestionJSON(questionJson
 1. **身份读取依赖 storage 适配器**：H5 与 App 的 storage/kek 链路已由 selfcheck/身份备份验证过，风险低；若 peekLocalIdentity 在某端异常，按钮不显示（fail-closed），不阻塞页面。
 2. **created=0 的台账行语义**：同步来的自有条目更新后进台账、`created` 恒 0——与「这是我本机新建的」语义不冲突（它确实不是本机新建），myitems 展示无歧义。
 3. **未来 tag 编辑需求**：本册明确排除；tag 有治理流程，届时另立册子。
+
+## 9. 发布实况（2026-10-07，0.20.7/32）
+
+**版本**：`apps/mobile/src/manifest.json` `0.20.6`/`31` → **`0.20.7`/`32`**（每版 patch+1 / code+1 口径）；发布前线上 `GET /v1/release` 旧值 = `0.20.6` / 27494402 字节 / sha256 `4a6bf744…5dab`。
+
+**实施**：T1–T5 全部完成（commits `c2cd972` / `12023fc` / `3d8281a` / `34be07a` / `3c1f8a5`），门禁全绿：`packages/core-ts` vitest 511/511（其中 `submit.test.ts` 新增 5 条 31/31）、`apps/mobile` vitest 37/37、vue-tsc 零错、`build:h5` 通过。
+
+**发布四步（既证口径，#79 册子 T18 手法）**：
+
+1. **云打包**：`cli pack` 三轮攻坚——首跑约 7 分钟 0 输出 0 连接，终止重试；重试 exit -1 仍 0 输出，`cli open` 恢复 IDE 运行态后重建通道；第三次遇交互提示「检测到本项目已有正在制作的安装包在云端队列中…是否继续提交？」卡住，改管道应答 `Write-Output "y" | cli pack …` 自动接管旧队列重新排队，13:05:47 打包成功。云端未自动落盘（同 #64/#79 现象），经临时下载地址取回落 `apps/mobile/dist/release/apk/base-0.20.7.apk`。产物四项核对：**27494708 字节** / sha256 `1a6b441a63c79bafa4ac012eacf73d7be2bca65c81e2c1b01c8e0547a70092fb` / 包内 versionCode **32** versionName **0.20.7** / 证书 SHA1 `19:95:21:ED:09:C0:9C:AD:58:B0:EB:34:D1:B3:CF:D1:BA:89:FF:19`（与 0.20.6 基线一致 ⇒ 可覆盖安装）。
+2. **上传**：scp → `/opt/appdl/base-0.20.7.apk`，远端 `sha256sum` 与 `stat -c %s` = 27494708，与本地**逐字一致**。
+3. **落地页**：`/opt/appdl/index.html` 整页重写改指 `base-0.20.7.apk`（meta 行 `版本 0.20.7（versionCode 31→32）· 2026-10-07 · 文章 / 题库编辑回填上线…` + 新增编辑回填使用说明一条 li；旧页备份 `index.html.bak-0.20.6`）；线上 `grep -c '0.20.6'` = **0**、`grep -c '0.20.7'` = 2。
+4. **签发**：`set -a; . /opt/base/base.secret.env; set +a; /opt/base/based release -version-name 0.20.7 -min-version-name 0.8.0 -apk-url http://118.190.217.242/dl/base-0.20.7.apk -apk-file /opt/appdl/base-0.20.7.apk -notes '文章题库编辑回填' -out /opt/base-cache/data/release.json` → 输出 `apk_size=27494708`、`apk_sha256=1a6b441a…`、`public_key 48c33db9…24f4`。
+
+**G8 线上核对（公网 :80，逐条实测输出）**：
+
+| 检查 | 结果 |
+| --- | --- |
+| `GET /v1/release` | `version_name=0.20.7`、`min_version_name=0.8.0`、`apk_size=27494708`、`apk_sha256=1a6b441a…92fb`（与本地逐字一致）、`apk_url=…/dl/base-0.20.7.apk`、`issuer=base-node-1`、`issued_at=2026-10-07T05:11:51Z`、`notes=文章题库编辑回填`、signature 已签发 |
+| `HEAD /dl/base-0.20.7.apk` | `200` / `Content-Type: application/octet-stream` / `Content-Length: 27494708`（与本地字节数一致） |
+| `verifyRelease` | **true**——一次性 vitest 用例 fetch 线上 `/v1/release` 后 `verifyRelease(doc, '48c33db9…24f4')` = true（#28/#59 手法，跑完即删、未入库） |
+
+**真机 9 条（§7）：待人工**（登记不阻塞，同 #59–#80 口径）。
+
+**执行期更正（2 条）**：
+
+1. **云打包接管队列新口径**：遇「已有正在制作的安装包在云端队列中」交互提示，CLI 会等 stdin 而非超时退出；`Write-Output "y" | cli pack …` 管道应答可自动接管旧队列重新排队。
+2. **身份读取签名单参**：计划稿写 `peekLocalIdentity(storage, kek)` 双参，取证证实实际签名单参（`identity.ts:133` 内部自调 `deviceKek`）——T3/T4 均按单参实施。
