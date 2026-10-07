@@ -32,6 +32,7 @@
         <text class="act" @click="cycleTheme">{{ themeLabel }}</text>
         <text class="act" @click="openComments">评论</text>
         <text class="act" @click="openGovernance">治理</text>
+        <text v-if="canEdit" class="act" @click="openEdit">编辑</text>
       </view>
       <block v-if="siblingQuizzes.length > 0">
         <text class="group">本课测验</text>
@@ -94,6 +95,7 @@ import {
 import { childrenOf, lessonOfCarrier } from '../../core/course-tree';
 import { attrsOf } from '../../core/container-view';
 import { setPendingTarget } from '../../core/comment';
+import { peekLocalIdentity } from '../../core/identity';
 import type { LikeOptions, ReportReason } from '@base/core-ts/like';
 import { setPendingProposalPrefill } from '@base/core-ts/govern';
 import { useItemLike } from '../../composables/useItemLike';
@@ -111,6 +113,7 @@ const article = ref<ArticleRow | null>(null);
 const bodyHtml = ref('');
 const coverPath = ref('');
 const error = ref('');
+const canEdit = ref(false);
 const fav = ref(false);
 const theme = ref<ReaderTheme>('light');
 const fontScale = ref<ReaderFontScale>(2);
@@ -185,6 +188,7 @@ onLoad(async (query) => {
       fav.value = await repo.isFavorite(sub.itemId);
       await loadLocal();
       await restoreProgress(sub.itemId);
+      canEdit.value = true; // 台账行即本人投稿（my_submissions 只存本人）
       await nextTick();
       measure();
       return;
@@ -200,6 +204,12 @@ onLoad(async (query) => {
     // 拿归属缓存 + 贡献名册 + profile API：composable 内部处理全降级链
     const item = await repo.getItem(row.itemId);
     setAuthorId(item?.authorId ?? '');
+    try {
+      const ident = await peekLocalIdentity(opts.adapters.storage);
+      canEdit.value = ident !== null && ident.id === (item?.authorId ?? '');
+    } catch {
+      canEdit.value = false; // 身份读取异常 fail-closed（册子 §8.1）
+    }
     if (item?.authorId && opts.nodeBaseUrl) void fetchAuthorBar({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl });
     bodyHtml.value = renderMarkdown(resolveBlobRefsInMd(row.bodyMd, opts.nodeBaseUrl || ''));
     const a = attrsOf(await repo.listSegments(raw));
@@ -388,6 +398,9 @@ function openQuiz(itemId: string) {
 }
 function openArticle(itemId: string) {
   uni.navigateTo({ url: `/pages/article/article?itemId=${encodeURIComponent(itemId)}` });
+}
+function openEdit() {
+  uni.navigateTo({ url: `/pages/submit/submit?itemId=${encodeURIComponent(itemId.value)}` });
 }
 
 /**
