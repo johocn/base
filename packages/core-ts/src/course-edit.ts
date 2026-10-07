@@ -84,7 +84,17 @@ export interface ContainerForm {
   children: ChildRow[];
 }
 
-/** 新建 / 编辑表单初值。`itemId` 由调用方给定并**固定**（新建时页面一打开就生成，见 Task 12）。 */
+/** 解码路由参数为真实 id（#80 §3.1）：幂等——无编码/坏编码原样返回。 */
+export function decodeSafe(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * 新建 / 编辑表单初值。`itemId` 由调用方给定并**固定**（新建时页面一打开就生成，见 Task 12）。 */
 export function emptyContainerForm(type: ContainerType, itemId: string): ContainerForm {
   return {
     itemId,
@@ -223,30 +233,24 @@ export function toLocalContainer(
   };
 }
 
-/**
- * 解码参数取真 id（册子 #61 §2）：先原样 `getItem`，未命中且解码形态不同时再试 `decodeURIComponent`。
- * 跳转方传的是 `encodeURIComponent(id)`，`course/<hex>` 到页面就成了 `course%2F<hex>`；
- * 命中即返回真实 id（调用方据此覆盖 `form.itemId`），都不命中返回 `null`（调用方回落原样入参）。
- */
-async function resolveId(repo: LocalRepo, raw: string): Promise<string | null> {
-  if (raw === '') return null;
-  if ((await repo.getItem(raw)) !== null) return raw;
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch {
-    return null; // 坏编码（如 course%ZZ）不是错误，回落原样即可
-  }
-  if (decoded === raw) return null;
-  return (await repo.getItem(decoded)) !== null ? decoded : null;
-}
-
 /** 从本地包回填表单：标题取 `items`，其余取 `segments` 的三区间。条目不存在也得空表单，不抛。 */
 export async function loadContainerForm(repo: LocalRepo, rawId: string, type: ContainerType): Promise<ContainerForm> {
-  // 解码下沉（册子 #61 §2）：以命中的真实 id 覆盖 form.itemId —— 修好回填（Bug1）与保存 4xx（Bug4）两个症状。
-  const itemId = (await resolveId(repo, rawId)) ?? rawId;
-  const item = await repo.getItem(itemId);
-  const segs = await repo.listSegments(itemId);
+  // 解码下沉（#61 §2 + #80 §3.1）：**解码优先**——已存在解码行直接命中；
+  // 编码态孤儿行（历史 Bug 落库的 `%2F` id）内容照搬、身份迁到解码态 id；
+  // 全新容器一律以解码态 id 起表单。三条路径都不抛。
+  const decoded = decodeSafe(rawId);
+  let itemId = decoded; // 表单身份
+  let sourceId = decoded; // 内容所在行
+  if ((await repo.getItem(decoded)) !== null) {
+    itemId = decoded;
+    sourceId = decoded;
+  } else if (rawId !== decoded && (await repo.getItem(rawId)) !== null) {
+    // 编码态孤儿行（#80 §3.1 迁移分支）：重进即见原内容，保存即落正确 id
+    itemId = decoded;
+    sourceId = rawId;
+  }
+  const item = await repo.getItem(sourceId);
+  const segs = await repo.listSegments(sourceId);
   const attrs = attrsOf(segs);
   const form = emptyContainerForm(type, itemId);
   form.title = item?.title ?? '';

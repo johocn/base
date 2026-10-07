@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { attrSeqsCanonical, segmentsContentHash } from '@base/protocol-ts';
 import {
   buildContainerSegments,
+  decodeSafe,
   emptyContainerForm,
   isLegalContainerId,
   loadContainerForm,
@@ -322,11 +323,11 @@ describe('loadContainerForm：参数解码（册子 #61 §2）', () => {
     expect(form.title).toBe('数学');
   });
 
-  it('条目不存在 ⇒ 仍得空表单、不抛（保留语义，AC 2）', async () => {
+  it('条目不存在 ⇒ 仍得空表单、不抛（#80 §3.1：新容器一律以解码态 id 起表单）', async () => {
     const form = await loadContainerForm(new MemoryRepo(), 'course%2Fnope', 'course');
     expect(form.title).toBe('');
     expect(form.type).toBe('course');
-    expect(form.itemId).toBe('course%2Fnope');
+    expect(form.itemId).toBe('course/nope');
   });
 
   it('坏编码（course%ZZ）不抛，回落原样得空表单', async () => {
@@ -381,5 +382,64 @@ describe('uploadAndStoreBlob：上传 + 落盘 + 登记（册子 #61 §5）', ()
     expect(await fs.exists(got.path)).toBe(true);
     expect(await repo.findBlobPathByItem('course/c1')).toBe(got.path);
     expect(await repo.hasBlob(blobId)).toBe(true);
+  });
+});
+
+describe('loadContainerForm 解码优先与孤儿迁移（#80 §3.1）', () => {
+  const T = '2026-10-07T00:00:00Z';
+
+  it('decodeSafe 幂等：有编码解码、无编码/坏编码原样', () => {
+    expect(decodeSafe('course%2Fc1%2Flesson%2Fl9')).toBe('course/c1/lesson/l9');
+    expect(decodeSafe('course/c1/lesson/l9')).toBe('course/c1/lesson/l9');
+    expect(decodeSafe('course%ZZ')).toBe('course%ZZ');
+  });
+
+  it('编码态新 id：空表单但 itemId 为解码态（app 端 400 根治）', async () => {
+    const repo = new MemoryRepo();
+    const form = await loadContainerForm(repo, 'course%2Fc1%2Flesson%2Fl9', 'lesson');
+    expect(form.itemId).toBe('course/c1/lesson/l9');
+    expect(form.title).toBe('');
+  });
+
+  it('编码态孤儿行：内容照搬、身份迁到解码态 id', async () => {
+    const repo = new MemoryRepo();
+    await repo.upsertLocalContainer(
+      { itemId: 'course%2Fc1%2Flesson%2Fl9', type: 'lesson', title: '卡住的课时', contentHash: '', updatedAt: T },
+      [
+        { seq: 0, kind: 'digest', text: '简介' },
+        { seq: -1, kind: 'attr.body_md', text: '# 讲稿' },
+      ],
+    );
+    const form = await loadContainerForm(repo, 'course%2Fc1%2Flesson%2Fl9', 'lesson');
+    expect(form.itemId).toBe('course/c1/lesson/l9');
+    expect(form.title).toBe('卡住的课时');
+    expect(form.digest).toBe('简介');
+    expect(form.bodyMd).toBe('# 讲稿');
+  });
+
+  it('解码态与编码态并存：解码行优先（#80 §6.1）', async () => {
+    const repo = new MemoryRepo();
+    await repo.upsertLocalContainer(
+      { itemId: 'course/c1/lesson/l9', type: 'lesson', title: '正确行', contentHash: '', updatedAt: T },
+      [],
+    );
+    await repo.upsertLocalContainer(
+      { itemId: 'course%2Fc1%2Flesson%2Fl9', type: 'lesson', title: '孤儿行', contentHash: '', updatedAt: T },
+      [],
+    );
+    const form = await loadContainerForm(repo, 'course%2Fc1%2Flesson%2Fl9', 'lesson');
+    expect(form.itemId).toBe('course/c1/lesson/l9');
+    expect(form.title).toBe('正确行');
+  });
+
+  it('解码态入参命中已存在条目：#61 行为不变', async () => {
+    const repo = new MemoryRepo();
+    await repo.upsertLocalContainer(
+      { itemId: 'course/c1/lesson/l1', type: 'lesson', title: '已有课时', contentHash: '', updatedAt: T },
+      [],
+    );
+    const form = await loadContainerForm(repo, 'course/c1/lesson/l1', 'lesson');
+    expect(form.itemId).toBe('course/c1/lesson/l1');
+    expect(form.title).toBe('已有课时');
   });
 });
