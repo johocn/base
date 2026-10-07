@@ -38,7 +38,7 @@ app 端「课程 → 添加课时 → 保存」必得 400 `item_id_invalid`，H5
 
 `loadContainerForm` 的 id 解析升级为**身份迁移语义**：
 
-1. `resolveId(repo, raw)` 命中（raw 或 decoded 存在于库）→ 沿用现行为，返回命中 id。
+1. **解码优先命中**：`getItem(decoded)` 命中 → 沿用现行为（#61 语义保持，实现上 `resolveId` 内联进 `loadContainerForm`，见计划 T1）。
 2. 均未命中（新容器）：取 `candidate = decodeSafe(raw)`（幂等解码，try/catch 失败原样）。
 3. **迁移分支**：若 `candidate !== raw` 且 `repo.getItem(raw)` 命中（即编码态孤儿行存在）→ 内容从 raw 行回填、**`form.itemId = candidate`**——重进即看到原内容，保存即落正确 id。
 4. 都没有 → 空表单 + `form.itemId = candidate`。
@@ -55,7 +55,7 @@ app 端「课程 → 添加课时 → 保存」必得 400 `item_id_invalid`，H5
 
 ### 3.3 存量孤儿清理（一次性）
 
-迁移分支解决「重进可救」；未被重进的孤儿行仍会出现在课程页课时列表顶部。加一次性清理：`repo.purgeIllegalContainers()`——删除 `items`/`segments`/`submissions` 中 `itemId` 不过 `isLegalContainerId(type, itemId)` 的行（判据复用 `course-edit.ts:111-116`，编码态是当前唯一已知非法形态）；bootstrap 时调用一次。安全性：迁移分支保证内容已可救回，清理只删「身份坏、内容已可迁移」的行；本地缓存非 append-only（`upsertLocalContainer` 先例），删除合规。
+迁移分支解决「重进可救」；未被重进的孤儿行仍会出现在课程页课时列表顶部。加一次性清理：core 函数 `purgeIllegalContainers(repo)`（`course-edit.ts` 导出，组合既有 repo 方法）——删除 `items`/`segments`/`submissions` 中 `itemId` 不过 `isLegalContainerId(type, itemId)` 的行（判据复用 `course-edit.ts:111-116`，编码态是当前唯一已知非法形态）；bootstrap 时调用一次。安全性：迁移分支保证内容已可救回，清理只删「身份坏、内容已可迁移」的行；本地缓存非 append-only（`upsertLocalContainer` 先例），删除合规。
 
 ### 3.4 失败 Toast（`lesson/edit.vue` + `course/edit.vue` 同构处理）
 

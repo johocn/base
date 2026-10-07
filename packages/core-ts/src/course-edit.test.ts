@@ -8,6 +8,7 @@ import {
   emptyContainerForm,
   isLegalContainerId,
   loadContainerForm,
+  purgeIllegalContainers,
   saveContainer,
   startNewCourse,
   startNewLesson,
@@ -19,6 +20,7 @@ import {
 import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { decodeUtf8 } from './sync';
 import type { SubmitOptions } from './submit';
+import type { MySubmissionRow } from './types';
 
 const BASE = 'https://node.test';
 
@@ -441,5 +443,35 @@ describe('loadContainerForm 解码优先与孤儿迁移（#80 §3.1）', () => {
     const form = await loadContainerForm(repo, 'course/c1/lesson/l1', 'lesson');
     expect(form.itemId).toBe('course/c1/lesson/l1');
     expect(form.title).toBe('已有课时');
+  });
+});
+
+describe('purgeIllegalContainers：一次性清理（#80 §3.3）', () => {
+  const T = '2026-10-07T00:00:00Z';
+  const sub = (itemId: string, type: MySubmissionRow['type'], state: 'sent' | 'failed') => ({
+    itemId, type, title: itemId, bodyMd: '', questionJson: '', linksJson: '', segmentsJson: '[]',
+    state, reason: state === 'failed' ? 'item_id_invalid' : '', created: 0,
+    queuedAt: T, sentAt: state === 'sent' ? T : '', localOnly: false,
+  });
+
+  it('只清编码态容器行；article 不动、legal 行不动、sent 台账不动', async () => {
+    const repo = new MemoryRepo();
+    await repo.upsertLocalContainer({ itemId: 'course%2Fc1%2Flesson%2Fl9', type: 'lesson', title: '孤儿', contentHash: '', updatedAt: T }, []);
+    await repo.upsertLocalContainer({ itemId: 'course/c1/lesson/l1', type: 'lesson', title: '正常课时', contentHash: '', updatedAt: T }, []);
+    await repo.upsertLocalContainer({ itemId: 'course%2Fc2', type: 'course', title: '坏课程', contentHash: '', updatedAt: T }, []);
+    await repo.upsertLocalContainer({ itemId: 'course%2Fx%2Farticle%2Fa1', type: 'article', title: '非容器', contentHash: '', updatedAt: T }, []);
+    await repo.saveSubmission(sub('course%2Fc1%2Flesson%2Fl9', 'lesson', 'failed'));
+    await repo.saveSubmission(sub('course%2Fc2', 'course', 'sent'));
+
+    const purged = await purgeIllegalContainers(repo);
+    expect(purged.sort()).toEqual(['course%2Fc1%2Flesson%2Fl9', 'course%2Fc2']);
+
+    const ids = (await repo.listItems()).map((i) => i.itemId);
+    expect(ids).toContain('course/c1/lesson/l1');
+    expect(ids).toContain('course%2Fx%2Farticle%2Fa1');
+    expect(ids).not.toContain('course%2Fc1%2Flesson%2Fl9');
+    expect(ids).not.toContain('course%2Fc2');
+    expect(await repo.getSubmission('course%2Fc1%2Flesson%2Fl9')).toBeNull();
+    expect((await repo.getSubmission('course%2Fc2'))?.state).toBe('sent');
   });
 });

@@ -125,6 +125,26 @@ export function isLegalContainerId(type: ContainerType, id: string): boolean {
   return segs.length === 4 && segs[0] === 'course' && segs[2] === 'lesson';
 }
 
+/**
+ * 一次性清理（#80 §3.3）：删除 itemId 形态非法的**容器**行（编码态孤儿，历史 Bug 落库）。
+ * 只处理 type 为 course/lesson 的条目——其余类型不走容器 id 形态判据，绝不误删；
+ * 台账行仅删未送达的（`sent` 是台账本体，#56 §9.3 不可删）；
+ * blob 文件不删（孤儿文件无害，`listBlobPathsByItem` 只回路径不回 id，不为清理扩接口）。
+ * 返回被清理的 item_id（调用方可提示「已清理 N 条卡死记录」）。
+ */
+export async function purgeIllegalContainers(repo: LocalRepo): Promise<string[]> {
+  const purged: string[] = [];
+  for (const it of await repo.listItems()) {
+    if (it.type !== 'course' && it.type !== 'lesson') continue;
+    if (isLegalContainerId(it.type, it.itemId)) continue;
+    await repo.removeLocalContainer(it.itemId); // items 带 source='local' 守卫，包内条目绝不误删
+    const row = await repo.getSubmission(it.itemId);
+    if (row !== null && row.state !== 'sent') await repo.removeSubmission(it.itemId);
+    purged.push(it.itemId);
+  }
+  return purged;
+}
+
 /** 新建课程：生成新 id 并回填。页面打开即调用，使「+ 加一课」能立刻拼出子项 id。 */
 export function startNewCourse(): ContainerForm {
   return emptyContainerForm('course', newItemID('course'));
