@@ -4,9 +4,11 @@
 
 * 直接上游：`specs/2026-10-01-base-container-edit-deadend-fix-design.md`（下称 #61）——本册是同一类 Bug 的复发补全，#61 修了「查库解码」但漏了「新建回落」
 
-* 范围：`packages/core-ts`（course-edit.ts）+ `apps/mobile`（lesson/edit.vue、course/edit.vue）客户端修复；**节点零改动**（400 本身是节点正确拒绝）
+* 范围：`packages/core-ts`（course-edit.ts）+ `apps/mobile`（lesson/edit.vue、course/edit.vue）客户端修复 + 课程分类内置默认项；**节点零改动**（400 是节点正确拒绝；词条由 directory 投影自动生成）
 
-* 本册**不覆盖**：课时级分类字段（数据模型无此概念，用户未选）；H5/app 光标与预览的其余差异点（仅预览渲染差异，不影响数据）
+* 分类定案（2026-10-07 用户确认）：**分类是课程级**——数据模型中只有 `attr.category`（course 专属，`course-edit.ts:139`），课时无分类、article 无分类字段（submit.vue 无此表单，attr 不产行）；本册给课程分类 picker 加**内置默认「从零开始」**
+
+* 本册**不覆盖**：文章级分类（现无数据模型承载，若要需另开册子）；H5/app 光标与预览的其余差异点（仅预览渲染差异，不影响数据）
 
 ## 1. 背景与根因（取证）
 
@@ -26,8 +28,9 @@ app 端「课程 → 添加课时 → 保存」必得 400 `item_id_invalid`，H5
 1. 任何容器编辑入口（course/lesson）在 app 端拿到的 id 一律为解码态——core 兜底 + 页面显式双保险。
 2. 存量编码态孤儿行可自愈：内容不丢，身份迁到正确 id，重投 200。
 3. 提交失败必须 toast（含服务端错误码），行内详情保留。
+4. 课程分类 picker 内置默认分类「从零开始」，任何时刻可选（本机无分类词条也不空）。
 
-**非目标**：节点侧校验改动（现状正确）；光标/预览其余 app 差异；分类功能（挂账）。
+**非目标**：节点侧校验改动（现状正确）；光标/预览其余 app 差异；文章级分类。
 
 ## 3. 方案
 
@@ -44,9 +47,11 @@ app 端「课程 → 添加课时 → 保存」必得 400 `item_id_invalid`，H5
 
 ### 3.2 页面入口显式解码（双保险，沿用 #61 §2 先例）
 
-- `lesson/edit.vue` onLoad：`lessonId` 与 `courseId` 均过 `decodedId`（import 自 core-ts）。
-- `course/edit.vue` onLoad（L207-226）：`courseId` 补过 `decodedId`。
-- core 已兜底，页面这层是**防御纵深**：漏写不再致 4xx，但保留显式解码让 id 流转可读。
+* `lesson/edit.vue` onLoad：`lessonId` 与 `courseId` 均过 `decodedId`（import 自 core-ts）。
+
+* `course/edit.vue` onLoad（L207-226）：`courseId` 补过 `decodedId`。
+
+* core 已兜底，页面这层是**防御纵深**：漏写不再致 4xx，但保留显式解码让 id 流转可读。
 
 ### 3.3 存量孤儿清理（一次性）
 
@@ -56,27 +61,36 @@ app 端「课程 → 添加课时 → 保存」必得 400 `item_id_invalid`，H5
 
 `saveContainer` 返回 `ledgerState === 'failed'` 时：`uni.showToast({ title: out.message, icon: 'none' })` + 保留现有 `notice.value` 行内详情。message 已含服务端码（`mapSubmitFailure`，`submit.ts:231-244`），不重复拼接。
 
+### 3.5 课程分类内置默认「从零开始」（`course/edit.vue`）
+
+picker 候选 = **内置首项「从零开始」** + 既有 `splitCategories(items)` 词条（按名去重，内置优先）。选中即写 `form.category`，落 `attr.category` 行——节点对 attr.category **无存在性校验**，词条行由 directory 投影自动生成（`internal/store/directory.go:343-366`：`SELECT DISTINCT kind,text ... kind IN ('attr.category',...)`），故零节点改动、零治理流程。空态（本机尚无 category 条目）下 picker 不再为空；`#58 §2.2`「空/非法归空」口径不变，本册不改取值校验。
+
 ## 4. 契约边界
 
 * 节点路由、校验、错误码**零改动**；payload 构造（`buildContainerPayload`）零改动。
+
 * `resolveId` 对已存在条目的命中语义不变（#61 行为保持）。
+
 * `isLegalContainerId` 判据不变，仅新增调用方（purge）。
+
 * 台账状态机（sent/pending/failed）不变。
 
 ## 5. 验收标准
 
-| # | 验收 | 手段 |
-|---|---|---|
-| 1 | `loadContainerForm`：编码态新 id → 返回解码态 itemId；编码态孤儿行存在 → 内容回填 + itemId 迁移 | core-ts vitest 新用例 |
-| 2 | `decodeSafe` 幂等（已解码原样返回、坏编码原样返回） | core-ts vitest |
+| # | 验收                                                                                                    | 手段                 |
+| - | ----------------------------------------------------------------------------------------------------- | ------------------ |
+| 1 | `loadContainerForm`：编码态新 id → 返回解码态 itemId；编码态孤儿行存在 → 内容回填 + itemId 迁移                                | core-ts vitest 新用例 |
+| 2 | `decodeSafe` 幂等（已解码原样返回、坏编码原样返回）                                                                      | core-ts vitest     |
 | 3 | 存量卡死课时：app 重进编辑 → 内容可见 → 保存 200 | 真机 |
 | 4 | 课程页不再出现编码态孤儿行 | 真机（purge 后） |
 | 5 | 保存失败（如断网时人工构造非法行）→ toast 弹出含错误码 | 真机 |
-| 6 | 门禁：core-ts `tsc --noEmit && vitest run` 全绿；mobile `tsc --noEmit && vitest run && npm run build:h5` 全绿 | CI 本地跑 |
-| 7 | H5 回归：浏览器添加/编辑课时行为不变（#61 用例全绿即覆盖） | vitest |
+| 6 | 课程编辑分类 picker 首项为「从零开始」；选中保存 → 课程带 `attr.category=从零开始`，目录投影出现该词条 | core-ts vitest（候选去重）+ 真机 |
+| 7 | 门禁：core-ts `tsc --noEmit && vitest run` 全绿；mobile `tsc --noEmit && vitest run && npm run build:h5` 全绿 | CI 本地跑 |
+| 8 | H5 回归：浏览器添加/编辑课时行为不变（#61 用例全绿即覆盖） | vitest |
 
 ## 6. 风险
 
 1. **迁移分支的解码歧义**：若历史上存在解码态与编码态两条行并存，迁移以解码态优先（resolveId 已命中即走现行为），编码态行留给 purge——不丢数据（内容在编码态行与台账 segmentsJson 双份）。
 2. **purge 误删**：判据用 `isLegalContainerId`（#61 同款，测试覆盖段结构），非仅 `includes('%')`；lesson 的合法 4 段结构显式校验，误删面为零。
 3. **toast 时机**：uni.showToast 在 app 端与页面跳转竞态——toast 在 saveContainer 返回后同步调用，无跳转动作，无竞态面。
+
