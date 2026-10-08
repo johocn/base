@@ -101,16 +101,18 @@
           </block>
         </view>
       </view>
-      <view :prop="caretCmd" :change:prop="caretBridge.setCaret">
-        <textarea
-          id="body-caret-anchor"
-          ref="bodyRef"
-          v-model="form.bodyMd"
-          class="area"
-          placeholder="课时正文；留空则不显示正文块"
-          :focus="bodyFocus"
-        />
-      </view>
+      <textarea
+        id="body-caret-anchor"
+        ref="bodyRef"
+        v-model="form.bodyMd"
+        class="area"
+        placeholder="课时正文；留空则不显示正文块"
+        :focus="bodyFocus"
+        :selection-start="selStart"
+        :selection-end="selEnd"
+        @input="onBodyInput"
+        @blur="onBodyBlur"
+      />
       <text class="hint">正文以 Markdown 源文本保存（槽位 attr.body_md），与文章同口径；支持 [文字]{.c-red} 变色</text>
       <text class="preview-label">预览</text>
       <rich-text :nodes="previewHtml" class="preview" />
@@ -313,11 +315,16 @@ function insertMarkdownAtCursor(markdown: string) {
   const r = wrapSelection(src, pick.caret.start, pick.caret.end, '', markdown);
   form.value.bodyMd = r.text;
   caretLedger.value = { start: r.start, end: r.end };
-  caretCmd.value = { start: r.start, end: r.end, text: r.text };
   if (pick.source === 'fallback') {
     uni.showToast({ title: '未取到光标，已插入到正文末尾', icon: 'none' });
   }
+
+  // 写光标：App 走 selection-start/end 属性（原生组件应用）；H5 再由 DOM 兜底（下方）
+  selStart.value = r.start;
+  selEnd.value = r.end;
   bodyFocus.value = true;
+  // H5 已证口径：v-model flush 会把光标重置到末尾，双 setTimeout 在 flush 后设回
+  // （App 逻辑层无 document，bodyTextarea() 为 null，自动空转无害）
   setTimeout(() => {
     const el = bodyTextarea();
     if (el) el.setSelectionRange(r.start, r.end);
@@ -331,18 +338,22 @@ function insertMarkdownAtCursor(markdown: string) {
 /** 正文编辑：工具栏产出源文本标记；预览是只读派生，不落库（保存口径零改动） */
 const bodyRef = ref<{ $el?: Element } | null>(null);
 const bodyFocus = ref(false);
-/** renderjs 台账：App 视图层上报的真实光标；H5 不用（走原生 DOM 选区） */
+/** 光标台账：单点 = @input/@blur 的 detail.cursor（组件层同步事件）；选区 = renderjs 上报（仅非空选区） */
 const caretLedger = ref<{ start: number; end: number } | null>(null);
-/** 逻辑层 → 视图层的写光标指令；每次换新对象以触发 `:change:prop` */
-const caretCmd = ref<{ start: number; end: number; text: string } | null>(null);
-/**
- * renderjs 桥在 App 视图层执行，不进入逻辑层组件实例；这里给模板一个同形空实现占位：
- * H5 无 renderjs、该占位会被真调用（no-op），App 上 uni 模板编译器按模块名解析、此值不参与运行。
- */
-const caretBridge = {
-  setCaret: (_value: { start: number; end: number; text: string }): void => undefined,
-};
+/** App 端属性写光标：每次变换后设新值驱动 :selection-start/:selection-end 应用；-1 = 不干预 */
+const selStart = ref(-1);
+const selEnd = ref(-1);
 const previewHtml = computed(() => renderMarkdown(form.value.bodyMd));
+
+/** 单点光标补记（App 同步路径）：renderjs 跨层上报滞后是漂移根因，这里不经过它 */
+function onBodyInput(e: Event | { detail?: { cursor?: number } }) {
+  // App 事件带 detail.cursor；H5 原生 FocusEvent/InputEvent 无 cursor，安全空转
+  const c = (e as { detail?: { cursor?: number } })?.detail?.cursor;
+  if (typeof c === 'number' && c >= 0) caretLedger.value = { start: c, end: c };
+}
+function onBodyBlur(e: Event | { detail?: { cursor?: number } }) {
+  onBodyInput(e);
+}
 
 /** 拿正文原生 textarea：uni-app H5 把 id 移到 <uni-textarea> 包装元素上，直接查标签名 */
 function bodyTextarea(): HTMLTextAreaElement | null {
@@ -366,16 +377,16 @@ function applyTool(action: ToolbarAction) {
   // 1) 同步 Vue 响应式源（bodyMd 会触发 v-model flush 写 DOM textarea.value）
   form.value.bodyMd = r.text;
   caretLedger.value = { start: r.start, end: r.end };
-  caretCmd.value = { start: r.start, end: r.end, text: r.text };
   if (pick.source === 'fallback') {
     uni.showToast({ title: '未取到光标，已插入到正文末尾', icon: 'none' });
   }
 
-  // 2) 让 textarea 保持焦点（模板 :focus directive 设 true 就不会 blur）
+  // 写光标：App 走 selection-start/end 属性（原生组件应用）；H5 再由 DOM 兜底（下方）
+  selStart.value = r.start;
+  selEnd.value = r.end;
   bodyFocus.value = true;
-
-  // 3) Vue v-model flush 写 textarea.value 时浏览器会把光标重置到末尾
-  //    用 setTimeout 在它之后设回正确位置；两次触发防御多次 flush
+  // H5 已证口径：v-model flush 会把光标重置到末尾，双 setTimeout 在 flush 后设回
+  // （App 逻辑层无 document，bodyTextarea() 为 null，自动空转无害）
   setTimeout(() => {
     const el = bodyTextarea();
     if (el) el.setSelectionRange(r.start, r.end);
