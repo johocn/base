@@ -75,22 +75,21 @@
             <text class="modal-tab" :class="imageTab === 'library' ? 'modal-tab-on' : ''" @click="switchImageTab('library')">图片库</text>
           </view>
           <block v-if="imageTab === 'upload'">
+            <image v-if="uploadPreview !== ''" :src="uploadPreview" mode="widthFix" class="upload-preview" />
             <view class="modal-actions">
-              <text class="act" @click="pickAndUploadImage">{{ uploadBusy ? '上传中…' : '选择图片并上传' }}</text>
-              <text class="act act-primary" @click="confirmUploadImage" :class="uploadedBlobId === '' ? 'act-disabled' : ''">确认插入</text>
+              <text class="act" @click="pickAndUploadImage">{{ uploadBusy ? '上传中…' : (uploadedBlobId === '' ? '选择图片并上传' : '重新选图') }}</text>
+              <text class="act act-primary" @click="confirmUploadImage" :class="uploadedBlobId === '' ? 'act-disabled' : ''">插入正文</text>
               <text class="act" @click="closeImageDialog">取消</text>
             </view>
-            <text v-if="uploadedBlobId !== ''" class="hint">✅ 已上传：{{ uploadedFileName || uploadedBlobId }}</text>
+            <text v-if="uploadedBlobId !== ''" class="hint">已上传：{{ uploadedFileName || uploadedBlobId }}，点「插入正文」写入光标处</text>
             <input v-model="uploadAlt" class="input" placeholder="alt 文本（可空）" />
           </block>
           <block v-else>
             <input v-model="blobQuery" class="input" placeholder="搜索（可选）" @input="refreshBlobs" />
             <scroll-view scroll-y class="modal-scroll">
-              <view v-for="b in blobRows" :key="b.blobId" class="modal-row" @click="submitBlobImage(b)">
-                <image :src="imageUrlOf(b.blobId)" class="thumb" mode="aspectFill" />
-                <view class="thumb-meta">
-                  <text class="val">{{ b.blobId }}</text>
-                  <text class="hint">{{ formatSize(b.size) }}</text>
+              <view class="blob-grid">
+                <view v-for="b in blobRows" :key="b.blobId" class="blob-cell" @click="submitBlobImage(b)">
+                  <image :src="thumbSrcOf(b)" class="thumb" mode="aspectFill" />
                 </view>
               </view>
               <text v-if="blobRows.length === 0" class="hint">本机还没有上传过图片</text>
@@ -248,12 +247,11 @@ import { computed, nextTick, ref } from 'vue';
 import { BADGE_WORDS, BADGE_WORDS_AUTHOR, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO, TITLE_COLORS } from '../../core/attrs';
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
 import { myIdentityId, roster } from '../../core/contribution';
-import { decodeSafe, loadContainerForm, saveContainer, startNewLesson, uploadAndStoreBlob, type ContainerForm } from '../../core/course-edit';
+import { decodeSafe, loadContainerForm, mimeFromName, saveContainer, startNewLesson, uploadAndStoreBlob, type ContainerForm } from '../../core/course-edit';
 import {
   composeBlobImg,
   composeExternalLink,
   composeInternalLink,
-  formatSize,
   searchLocalBlobs,
   searchLocalItems,
   type BlobSearchRow,
@@ -304,6 +302,8 @@ const uploadBusy = ref(false);
 const uploadedBlobId = ref('');
 const uploadedFileName = ref('');
 const uploadAlt = ref('');
+/** 上传成功的大图预览（dataURL）；「重新选图」即再点选择覆盖 */
+const uploadPreview = ref('');
 const blobQuery = ref('');
 const blobRows = ref<BlobSearchRow[]>([]);
 
@@ -459,6 +459,7 @@ function openImageDialog() {
   imageTab.value = 'upload';
   uploadedBlobId.value = '';
   uploadedFileName.value = '';
+  uploadPreview.value = '';
   uploadAlt.value = '';
   uploadBusy.value = false;
   imageOpen.value = true;
@@ -505,6 +506,7 @@ async function pickAndUploadImage() {
     );
     uploadedBlobId.value = up.blobId;
     uploadedFileName.value = picked.name;
+    uploadPreview.value = `data:${mimeFromName(picked.name) || 'application/octet-stream'};base64,${bytesToBase64(picked.bytes)}`;
     uni.showToast({ title: `上传成功：${picked.name}`, icon: 'success' });
     await refreshBlobs();
   } catch (e) {
@@ -522,6 +524,12 @@ function confirmUploadImage() {
 function imageUrlOf(blobId: string): string {
   const base = ctx?.opts.nodeBaseUrl ?? '';
   return `${base.replace(/\/+$/, '')}/v1/blob/${blobId}`;
+}
+/** 缩略图 src：本地 blob 文件直读（离线可见）；path 缺失回退节点 URL（在线可见） */
+function thumbSrcOf(b: BlobSearchRow): string {
+  const p = b.path;
+  if (p !== '') return p.startsWith('file://') ? p : `file://${p}`;
+  return imageUrlOf(b.blobId);
 }
 function submitBlobImage(b: BlobSearchRow) {
   if (!ctx) return;
@@ -851,8 +859,11 @@ async function submit() {
 .modal-tab-on { color: #2b6cb0; border-bottom: 2px solid #2b6cb0; font-weight: 500; }
 .modal-scroll { max-height: 360px; margin-top: 8px; }
 .modal-row { padding: 10px 0; border-bottom: 1px solid #f5f5f5; display: flex; align-items: center; gap: 10px; }
-.modal-row .thumb { width: 56px; height: 56px; border-radius: 6px; background: #f0f0f0; flex-shrink: 0; }
-.modal-row .thumb-meta { flex: 1; }
+/* 图片库：3 列方图网格（册子 #82 §4.4） */
+.blob-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.blob-cell { position: relative; width: calc((100% - 16px) / 3); }
+.blob-cell .thumb { display: block; width: 100%; aspect-ratio: 1 / 1; border-radius: 6px; background: #f0f0f0; }
+.upload-preview { width: 100%; border-radius: 8px; margin-bottom: 8px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 12px; padding-top: 12px; }
 .act { color: #666; font-size: 14px; padding: 6px 12px; }
 .act-primary { color: #2b6cb0; font-weight: 500; }
