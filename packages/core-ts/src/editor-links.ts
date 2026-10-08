@@ -111,6 +111,8 @@ export interface BlobSearchRow {
   name: string;
   /** 客户端 blob_index.content_type（上传时从扩展名推断；sync 路径回落 ''） */
   contentType: string;
+  /** 客户端 blob_index.path（本机文件路径；空串 = 无本地文件，缩略图回退节点 URL） */
+  path: string;
   size: number;
   /** 从 verified_at ISO 串解析得到的 ms 时间戳；解析失败回落 0 */
   createdAt: number;
@@ -157,7 +159,7 @@ export async function searchLocalBlobs(opts: {
   }
 
   const sql =
-    `SELECT b.blob_id, b.owner_id, b.item_id, b.size, b.verified_at, b.original_name, b.content_type,
+    `SELECT b.blob_id, b.owner_id, b.item_id, b.size, b.verified_at, b.original_name, b.content_type, b.path,
             COUNT(ref.item_id) AS refs
      FROM blob_index b
      LEFT JOIN blob_references ref ON ref.blob_id = b.blob_id` +
@@ -171,6 +173,7 @@ export async function searchLocalBlobs(opts: {
     blobId: String(r.blob_id ?? ''),
     name: String(r.original_name ?? ''),
     contentType: String(r.content_type ?? ''),
+    path: String(r.path ?? ''),
     size: Number(r.size ?? 0),
     createdAt: Number(new Date(String(r.verified_at ?? '')).getTime()) || 0,
     refs: Number((r as any).refs ?? 0),

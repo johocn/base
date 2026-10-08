@@ -207,4 +207,14 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
     expect(db.lastSql).not.toContain('content_type LIKE');
     expect(db.lastSql).toContain('ORDER BY b.verified_at DESC');
   });
+
+  it('SELECT 取 b.path 并逐字透传到 BlobSearchRow.path', async () => {
+    const db = new FakeDb();
+    db.setResponse('FROM blob_index', [
+      { blob_id: 'b1', item_id: 'x', size: 100, verified_at: '2026-10-01', original_name: 'a.png', content_type: 'image/png', path: '/data/blobs/b1' },
+    ]);
+    const rows = await searchLocalBlobs({ db });
+    expect(db.lastSql).toContain('b.blob_id, b.owner_id, b.item_id, b.size, b.verified_at, b.original_name, b.content_type, b.path,');
+    expect(rows[0]!.path).toBe('/data/blobs/b1');
+  });
 });
