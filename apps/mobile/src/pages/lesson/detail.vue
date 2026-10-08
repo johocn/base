@@ -135,6 +135,7 @@ import { attrsOf, childrenRowsOf, type AttachmentVM } from '../../core/container
 import { childrenOf, lessonNo, lessonPosition, prevNextLesson, relatedLessons as deriveRelatedLessons } from '../../core/course-tree';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
 import { renderMarkdown } from '../../core/markdown';
+import { resolveBlobRefsInMd } from '@base/core-ts/blob-refs';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
 import { containerFormFromLedger } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
@@ -218,7 +219,7 @@ onLoad(async (query) => {
       if (form.difficulty !== '') meta.push(`难度 ${difficultyLabel(form.difficulty)}`);
       if (form.durationSec > 0) meta.push(`约 ${Math.round(form.durationSec / 60)} 分钟`);
       metaLine.value = meta.join(' · ');
-      bodyHtml.value = renderMarkdown(form.bodyMd);
+      bodyHtml.value = renderMarkdown(resolveBlobRefsInMd(form.bodyMd, opts.nodeBaseUrl || ''));
       // children 行标题回落 itemId（台账行集不含子项标题，与既有「本地未同步」回落同口径）
       carriers.value = form.children.map((c) => ({ itemId: c.itemId, type: c.kind, title: c.itemId }));
       attachments.value = form.attachments;
@@ -292,7 +293,7 @@ onLoad(async (query) => {
     if (attrs.duration > 0) meta.push(`约 ${Math.round(attrs.duration / 60)} 分钟`);
     metaLine.value = meta.join(' · ');
 
-    bodyHtml.value = renderMarkdown(attrs.bodyMd);
+    bodyHtml.value = renderMarkdown(resolveBlobRefsInMd(attrs.bodyMd, opts.nodeBaseUrl || ''));
 
     const rows = childrenRowsOf(segs);
     const built: CarrierVM[] = [];

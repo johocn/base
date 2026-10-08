@@ -262,6 +262,7 @@ import {
 import { recordEditFailure, type EditStage } from '../../core/editlog';
 import { resolveCaret } from '../../core/editor-caret';
 import { renderMarkdown } from '../../core/markdown';
+import { resolveBlobRefsInMd } from '@base/core-ts/blob-refs';
 import {
   COLOR_BUTTONS,
   INLINE_BUTTONS,
@@ -343,7 +344,7 @@ const caretLedger = ref<{ start: number; end: number } | null>(null);
 /** App 端属性写光标：每次变换后设新值驱动 :selection-start/:selection-end 应用；-1 = 不干预 */
 const selStart = ref(-1);
 const selEnd = ref(-1);
-const previewHtml = computed(() => renderMarkdown(form.value.bodyMd));
+const previewHtml = computed(() => renderMarkdown(resolveBlobRefsInMd(form.value.bodyMd, ctx?.opts.nodeBaseUrl ?? '')));
 
 /** 单点光标补记（App 同步路径）：renderjs 跨层上报滞后是漂移根因，这里不经过它 */
 function onBodyInput(e: Event | { detail?: { cursor?: number } }) {
@@ -806,7 +807,7 @@ async function submit() {
 .tool-color { display: flex; align-items: baseline; }
 .tool-note { margin-left: 3px; color: #999999; font-size: 10px; }
 .preview-label { display: block; margin: 10px 0 4px; color: #666666; font-size: 14px; }
-.preview { display: block; padding: 8px; border: 1px solid #f0f0f0; border-radius: 6px; font-size: 14px; line-height: 1.8; color: #333333; }
+.preview { display: block; padding: 8px; border: 1px solid #f0f0f0; border-radius: 6px; font-size: 15px; line-height: 1.7; color: #333333; }
 
 /* 正文预览变色：7 个枚举类（#44 §6）。c-mark 只改背景、不覆盖字色 */
 .c-red { color: #C53030; }
