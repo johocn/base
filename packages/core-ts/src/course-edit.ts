@@ -317,6 +317,34 @@ async function writeFailedLedger(
   });
 }
 
+/** 课时 id → 父课程 id：`course/<cid>/lesson/...` → `course/<cid>`；独立条目返回 null。 */
+export function parentCourseIdOf(itemId: string): string | null {
+  const m = /^course\/([^/]+)\/lesson\//.exec(itemId);
+  return m ? `course/${m[1]}` : null;
+}
+
+/**
+ * 课时保存成功（sent/pending）后回写父课程 children（册子 #82 §4.2）：
+ * 幂等（已含跳过）、父课程不在本机静默跳过；课程重投走同一 saveContainer
+ * （本地 upsert 立即可见 + enqueueOrSend 进台账），其 outcome 不覆盖课时结果——
+ * 课程失败已落台账 failed 行，由既有重试链路兜底。
+ */
+async function backfillLessonIntoCourse(
+  o: SubmitOptions,
+  form: ContainerForm,
+  outcome: SubmitOutcome,
+): Promise<void> {
+  if (form.type !== 'lesson') return;
+  if (outcome.ledgerState !== 'sent' && outcome.ledgerState !== 'pending') return;
+  const courseId = parentCourseIdOf(form.itemId);
+  if (courseId === null) return;
+  if ((await o.repo.getItem(courseId)) === null) return;
+  const courseForm = await loadContainerForm(o.repo, courseId, 'course');
+  if (courseForm.children.some((c) => c.itemId === form.itemId)) return;
+  courseForm.children.push({ kind: 'lesson', itemId: form.itemId });
+  await saveContainer(o, courseForm);
+}
+
 /**
  * 落一条容器投稿。新建与编辑同一条路径——`enqueueOrSend` 本身就是 upsert（本册 §4.1）：
  * 送达 → 台账 `sent`；断网 / 429 / 5xx → `pending` 待补发；其余 4xx → `failed`。
@@ -332,7 +360,7 @@ export async function saveContainer(o: SubmitOptions, form: ContainerForm): Prom
     await writeFailedLedger(o, form, segments, check.message);
     return { itemId: form.itemId, created: false, ledgerState: 'failed', message: check.message };
   }
-  return enqueueOrSend(o, {
+  const outcome = await enqueueOrSend(o, {
     itemId: form.itemId,
     type: form.type,
     title: form.title,
@@ -340,6 +368,8 @@ export async function saveContainer(o: SubmitOptions, form: ContainerForm): Prom
     questionJson: '',
     segments,
   });
+  await backfillLessonIntoCourse(o, form, outcome);
+  return outcome;
 }
 
 /** 待上传的字节（与 `platform/uni.ts` 的 `PickedFile` 同形；core 不 import 平台层）。 */

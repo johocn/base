@@ -475,3 +475,81 @@ describe('purgeIllegalContainers：一次性清理（#80 §3.3）', () => {
     expect((await repo.getSubmission('course%2Fc2'))?.state).toBe('sent');
   });
 });
+
+describe('saveContainer 课时回写父课程（册子 #82 §4.2）', () => {
+  /** seed 一门本地课程：items 行 + 空 children 的 segments（digest 行 seq=0）。 */
+  function seedCourse(repo: MemoryRepo, courseId: string): void {
+    repo.items.set(courseId, {
+      itemId: courseId, source: 'course', type: 'course', title: '测试课程',
+      rev: 'r', contentHash: 'h', state: 'active', updatedAt: '', authorId: 'a'.repeat(64), authorSig: '',
+    });
+    repo.segments.set(courseId, [{ itemId: courseId, seq: 0, kind: 'digest', text: '', contentHash: '' }]);
+  }
+
+  it('新课时保存 sent → 父课程 children 追加该课时并重投（两个 submit 请求）', async () => {
+    const http = new FakeHttp();
+    const repo = new MemoryRepo();
+    const adapters = fakeAdapters(http, new MemoryFs(), new FakePackReader());
+    const o: SubmitOptions = { adapters, repo, nodeBaseUrl: BASE };
+    seedCourse(repo, 'course/c1');
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'x', created: true }));
+
+    const form = { ...emptyContainerForm('lesson', 'course/c1/lesson/l1'), title: '第一讲' };
+    const out = await saveContainer(o, form);
+    expect(out.ledgerState).toBe('sent');
+
+    const submits = http.posted.filter((p) => p.url.endsWith('/v1/submit'));
+    expect(submits).toHaveLength(2); // 课时 + 课程回写重投
+    const courseWire = JSON.parse(decodeUtf8(submits[1]!.body)) as { item_id: string; segments: Array<{ kind: string; text: string }> };
+    expect(courseWire.item_id).toBe('course/c1');
+    expect(courseWire.segments.some((s) => s.kind === 'lesson' && s.text === 'course/c1/lesson/l1')).toBe(true);
+    expect((await repo.getSubmission('course/c1'))).not.toBeNull();
+  });
+
+  it('children 已含该课时 → 幂等跳过（仅 1 个 submit）', async () => {
+    const http = new FakeHttp();
+    const repo = new MemoryRepo();
+    const adapters = fakeAdapters(http, new MemoryFs(), new FakePackReader());
+    const o: SubmitOptions = { adapters, repo, nodeBaseUrl: BASE };
+    seedCourse(repo, 'course/c1');
+    // 课程 segments 预置该课时（seq=1 清单行）
+    const segs = repo.segments.get('course/c1')!;
+    segs.push({ itemId: 'course/c1', seq: 1, kind: 'lesson', text: 'course/c1/lesson/l1', contentHash: '' });
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'x', created: true }));
+
+    const form = { ...emptyContainerForm('lesson', 'course/c1/lesson/l1'), title: '第一讲' };
+    await saveContainer(o, form);
+    expect(http.posted.filter((p) => p.url.endsWith('/v1/submit'))).toHaveLength(1);
+  });
+
+  it('父课程不在本机 → 静默跳过，课时结果照常', async () => {
+    const http = new FakeHttp();
+    const repo = new MemoryRepo();
+    const adapters = fakeAdapters(http, new MemoryFs(), new FakePackReader());
+    const o: SubmitOptions = { adapters, repo, nodeBaseUrl: BASE };
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'x', created: true }));
+
+    const form = { ...emptyContainerForm('lesson', 'course/c1/lesson/l1'), title: '第一讲' };
+    const out = await saveContainer(o, form);
+    expect(out.ledgerState).toBe('sent');
+    expect(http.posted.filter((p) => p.url.endsWith('/v1/submit'))).toHaveLength(1);
+  });
+
+  it('课时 failed（节点 403）→ 不回写', async () => {
+    const http = new FakeHttp();
+    const repo = new MemoryRepo();
+    const adapters = fakeAdapters(http, new MemoryFs(), new FakePackReader());
+    const o: SubmitOptions = { adapters, repo, nodeBaseUrl: BASE };
+    seedCourse(repo, 'course/c1');
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/submit`, { status: 403, body: utf8(JSON.stringify({ code: 'item_id_taken' })) });
+
+    const form = { ...emptyContainerForm('lesson', 'course/c1/lesson/l1'), title: '第一讲' };
+    const out = await saveContainer(o, form);
+    expect(out.ledgerState).toBe('failed');
+    expect(http.posted.filter((p) => p.url.endsWith('/v1/submit'))).toHaveLength(1);
+  });
+});
