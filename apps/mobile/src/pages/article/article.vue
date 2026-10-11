@@ -495,6 +495,12 @@ function decodedId(raw: string): string {
 .c-purple { color: #6B46C1; }
 .c-gray { color: #718096; }
 .c-mark { background: #FFF3BF; }
+/* 字号三档渲染（册子 #83 §4.3）：与编辑页预览同值 */
+.fs-sm { font-size: 13px; }
+.fs-lg { font-size: 19px; }
+.fs-xl { font-size: 24px; }
+/* 正文图片等比缩放（渲染器内联 style 为准，此处 H5 兜底） */
+.body img { max-width: 100%; height: auto; }
 .error { color: #c53030; font-size: 13px; }
 .group { display: block; margin: 16px 0 6px; color: #888888; font-size: 13px; }
 .quiz-item { padding: 10px 0; border-bottom: 1px solid #f2f2f2; }
