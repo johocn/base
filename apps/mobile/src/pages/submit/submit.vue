@@ -40,6 +40,8 @@
           @click="applyTool(b.action)"
         >{{ b.label }}<text class="tool-note">{{ b.hint }}</text></view>
         <view class="tool-divider" />
+        <view class="tool" @click="sizeOpen = true">字号</view>
+        <view class="tool-divider" />
         <view class="tool" @click="openImageDialog">图片</view>
       </view>
       <!-- 链接对话框：外部链接 / 内部链接 两个 Tab -->
@@ -80,7 +82,7 @@
             <text class="modal-tab" :class="imageTab === 'library' ? 'modal-tab-on' : ''" @click="switchImageTab('library')">图片库</text>
           </view>
           <block v-if="imageTab === 'upload'">
-            <image v-if="uploadPreview !== ''" :src="uploadPreview" mode="widthFix" class="upload-preview" />
+            <image v-if="uploadPreview !== ''" :src="uploadPreview" mode="aspectFit" class="upload-preview" />
             <view class="modal-actions">
               <text class="act" @click="pickAndUploadImage">{{ uploadBusy ? '上传中…' : (uploadedBlobId === '' ? '选择图片并上传' : '重新选图') }}</text>
               <text class="act act-primary" @click="confirmUploadImage" :class="uploadedBlobId === '' ? 'act-disabled' : ''">插入正文</text>
@@ -104,6 +106,23 @@
               <text class="act" @click="closeImageDialog">取消</text>
             </view>
           </block>
+        </view>
+      </view>
+      <!-- 字号弹层：三档选一（册子 #83 §4.3） -->
+      <view v-if="sizeOpen" class="modal-mask" @click.self="sizeOpen = false">
+        <view class="modal">
+          <view class="modal-tabs">
+            <text class="modal-tab modal-tab-on">选择字号</text>
+          </view>
+          <view class="size-row">
+            <view v-for="s in SIZE_OPTIONS" :key="s.key" class="tool size-opt" :class="s.key" @click="applySize(s)">
+              <text :class="s.key">{{ s.label }}</text>
+              <text class="hint">{{ s.key }}</text>
+            </view>
+          </view>
+          <view class="modal-actions">
+            <text class="act" @click="sizeOpen = false">取消</text>
+          </view>
         </view>
       </view>
       <textarea
@@ -166,13 +185,12 @@ import {
 import { decodeSafe, mimeFromName, uploadAndStoreBlob } from '../../core/course-edit';
 import { renderMarkdown } from '../../core/markdown';
 import { resolveBlobRefsInMd } from '@base/core-ts/blob-refs';
-import { resolveCaret } from '../../core/editor-caret';
 import {
   COLOR_BUTTONS,
   INLINE_BUTTONS,
   PARAGRAPH_BUTTONS,
+  SIZE_OPTIONS,
   applyToolbar,
-  wrapSelection,
   type ToolbarAction,
 } from '../../core/markdown-toolbar';
 import { buildQuestionJSON, draftsFromQuestionJSON, emptyDraft, type QuestionDraft } from '../../core/quizdoc';
@@ -201,6 +219,8 @@ const extText = ref('');
 const intQuery = ref('');
 const intItems = ref<ItemSearchRow[]>([]);
 
+/** 字号弹层 */
+const sizeOpen = ref(false);
 /** 图片对话框 */
 const imageOpen = ref(false);
 const imageTab = ref<'upload' | 'library'>('upload');
@@ -212,35 +232,6 @@ const uploadAlt = ref('');
 const uploadPreview = ref('');
 const blobQuery = ref('');
 const blobRows = ref<BlobSearchRow[]>([]);
-
-/** 在当前光标位置插入一段 markdown 字符串，光标落在串末尾。 */
-function insertMarkdownAtCursor(markdown: string) {
-  const src = bodyMd.value;
-  const field = bodyTextarea();
-  const live = field ? { start: field.selectionStart, end: field.selectionEnd } : null;
-  const pick = resolveCaret(live, caretLedger.value, src.length);
-  const r = wrapSelection(src, pick.caret.start, pick.caret.end, '', markdown);
-  bodyMd.value = r.text;
-  caretLedger.value = { start: r.start, end: r.end };
-  if (pick.source === 'fallback') {
-    uni.showToast({ title: '未取到光标，已插入到正文末尾', icon: 'none' });
-  }
-
-  // 写光标：App 走 selection-start/end 属性（原生组件应用）；H5 再由 DOM 兜底（下方）
-  selStart.value = r.start;
-  selEnd.value = r.end;
-  bodyFocus.value = true;
-  // H5 已证口径：v-model flush 会把光标重置到末尾，双 setTimeout 在 flush 后设回
-  // （App 逻辑层无 document，bodyTextarea() 为 null，自动空转无害）
-  setTimeout(() => {
-    const el = bodyTextarea();
-    if (el) el.setSelectionRange(r.start, r.end);
-  }, 60);
-  setTimeout(() => {
-    const el = bodyTextarea();
-    if (el) el.setSelectionRange(r.start, r.end);
-  }, 250);
-}
 
 /** 正文编辑：工具栏产出源文本标记；预览是只读派生，不落库（保存口径零改动） */
 const bodyRef = ref<{ $el?: Element } | null>(null);
@@ -268,41 +259,67 @@ function bodyTextarea(): HTMLTextAreaElement | null {
   return document.querySelector<HTMLTextAreaElement>('#body-caret-anchor textarea');
 }
 
-/** renderjs 上报入口（App）：真实光标存台账 */
-function onCaret(c: { start: number; end: number }) {
-  caretLedger.value = { start: c.start, end: c.end };
-}
-defineExpose({ onCaret });
-
-/** 工具栏动作：把变换结果写回源文本，并把光标/选区落到新位置。 */
+/** 工具动作统一入口：读当前光标/选区（H5 live DOM → App 官方 API → 台账 → 末尾）再变换 */
 function applyTool(action: ToolbarAction) {
-  // 核心变换：算出新文本和目标光标位置
-  const src = bodyMd.value;
   const field = bodyTextarea();
-  const live = field ? { start: field.selectionStart, end: field.selectionEnd } : null;
-  const pick = resolveCaret(live, caretLedger.value, src.length);
-  const r = applyToolbar(src, pick.caret.start, pick.caret.end, action);
+  if (field) {
+    runToolbar(field.selectionStart, field.selectionEnd, 'live', action);
+    return;
+  }
+  // 窄断言包装：@dcloudio/types 的 success 回调 start/end 为可选字段，这里收窄为必填（不放宽 any）
+  (
+    uni as unknown as {
+      getSelectedTextRange?: (o: {
+        success: (r: { start: number; end: number }) => void;
+        fail: () => void;
+      }) => void;
+    }
+  ).getSelectedTextRange?.({
+    success: (res) => runToolbar(res.start, res.end, 'ledger', action),
+    fail: () => {
+      const l = caretLedger.value;
+      runToolbar(l?.start ?? bodyMd.value.length, l?.end ?? bodyMd.value.length, l ? 'ledger' : 'fallback', action);
+    },
+  });
+}
 
-  // 1) 同步 Vue 响应式源（bodyMd 会触发 v-model flush 写 DOM textarea.value）
+/** 字号档位点选：包裹/夹位后关弹层 */
+function applySize(s: (typeof SIZE_OPTIONS)[number]) {
+  sizeOpen.value = false;
+  applyTool(s.action);
+}
+
+/** 在光标处插入任意 markdown：等价于空 before 的包裹动作（册子 #83 §4.1 统一路径） */
+function insertMarkdownAtCursor(markdown: string) {
+  applyTool({ kind: 'wrap', before: '', after: markdown });
+}
+
+/** 同步变换 + 异步写光标（官方口径：focus 翻转 + 值每次变化） */
+function runToolbar(start: number, end: number, source: 'live' | 'ledger' | 'fallback', action: ToolbarAction) {
+  const src = bodyMd.value;
+  const r = applyToolbar(src, start, end, action);
   bodyMd.value = r.text;
   caretLedger.value = { start: r.start, end: r.end };
-  if (pick.source === 'fallback') {
+  if (source === 'fallback') {
     uni.showToast({ title: '未取到光标，已插入到正文末尾', icon: 'none' });
   }
+  void writeCaret(r.start, r.end);
+}
 
-  // 写光标：App 走 selection-start/end 属性（原生组件应用）；H5 再由 DOM 兜底（下方）
-  selStart.value = r.start;
-  selEnd.value = r.end;
+/** 写光标：focus false→nextTick→置选区值→true；H5 DOM 双拍兜底保留 */
+async function writeCaret(start: number, end: number) {
+  bodyFocus.value = false;
+  await nextTick();
+  selStart.value = start;
+  selEnd.value = end;
   bodyFocus.value = true;
-  // H5 已证口径：v-model flush 会把光标重置到末尾，双 setTimeout 在 flush 后设回
-  // （App 逻辑层无 document，bodyTextarea() 为 null，自动空转无害）
   setTimeout(() => {
     const el = bodyTextarea();
-    if (el) el.setSelectionRange(r.start, r.end);
+    if (el) el.setSelectionRange(start, end);
   }, 60);
   setTimeout(() => {
     const el = bodyTextarea();
-    if (el) el.setSelectionRange(r.start, r.end);
+    if (el) el.setSelectionRange(start, end);
   }, 250);
 }
 
@@ -594,11 +611,6 @@ async function submit() {
 }
 </script>
 
-<!-- #ifdef APP-PLUS -->
-<!-- renderjs 桥：App 视图层声明 `caretBridge`（uni 编译器改写为 <renderjs name=…>，vue-tsc 不参与运行） -->
-<script module="caretBridge" lang="renderjs" src="src/core/caret-bridge.renderjs.js"></script>
-<!-- #endif -->
-
 <style>
 .wrap { padding: 16px; }
 .title { display: block; font-size: 20px; font-weight: 600; margin-bottom: 12px; }
@@ -627,6 +639,16 @@ async function submit() {
 .c-purple { color: #6B46C1; }
 .c-gray { color: #718096; }
 .c-mark { background: #FFF3BF; }
+/* 字号三档渲染（册子 #83 §4.3）：预览与详情同值 */
+.fs-sm { font-size: 13px; }
+.fs-lg { font-size: 19px; }
+.fs-xl { font-size: 24px; }
+/* 预览内图片等比缩放（渲染器已带内联 style，此处为 H5 兜底） */
+.preview img { max-width: 100%; height: auto; }
+/* 上传预览限高：完整显示不撑爆弹窗（册子 #83 §4.4） */
+.upload-preview { max-height: 40vh; }
+.size-row { display: flex; gap: 10px; margin-top: 10px; }
+.size-opt { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .qcard { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 12px; }
 .qhead { display: flex; justify-content: space-between; }
 .opt { display: flex; align-items: center; margin: 6px 0; }
