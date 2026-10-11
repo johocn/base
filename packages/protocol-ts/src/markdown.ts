@@ -17,7 +17,9 @@ const OL_RE = /^([ \t\f\r]*)[0-9]+\. +(.*)$/;
 const headingTags = ['', 'h1', 'h2', 'h3'];
 
 // 变色扩展的 7 个枚举类名（span[class] 的合法取值）。
-const colorClasses = new Set(['red', 'orange', 'green', 'blue', 'purple', 'gray', 'mark']);
+const colorClasses = new Set(['c-red', 'c-orange', 'c-green', 'c-blue', 'c-purple', 'c-gray', 'c-mark']);
+// 字号扩展的 3 个枚举类名（span[class] 的合法取值；标准 15px 不需标记）。
+const sizeClasses = new Set(['fs-sm', 'fs-lg', 'fs-xl']);
 
 interface Parsed {
   html: string;
@@ -219,23 +221,23 @@ function parseImage(s: string): Parsed | null {
   if (!u) return null;
   let out = '<img';
   if (safeURL(u.url)) out += ' src="' + escapeAttr(u.url) + '"';
-  out += ' alt="' + escapeAttr(alt) + '">';
+  out += ' alt="' + escapeAttr(alt) + '" style="max-width:100%;height:auto">';
   return { html: out, len: k + 1 + u.len };
 }
 
-// parseBracket 处理 [文字] 后缀消歧：先试变色后缀 {.c-，再试链接后缀 (。
+// parseBracket 处理 [文字] 后缀消歧：先试类名后缀 {.，再试链接后缀 (。
 function parseBracket(s: string): Parsed | null {
   const k = s.indexOf(']', 1);
   if (k < 0) return null;
   const content = s.slice(1, k);
   const rest = s.slice(k + 1);
-  if (rest.startsWith('{.c-')) {
+  if (rest.startsWith('{.')) {
     const end = rest.indexOf('}');
     if (end < 0) return null;
     const len = k + 1 + end + 1;
-    const cls = rest.slice(4, end);
-    if (colorClasses.has(cls)) {
-      return { html: '<span class="c-' + cls + '">' + inline(content) + '</span>', len };
+    const cls = rest.slice(2, end);
+    if (colorClasses.has(cls) || sizeClasses.has(cls)) {
+      return { html: '<span class="' + cls + '">' + inline(content) + '</span>', len };
     }
     // 未知类名：整段按字面量原样输出，不产 span。
     return { html: '[' + escapeText(content) + ']' + escapeText(rest.slice(0, end + 1)), len };

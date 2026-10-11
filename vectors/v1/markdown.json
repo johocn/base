@@ -74,7 +74,7 @@
     {
       "name": "图片",
       "src": "![alt](http://example.com/a.png)",
-      "html": "<p><img src=\"http://example.com/a.png\" alt=\"alt\"></p>"
+      "html": "<p><img src=\"http://example.com/a.png\" alt=\"alt\" style=\"max-width:100%;height:auto\"></p>"
     },
     {
       "name": "空行分段",
@@ -132,6 +132,26 @@
       "html": "<p><span class=\"c-blue\"><strong>粗</strong></span></p>"
     },
     {
+      "name": "字号 fs-sm",
+      "src": "[小]{.fs-sm}",
+      "html": "<p><span class=\"fs-sm\">小</span></p>"
+    },
+    {
+      "name": "字号 fs-lg",
+      "src": "[大]{.fs-lg}",
+      "html": "<p><span class=\"fs-lg\">大</span></p>"
+    },
+    {
+      "name": "字号 fs-xl",
+      "src": "[特大]{.fs-xl}",
+      "html": "<p><span class=\"fs-xl\">特大</span></p>"
+    },
+    {
+      "name": "未知字号类名字面量",
+      "src": "[文字]{.fs-foo}",
+      "html": "<p>[文字]{.fs-foo}</p>"
+    },
+    {
       "name": "方括号都不匹配原样输出",
       "src": "[A]",
       "html": "<p>[A]</p>"
@@ -179,7 +199,7 @@
     {
       "name": "javascript 图片丢 src 留 alt",
       "src": "![x](javascript:alert(1))",
-      "html": "<p><img alt=\"x\"></p>"
+      "html": "<p><img alt=\"x\" style=\"max-width:100%;height:auto\"></p>"
     },
     {
       "name": "onerror 标签按文本处理",
@@ -199,7 +219,7 @@
     {
       "name": "相对路径图片丢 src",
       "src": "![图片](./pic.png)",
-      "html": "<p><img alt=\"图片\"></p>"
+      "html": "<p><img alt=\"图片\" style=\"max-width:100%;height:auto\"></p>"
     },
     {
       "name": "链接无多余属性",
