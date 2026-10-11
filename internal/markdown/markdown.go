@@ -32,8 +32,13 @@ var (
 
 // colorClasses 是变色扩展的 7 个枚举类名（span[class] 的合法取值）。
 var colorClasses = map[string]bool{
-	"red": true, "orange": true, "green": true, "blue": true,
-	"purple": true, "gray": true, "mark": true,
+	"c-red": true, "c-orange": true, "c-green": true, "c-blue": true,
+	"c-purple": true, "c-gray": true, "c-mark": true,
+}
+
+// sizeClasses 是字号扩展的 3 个枚举类名（span[class] 的合法取值；标准 15px 不需标记）。
+var sizeClasses = map[string]bool{
+	"fs-sm": true, "fs-lg": true, "fs-xl": true,
 }
 
 var headingTags = [4]string{"", "h1", "h2", "h3"}
@@ -233,11 +238,11 @@ func parseImage(s string) (string, int, bool) {
 	if safeURL(url) {
 		b.WriteString(` src="` + escapeAttr(url) + `"`)
 	}
-	b.WriteString(` alt="` + escapeAttr(alt) + `">`)
+	b.WriteString(` alt="` + escapeAttr(alt) + `" style="max-width:100%;height:auto">`)
 	return b.String(), closeIdx + 1 + after, true
 }
 
-// parseBracket 处理 [文字] 后缀消歧：先试变色后缀 {.c-，再试链接后缀 (。
+// parseBracket 处理 [文字] 后缀消歧：先试类名后缀 {.，再试链接后缀 (。
 func parseBracket(s string) (string, int, bool) {
 	k := strings.IndexByte(s[1:], ']')
 	if k < 0 {
@@ -246,15 +251,15 @@ func parseBracket(s string) (string, int, bool) {
 	closeIdx := 1 + k
 	content := s[1:closeIdx]
 	rest := s[closeIdx+1:]
-	if strings.HasPrefix(rest, "{.c-") {
+	if strings.HasPrefix(rest, "{.") {
 		end := strings.IndexByte(rest, '}')
 		if end < 0 {
 			return "", 0, false
 		}
 		n := closeIdx + 1 + end + 1
-		class := rest[4:end]
-		if colorClasses[class] {
-			return `<span class="c-` + class + `">` + inline(content) + "</span>", n, true
+		class := rest[2:end]
+		if colorClasses[class] || sizeClasses[class] {
+			return `<span class="` + class + `">` + inline(content) + "</span>", n, true
 		}
 		// 未知类名：整段按字面量原样输出，不产 span。
 		return "[" + escapeText(content) + "]" + escapeText(rest[:end+1]), n, true
