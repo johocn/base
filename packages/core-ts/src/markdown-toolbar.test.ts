@@ -7,6 +7,7 @@ import {
   PARAGRAPH_BUTTONS,
   applyToolbar,
   insertSeparator,
+  SIZE_OPTIONS,
   prefixLines,
   wrapSelection,
 } from './markdown-toolbar';
@@ -102,5 +103,20 @@ describe('按钮表', () => {
     const out = applyToolbar('x', 0, 1, COLOR_BUTTONS[0]!.action);
     expect(out.text).toBe('[x]{.c-red}');
     expect(renderMarkdown(out.text)).toBe('<p><span class="c-red">x</span></p>');
+  });
+});
+
+describe('SIZE_OPTIONS 字号档位（册子 #83 §4.3）', () => {
+  it('三档包裹选区', () => {
+    const r = applyToolbar('hello', 0, 5, SIZE_OPTIONS[1]!.action);
+    expect(r.text).toBe('[hello]{.fs-lg}');
+    expect(r.start).toBe(1);
+    expect(r.end).toBe(6);
+  });
+  it('无选区夹位', () => {
+    const r = applyToolbar('ab', 1, 1, SIZE_OPTIONS[0]!.action);
+    expect(r.text).toBe('a[]{.fs-sm}b');
+    expect(r.start).toBe(2);
+    expect(r.end).toBe(2);
   });
 });

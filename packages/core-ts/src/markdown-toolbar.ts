@@ -131,3 +131,10 @@ export const COLOR_BUTTONS: ToolbarButton[] = [
   { key: 'c-gray', label: '弱化', hint: 'c-gray', action: { kind: 'wrap', before: '[', after: ']{.c-gray}' } },
   { key: 'c-mark', label: '高亮', hint: 'c-mark', action: { kind: 'wrap', before: '[', after: ']{.c-mark}' } },
 ];
+
+/** 字号三档（册子 #83 §4.3）：标准 15px 不需标记；before 固定 `[`，与色块同构。 */
+export const SIZE_OPTIONS: ToolbarButton[] = [
+  { key: 'fs-sm', label: '小', action: { kind: 'wrap', before: '[', after: ']{.fs-sm}' } },
+  { key: 'fs-lg', label: '大', action: { kind: 'wrap', before: '[', after: ']{.fs-lg}' } },
+  { key: 'fs-xl', label: '特大', action: { kind: 'wrap', before: '[', after: ']{.fs-xl}' } },
+];
