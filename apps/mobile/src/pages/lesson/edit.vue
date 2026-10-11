@@ -856,10 +856,9 @@ async function submit() {
 .fs-sm { font-size: 13px; }
 .fs-lg { font-size: 19px; }
 .fs-xl { font-size: 24px; }
-/* 预览内图片等比缩放（渲染器已带内联 style，此处为 H5 兜底） */
+/* 预览内图片等比缩放（页面 style 无 scoped，App 端 webview DOM 与 H5 均命中；渲染器内联 style 为网页版/服务端场景兜底） */
 .preview img { max-width: 100%; height: auto; }
-/* 上传预览限高：完整显示不撑爆弹窗（册子 #83 §4.4） */
-.upload-preview { max-height: 40vh; }
+/* 上传预览限高：完整显示不撑爆弹窗（册子 #83 §4.4），规则并入下方 .upload-preview 主定义 */
 .size-row { display: flex; gap: 10px; margin-top: 10px; }
 .size-opt { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .chips { display: flex; flex-wrap: wrap; }
@@ -900,7 +899,7 @@ async function submit() {
 .blob-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .blob-cell { position: relative; width: calc((100% - 16px) / 3); }
 .blob-cell .thumb { display: block; width: 100%; aspect-ratio: 1 / 1; border-radius: 6px; background: #f0f0f0; }
-.upload-preview { width: 100%; border-radius: 8px; margin-bottom: 8px; }
+.upload-preview { width: 100%; max-height: 40vh; border-radius: 8px; margin-bottom: 8px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 12px; padding-top: 12px; }
 .act { color: #666; font-size: 14px; padding: 6px 12px; }
 .act-primary { color: #2b6cb0; font-weight: 500; }
