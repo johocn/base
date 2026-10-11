@@ -261,7 +261,7 @@
 
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
-import { computed, nextTick, ref } from 'vue';
+import { computed, ref } from 'vue';
 
 import { BADGE_WORDS, BADGE_WORDS_AUTHOR, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO, TITLE_COLORS } from '../../core/attrs';
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
@@ -330,7 +330,7 @@ const blobRows = ref<BlobSearchRow[]>([]);
 /** 正文编辑：工具栏产出源文本标记；预览是只读派生，不落库（保存口径零改动） */
 const bodyRef = ref<{ $el?: Element } | null>(null);
 const bodyFocus = ref(false);
-/** 光标台账：单点 = @input/@blur 的 detail.cursor（组件层同步事件）；选区 = renderjs 上报（仅非空选区） */
+/** 光标台账：单点 = @input/@blur 的 detail.cursor（组件层同步事件）；工具动作后 = 变换产出的目标光标/选区 */
 const caretLedger = ref<{ start: number; end: number } | null>(null);
 /** App 端属性写光标：每次变换后设新值驱动 :selection-start/:selection-end 应用；-1 = 不干预 */
 const selStart = ref(-1);
@@ -355,12 +355,14 @@ function bodyTextarea(): HTMLTextAreaElement | null {
 
 /** 工具动作统一入口：读当前光标/选区（H5 live DOM → App 官方 API → 台账 → 末尾）再变换 */
 function applyTool(action: ToolbarAction) {
+  // \r\n 归一（幂等防御）：App 原生层偶发把 \r\n 写回 v-model，偏移基准必须与源文本一致（册子 #82 §8 教训）
+  if (form.value.bodyMd.includes('\r')) form.value.bodyMd = form.value.bodyMd.replace(/\r\n/g, '\n');
   const field = bodyTextarea();
   if (field) {
     runToolbar(field.selectionStart, field.selectionEnd, 'live', action);
     return;
   }
-  // 窄断言包装：@dcloudio/types 的 success 回调 start/end 为可选字段，这里收窄为必填（不放宽 any）
+  // 窄断言包装：@dcloudio/types 的 success 回调 start/end 为可选字段，这里收窄（不放宽 any）
   (
     uni as unknown as {
       getSelectedTextRange?: (o: {
@@ -369,12 +371,21 @@ function applyTool(action: ToolbarAction) {
       }) => void;
     }
   ).getSelectedTextRange?.({
-    success: (res) => runToolbar(res.start, res.end, 'ledger', action),
-    fail: () => {
-      const l = caretLedger.value;
-      runToolbar(l?.start ?? form.value.bodyMd.length, l?.end ?? form.value.bodyMd.length, l ? 'ledger' : 'fallback', action);
+    success: (res) => {
+      if (typeof res.start !== 'number' || typeof res.end !== 'number') {
+        failToLedger(action);
+        return;
+      }
+      runToolbar(res.start, res.end, 'ledger', action);
     },
+    fail: () => failToLedger(action),
   });
+}
+
+/** 官方 API 不可用（未聚焦/不支持）：回落台账单点，无台账再落正文末尾 */
+function failToLedger(action: ToolbarAction) {
+  const l = caretLedger.value;
+  runToolbar(l?.start ?? form.value.bodyMd.length, l?.end ?? form.value.bodyMd.length, l ? 'ledger' : 'fallback', action);
 }
 
 /** 字号档位点选：包裹/夹位后关弹层 */
@@ -400,13 +411,15 @@ function runToolbar(start: number, end: number, source: 'live' | 'ledger' | 'fal
   void writeCaret(r.start, r.end);
 }
 
-/** 写光标：focus false→nextTick→置选区值→true；H5 DOM 双拍兜底保留 */
+/** 写光标：App 端官方口径（focus 翻转 + 拉开 50ms 间隔防同帧合并 + 值每次变化）；H5 只走 DOM 双拍（翻转会误伤 H5 焦点） */
 async function writeCaret(start: number, end: number) {
+  // #ifdef APP-PLUS
   bodyFocus.value = false;
-  await nextTick();
+  await new Promise((r) => setTimeout(r, 50));
   selStart.value = start;
   selEnd.value = end;
   bodyFocus.value = true;
+  // #endif
   setTimeout(() => {
     const el = bodyTextarea();
     if (el) el.setSelectionRange(start, end);
