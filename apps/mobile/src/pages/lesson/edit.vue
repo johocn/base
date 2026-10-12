@@ -126,8 +126,8 @@
         class="area"
         placeholder="课时正文；留空则不显示正文块"
         :focus="bodyFocus"
-        :selection-start="selStart"
-        :selection-end="selEnd"
+        :prop="caretCmd"
+        :change:prop="caretBridge.writeCaret"
         @input="onBodyInput"
         @blur="onBodyBlur"
       />
@@ -332,9 +332,13 @@ const bodyRef = ref<{ $el?: Element } | null>(null);
 const bodyFocus = ref(false);
 /** 光标台账：单点 = @input/@blur 的 detail.cursor（组件层同步事件）；工具动作后 = 变换产出的目标光标/选区 */
 const caretLedger = ref<{ start: number; end: number } | null>(null);
-/** App 端属性写光标：每次变换后设新值驱动 :selection-start/:selection-end 应用；-1 = 不干预 */
-const selStart = ref(-1);
-const selEnd = ref(-1);
+/** App 端 renderjs 写命令：{seq,start,end,len}——seq 递增保证连续同值也触发 observer；'' = 不干预 */
+const caretCmd = ref('');
+let caretSeq = 0;
+/** App 选区台账（renderjs DOM 上报，v3）：非空选区入账；touchend 塌陷报 null 清账 */
+const selLedger = ref<{ start: number; end: number } | null>(null);
+/** uni 编译器注入的 renderjs 模块实例：模板 :change:prop 按 module 名匹配；占位仅供 vue-tsc */
+const caretBridge: { writeCaret: (cmd: unknown) => void } = { writeCaret: () => {} };
 const previewHtml = computed(() => renderMarkdown(resolveBlobRefsInMd(form.value.bodyMd, ctx?.opts.nodeBaseUrl ?? '')));
 
 /** 单点光标补记（App 同步路径）：renderjs 跨层上报滞后是漂移根因，这里不经过它 */
@@ -362,27 +366,22 @@ function applyTool(action: ToolbarAction) {
     runToolbar(field.selectionStart, field.selectionEnd, 'live', action);
     return;
   }
-  // 窄断言包装：@dcloudio/types 的 success 回调 start/end 为可选字段，这里收窄（不放宽 any）
-  (
-    uni as unknown as {
-      getSelectedTextRange?: (o: {
-        success: (r: { start: number; end: number }) => void;
-        fail: () => void;
-      }) => void;
-    }
-  ).getSelectedTextRange?.({
-    success: (res) => {
-      if (typeof res.start !== 'number' || typeof res.end !== 'number') {
-        failToLedger(action);
-        return;
-      }
-      runToolbar(res.start, res.end, 'ledger', action);
-    },
-    fail: () => failToLedger(action),
-  });
+  // App：选区走 renderjs DOM 上报台账（0.20.9 真机定案 getSelectedTextRange 点工具栏返回折叠点）
+  const s = selLedger.value;
+  if (s && s.start !== s.end) {
+    runToolbar(s.start, s.end, 'ledger', action);
+    return;
+  }
+  failToLedger(action);
 }
 
-/** 官方 API 不可用（未聚焦/不支持）：回落台账单点，无台账再落正文末尾 */
+/** renderjs 选区上报入口（App 视图层跨层回调）：非空选区入账，null = touchend 塌陷清账 */
+function onSelectionReport(c: { start: number; end: number } | null) {
+  selLedger.value = c;
+}
+defineExpose({ onSelectionReport });
+
+/** 回落台账单点，无台账再落正文末尾 */
 function failToLedger(action: ToolbarAction) {
   const l = caretLedger.value;
   runToolbar(l?.start ?? form.value.bodyMd.length, l?.end ?? form.value.bodyMd.length, l ? 'ledger' : 'fallback', action);
@@ -399,7 +398,7 @@ function insertMarkdownAtCursor(markdown: string) {
   applyTool({ kind: 'wrap', before: '', after: markdown });
 }
 
-/** 同步变换 + 异步写光标（官方口径：focus 翻转 + 值每次变化） */
+/** 同步变换 + 异步写光标（App=renderjs DOM 直写 / H5=DOM 双拍） */
 function runToolbar(start: number, end: number, source: 'live' | 'ledger' | 'fallback', action: ToolbarAction) {
   const src = form.value.bodyMd;
   const r = applyToolbar(src, start, end, action);
@@ -411,14 +410,11 @@ function runToolbar(start: number, end: number, source: 'live' | 'ledger' | 'fal
   void writeCaret(r.start, r.end);
 }
 
-/** 写光标：App 端官方口径（focus 翻转 + 拉开 50ms 间隔防同帧合并 + 值每次变化）；H5 只走 DOM 双拍（翻转会误伤 H5 焦点） */
-async function writeCaret(start: number, end: number) {
+/** 写光标：App 端 renderjs DOM 直写（:selection-start + focus 翻转真机不落位，0.20.9 定案）——
+ * len 门控等 v-model flush 完成、rAF 重试防时序竞争（caret-bridge v3）；H5 只走 DOM 双拍（久经验证） */
+function writeCaret(start: number, end: number) {
   // #ifdef APP-PLUS
-  bodyFocus.value = false;
-  await new Promise((r) => setTimeout(r, 50));
-  selStart.value = start;
-  selEnd.value = end;
-  bodyFocus.value = true;
+  caretCmd.value = JSON.stringify({ seq: ++caretSeq, start, end, len: form.value.bodyMd.length });
   // #endif
   setTimeout(() => {
     const el = bodyTextarea();
@@ -905,3 +901,6 @@ async function submit() {
 .act-primary { color: #2b6cb0; font-weight: 500; }
 .act-disabled { color: #ccc; }
 </style>
+
+<!-- renderjs 桥：App 视图层声明 caretBridge（uni 编译器改写为 <renderjs>，vue-tsc 不参与运行） -->
+<script module="caretBridge" lang="renderjs" src="../../core/caret-bridge.renderjs.js"></script>
