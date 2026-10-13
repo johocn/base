@@ -32,13 +32,7 @@
         >{{ b.label }}</view>
         <view class="tool" @click="openLinkDialog">链接</view>
         <view class="tool-divider" />
-        <view
-          v-for="b in COLOR_BUTTONS"
-          :key="b.key"
-          class="tool tool-color"
-          :title="b.hint"
-          @click="applyTool(b.action)"
-        >{{ b.label }}<text class="tool-note">{{ b.hint }}</text></view>
+        <view class="tool" @click="colorOpen = true">颜色</view>
         <view class="tool-divider" />
         <view class="tool" @click="sizeOpen = true">字号</view>
         <view class="tool-divider" />
@@ -92,7 +86,7 @@
             <input v-model="uploadAlt" class="input" placeholder="alt 文本（可空）" />
           </block>
           <block v-else>
-            <input v-model="blobQuery" class="input" placeholder="搜索（可选）" @input="refreshBlobs" />
+            <input v-model="blobQuery" class="input" placeholder="按文件名搜索" @input="refreshBlobs" />
             <scroll-view scroll-y class="modal-scroll">
               <view class="blob-grid">
                 <view v-for="b in blobRows" :key="b.blobId" class="blob-cell" @click="submitBlobImage(b)">
@@ -100,12 +94,30 @@
                   <text class="del-btn" @click.stop="handleDeleteBlob(b, $event)">删</text>
                 </view>
               </view>
+              <text v-if="blobHasMore" class="add" @click="loadMoreBlobs">加载更多</text>
               <text v-if="blobRows.length === 0" class="hint">本机还没有上传过图片</text>
             </scroll-view>
             <view class="modal-actions">
               <text class="act" @click="closeImageDialog">取消</text>
             </view>
           </block>
+        </view>
+      </view>
+      <!-- 颜色弹层：7 档选一（与字号弹层同构；语义名 + 类名 hint） -->
+      <view v-if="colorOpen" class="modal-mask" @click.self="colorOpen = false">
+        <view class="modal">
+          <view class="modal-tabs">
+            <text class="modal-tab modal-tab-on">选择颜色</text>
+          </view>
+          <view class="size-row">
+            <view v-for="c in COLOR_BUTTONS" :key="c.key" class="tool size-opt" :class="c.key" @click="applyColor(c)">
+              <text :class="c.key">{{ c.label }}</text>
+              <text class="hint">{{ c.hint }}</text>
+            </view>
+          </view>
+          <view class="modal-actions">
+            <text class="act" @click="colorOpen = false">取消</text>
+          </view>
         </view>
       </view>
       <!-- 字号弹层：三档选一（册子 #83 §4.3） -->
@@ -239,6 +251,8 @@ const extText = ref('');
 const intQuery = ref('');
 const intItems = ref<ItemSearchRow[]>([]);
 
+/** 颜色弹层（7 档收拢，与字号弹层同构） */
+const colorOpen = ref(false);
 /** 字号弹层 */
 const sizeOpen = ref(false);
 /** 图片对话框 */
@@ -252,6 +266,10 @@ const uploadAlt = ref('');
 const uploadPreview = ref('');
 const blobQuery = ref('');
 const blobRows = ref<BlobSearchRow[]>([]);
+/** 图库分页：偏移随「加载更多」前进；搜索词/开弹窗/上传/删除刷新一律归 0 并替换 */
+const blobOffset = ref(0);
+/** 上次返回条数 === limit(50) 时才显示「加载更多」 */
+const blobHasMore = ref(false);
 
 /** 正文编辑：工具栏产出源文本标记；预览是只读派生，不落库（保存口径零改动） */
 const bodyRef = ref<{ $el?: Element } | null>(null);
@@ -308,6 +326,12 @@ function failToLedger(action: ToolbarAction) {
 function applySize(s: (typeof SIZE_OPTIONS)[number]) {
   sizeOpen.value = false;
   applyTool(s.action);
+}
+
+/** 颜色档位点选：包裹/夹位后关弹层（与字号同构） */
+function applyColor(c: (typeof COLOR_BUTTONS)[number]) {
+  colorOpen.value = false;
+  applyTool(c.action);
 }
 
 /** 在光标处插入任意 markdown：等价于空 before 的包裹动作（册子 #83 §4.1 统一路径） */
@@ -426,14 +450,35 @@ async function switchImageTab(tab: 'upload' | 'library') {
 async function refreshBlobs() {
   if (!editCtx) {
     blobRows.value = [];
+    blobHasMore.value = false;
     return;
   }
-  blobRows.value = await searchLocalBlobs({
+  // 任何刷新（搜索词变化 / 开弹窗 / 上传 / 删除）都归 0 并整表替换，不 append
+  blobOffset.value = 0;
+  const rows = await searchLocalBlobs({
     db: editCtx.db,
     ownerIdentityId: 'me',
     query: blobQuery.value,
     limit: 50,
+    offset: blobOffset.value,
   });
+  blobRows.value = rows;
+  blobHasMore.value = rows.length === 50;
+}
+
+/** 图库「加载更多」：offset 前进一页并 append 到现有行后 */
+async function loadMoreBlobs() {
+  if (!editCtx) return;
+  blobOffset.value += 50;
+  const rows = await searchLocalBlobs({
+    db: editCtx.db,
+    ownerIdentityId: 'me',
+    query: blobQuery.value,
+    limit: 50,
+    offset: blobOffset.value,
+  });
+  blobRows.value = [...blobRows.value, ...rows];
+  blobHasMore.value = rows.length === 50;
 }
 /** 上传新图 Tab：选文件 → 上传 → 记录 blob_id */
 async function pickAndUploadImage() {
@@ -646,8 +691,6 @@ async function submit() {
 .toolbar { display: flex; flex-wrap: wrap; margin-bottom: 6px; }
 .tool { padding: 4px 10px; margin: 0 6px 6px 0; border: 1px solid #dddddd; border-radius: 6px; color: #444444; font-size: 13px; }
 .tool-divider { width: 1px; margin: 0 4px 6px; background: #eeeeee; }
-.tool-color { display: flex; align-items: baseline; }
-.tool-note { margin-left: 3px; color: #999999; font-size: 10px; }
 .preview-label { display: block; margin: 10px 0 4px; color: #666666; font-size: 14px; }
 .preview { display: block; padding: 8px; border: 1px solid #f0f0f0; border-radius: 6px; font-size: 15px; line-height: 1.7; color: #333333; }
 
@@ -696,9 +739,9 @@ async function submit() {
 .modal-tab-on { color: #2b6cb0; border-bottom: 2px solid #2b6cb0; font-weight: 500; }
 .modal-scroll { max-height: 360px; margin-top: 8px; }
 .modal-row { padding: 10px 0; border-bottom: 1px solid #f5f5f5; display: flex; align-items: center; gap: 10px; }
-/* 图片库：3 列方图网格（册子 #82 §4.4） */
+/* 图片库：4 列方图网格（册子 #83）；gap 8px 保留，(100% - 3×8px) / 4 ≈ 23.5% */
 .blob-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.blob-cell { position: relative; width: calc((100% - 16px) / 3); }
+.blob-cell { position: relative; width: calc((100% - 24px) / 4); }
 .blob-cell .thumb { display: block; width: 100%; aspect-ratio: 1 / 1; border-radius: 6px; background: #f0f0f0; }
 .blob-cell .del-btn { position: absolute; top: 4px; right: 4px; padding: 0 5px; border-radius: 4px; background: rgba(255,255,255,0.85); color: #c53030; font-size: 12px; line-height: 18px; }
 .upload-preview { width: 100%; max-height: 40vh; border-radius: 8px; margin-bottom: 8px; }
@@ -796,9 +839,18 @@ export default {
       if (!cmd || typeof cmd.text !== 'string') return;
       const el = anchor();
       if (!el) return;
+      const owner = this.$ownerInstance;
+      if (owner && !this._writeProbed) {
+        this._writeProbed = true;
+        owner.callMethod('onBridgeProbe', { writeCalled: true, start: cmd.start, end: cmd.end, textLen: cmd.text.length });
+      }
       el.focus();
       el.value = cmd.text;
       el.setSelectionRange(cmd.start, cmd.end);
+      setTimeout(() => {
+        const e = anchor();
+        if (e && e.value.length === cmd.text.length) e.setSelectionRange(cmd.start, cmd.end);
+      }, 150);
     }
   }
 };

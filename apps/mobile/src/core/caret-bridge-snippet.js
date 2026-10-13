@@ -95,14 +95,24 @@ export default {
         owner.callMethod('onSelectionReport', { start: el.selectionStart, end: el.selectionEnd });
       }
     },
-    /** 写：直写原生节点绕开 model→DOM 防抖，光标随新文本一次落位 */
+    /** 写：直写原生节点绕开 model→DOM 防抖；首写经 onBridgeProbe 探测上报（验证 observer 触发链路），
+     * 150ms 后二次钉位（uni 组件 value 防抖回写会重置光标），长度校验防误钉 */
     writeCaret(cmd) {
       if (!cmd || typeof cmd.text !== 'string') return;
       const el = anchor();
       if (!el) return;
+      const owner = this.$ownerInstance;
+      if (owner && !this._writeProbed) {
+        this._writeProbed = true;
+        owner.callMethod('onBridgeProbe', { writeCalled: true, start: cmd.start, end: cmd.end, textLen: cmd.text.length });
+      }
       el.focus();
       el.value = cmd.text;
       el.setSelectionRange(cmd.start, cmd.end);
+      setTimeout(() => {
+        const e = anchor();
+        if (e && e.value.length === cmd.text.length) e.setSelectionRange(cmd.start, cmd.end);
+      }, 150);
     },
   },
 };
