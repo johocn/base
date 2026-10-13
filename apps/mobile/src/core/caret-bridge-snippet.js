@@ -1,28 +1,18 @@
 // @ts-nocheck
 /**
- * 正文光标桥 v3.2（renderjs，App 视图层；H5 走逻辑层 live DOM 路径，本桥在 H5 无副作用）。
+ * 光标桥 v3.3 内联代码（两页 <script module="caretBridge" lang="renderjs"> 的共享源）。
+ * 官方文档定案：renderjs「目前仅支持内联使用」——外部 src 在 App 端不加载（v3/v3.1/v3.2 失效根因）；
+ * callMethod 仅支持逻辑层「选项式 methods」——回调挂两页的普通 <script> Options 块。
+ * 构建时把本文件内容贴入两页的内联 script 块（两页同构拷贝，册子既定口径）。
  *
- * 结构回归 0.20.7 线上验证过的形态（v3/v3.1 失效根因）：
- *   ① 外部文件 src 必须写「项目根相对」：src="src/core/caret-bridge.renderjs.js"
- *      （写成 ../../core/ 会被解析到项目外 → 模块不加载 → 一切空转）；
- *   ② :prop/:change:prop 挂在包裹 textarea 的 <view> 上（uni 内置组件不透传 prop）；
- *   ③ 写侧直写 el.value（绕开组件 model→DOM 的 100ms 防抖，光标不被重置到末尾）。
- *
- * 读侧在 0.20.7 三事件（focus/blur/input）之上叠加 v3.1 轮询 + touchend 推送：
- *   - 轮询 200ms：非空选区变化即上报（select 事件在 App 端不可靠，轮询不依赖事件触发）；
- *   - 模块内缓存 lastSel：blur/塌陷不清（点工具栏引发的失焦不能毁掉选区缓存）；
- *   - 全局 touchend（capture）：触点在 textarea 外（工具栏）→ 主动重推缓存（幂等防丢）；
- *     触点在 textarea 内且选区塌陷（用户点正文取消/重新定位）→ 清缓存并清台账。
- * 清台账唯一入口是「用户触碰 textarea」，工具栏路径永不触发。
- *
- * 逻辑层契约（两页一致）：
- *   <view :prop="caretCmd" :change:prop="caretBridge.writeCaret">
- *     <textarea id="body-caret-anchor" … />
- *   </view>
- *   defineExpose({ onSelectionReport })
+ * 结构要点（0.20.7 H5 验证 + 官方文档）：
+ * - :prop/:change:prop 挂在包裹 textarea 的 <view> 上（uni 内置组件不透传 prop）；
+ * - 写侧直写 el.value（绕开组件 model→DOM 的 100ms 防抖，光标不被重置到末尾）；
+ * - 读侧 = 三事件（focus/blur/input）+ 200ms 轮询 + touchend 分向推送；
+ *   blur/塌陷不清缓存（点工具栏引发的失焦不能毁掉选区），清账唯一入口是用户触碰 textarea。
+ * - mounted 里一次性环境探测（onBridgeProbe 上报）：真机定案 DOM 可达性，修复后可移除。
  */
 
-/** 正文 textarea 的真实 DOM 节点：id 落在组件根上，内层才是原生 textarea */
 function anchor() {
   const root = document.getElementById('body-caret-anchor');
   return root ? root.querySelector('textarea') : null;
@@ -30,7 +20,26 @@ function anchor() {
 
 export default {
   mounted() {
-    // 视图层挂载可能早于组件渲染出 textarea，短轮询直到命中（2 秒内），超时静默放弃
+    const probe = () => {
+      try {
+        const root = document.getElementById('body-caret-anchor');
+        const el = root ? root.querySelector('textarea') : null;
+        const info = {
+          rootFound: !!root,
+          rootTag: root ? root.tagName : '',
+          elFound: !!el,
+          elTag: el ? el.tagName : '',
+          valueLen: el ? el.value.length : -1,
+          selType: el ? typeof el.selectionStart : 'none',
+        };
+        const owner = this.$ownerInstance;
+        if (owner) owner.callMethod('onBridgeProbe', info);
+      } catch (e) {
+        const owner = this.$ownerInstance;
+        if (owner) owner.callMethod('onBridgeProbe', { probeError: String(e) });
+      }
+    };
+    // 视图层挂载可能早于组件渲染出 textarea：命中或 2 秒超时后各探测一次
     let tries = 0;
     let lastKey = '';
     let lastSel = null;
@@ -38,9 +47,14 @@ export default {
       const el = anchor();
       if (!el) {
         tries += 1;
-        if (tries < 40) setTimeout(bind, 50);
+        if (tries < 40) {
+          setTimeout(bind, 50);
+        } else {
+          probe();
+        }
         return;
       }
+      probe();
       el.addEventListener('focus', () => this.report(el));
       el.addEventListener('blur', () => this.report(el));
       el.addEventListener('input', () => this.report(el));
@@ -71,10 +85,6 @@ export default {
       document.addEventListener('touchend', this._onTouch, true);
     };
     bind();
-  },
-  beforeDestroy() {
-    clearInterval(this._poll);
-    if (this._onTouch) document.removeEventListener('touchend', this._onTouch, true);
   },
   methods: {
     /** 读：非空选区上报入台账；塌陷不报（清账只归 touchend 的用户触碰判定管） */

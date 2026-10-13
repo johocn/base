@@ -132,6 +132,7 @@
         />
       </view>
       <text class="hint">正文以 Markdown 源文本保存（槽位 attr.body_md），与文章同口径；支持 [文字]{.c-red} 变色</text>
+      <text v-if="probeInfo" class="probe">{{ probeInfo }}</text>
       <text class="preview-label">预览</text>
       <rich-text :nodes="previewHtml" class="preview" />
     </view>
@@ -259,9 +260,28 @@
   </view>
 </template>
 
+<script lang="ts">
+// Options 块：renderjs callMethod 官方仅支持「选项式 methods」，故桥回调挂这里；
+// 状态本体在 core/caret-report（与 script setup 共享同一 ref 实例）
+import { selLedger as selLedgerStore, probeInfo as probeStore } from '../../core/caret-report';
+
+export default {
+  methods: {
+    onSelectionReport(c: { start: number; end: number } | null) {
+      selLedgerStore.value = c;
+    },
+    onBridgeProbe(info: Record<string, unknown>) {
+      probeStore.value = JSON.stringify(info);
+    },
+  },
+};
+</script>
+
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
+
+import { selLedger, probeInfo } from '../../core/caret-report';
 
 import { BADGE_WORDS, BADGE_WORDS_AUTHOR, DIFFICULTY_BASIC, DIFFICULTY_CHOICES, DIFFICULTY_INTRO, TITLE_COLORS } from '../../core/attrs';
 import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier-pick';
@@ -334,8 +354,6 @@ const bodyFocus = ref(false);
 const caretLedger = ref<{ start: number; end: number } | null>(null);
 /** App 端 renderjs 写命令：{start,end,text} 对象直传（0.20.7 验证口径），每次换新对象触发 observer */
 const caretCmd = ref<{ start: number; end: number; text: string } | null>(null);
-/** App 选区台账（renderjs DOM 上报，v3）：非空选区入账；touchend 塌陷报 null 清账 */
-const selLedger = ref<{ start: number; end: number } | null>(null);
 /** uni 编译器注入的 renderjs 模块实例：模板 :change:prop 按 module 名匹配；占位仅供 vue-tsc */
 const caretBridge: { writeCaret: (cmd: unknown) => void } = { writeCaret: () => {} };
 const previewHtml = computed(() => renderMarkdown(resolveBlobRefsInMd(form.value.bodyMd, ctx?.opts.nodeBaseUrl ?? '')));
@@ -373,12 +391,6 @@ function applyTool(action: ToolbarAction) {
   }
   failToLedger(action);
 }
-
-/** renderjs 选区上报入口（App 视图层跨层回调）：非空选区入账，null = touchend 塌陷清账 */
-function onSelectionReport(c: { start: number; end: number } | null) {
-  selLedger.value = c;
-}
-defineExpose({ onSelectionReport });
 
 /** 回落台账单点，无台账再落正文末尾 */
 function failToLedger(action: ToolbarAction) {
@@ -899,8 +911,100 @@ async function submit() {
 .act { color: #666; font-size: 14px; padding: 6px 12px; }
 .act-primary { color: #2b6cb0; font-weight: 500; }
 .act-disabled { color: #ccc; }
+.probe { font-size: 11px; color: #b7791f; word-break: break-all; }
 </style>
 
-<!-- renderjs 桥：App 视图层声明 caretBridge（uni 编译器改写为 <renderjs>，vue-tsc 不参与运行）；
-     src 必须项目根相对（../../core/ 会解析到项目外导致模块不加载，v3/v3.1 失效根因） -->
-<script module="caretBridge" lang="renderjs" src="src/core/caret-bridge.renderjs.js"></script>
+<!-- renderjs 桥（内联，官方口径「仅支持内联使用」——外部 src 在 App 端不加载）：
+     结构=0.20.7 H5 验证形态 + 轮询读侧；写=直写 el.value 绕 100ms 防抖；源码共享于 core/caret-bridge-snippet.js -->
+<script module="caretBridge" lang="renderjs">
+function anchor() {
+  const root = document.getElementById('body-caret-anchor');
+  return root ? root.querySelector('textarea') : null;
+}
+
+export default {
+  mounted() {
+    const probe = () => {
+      try {
+        const root = document.getElementById('body-caret-anchor');
+        const el = root ? root.querySelector('textarea') : null;
+        const info = {
+          rootFound: !!root,
+          rootTag: root ? root.tagName : '',
+          elFound: !!el,
+          elTag: el ? el.tagName : '',
+          valueLen: el ? el.value.length : -1,
+          selType: el ? typeof el.selectionStart : 'none'
+        };
+        const owner = this.$ownerInstance;
+        if (owner) owner.callMethod('onBridgeProbe', info);
+      } catch (e) {
+        const owner = this.$ownerInstance;
+        if (owner) owner.callMethod('onBridgeProbe', { probeError: String(e) });
+      }
+    };
+    let tries = 0;
+    let lastKey = '';
+    let lastSel = null;
+    const bind = () => {
+      const el = anchor();
+      if (!el) {
+        tries += 1;
+        if (tries < 40) {
+          setTimeout(bind, 50);
+        } else {
+          probe();
+        }
+        return;
+      }
+      probe();
+      el.addEventListener('focus', () => this.report(el));
+      el.addEventListener('blur', () => this.report(el));
+      el.addEventListener('input', () => this.report(el));
+      this._poll = setInterval(() => {
+        const e = anchor();
+        const owner = this.$ownerInstance;
+        if (!e || !owner) return;
+        const key = e.selectionStart + ':' + e.selectionEnd;
+        if (key === lastKey) return;
+        lastKey = key;
+        if (e.selectionStart !== e.selectionEnd) {
+          lastSel = { start: e.selectionStart, end: e.selectionEnd };
+          owner.callMethod('onSelectionReport', lastSel);
+        }
+      }, 200);
+      this._onTouch = (ev) => {
+        const e = anchor();
+        const owner = this.$ownerInstance;
+        if (!e || !owner) return;
+        const inArea = ev.target === e || e.contains(ev.target);
+        if (!inArea && lastSel) {
+          owner.callMethod('onSelectionReport', lastSel);
+        } else if (inArea && e.selectionStart === e.selectionEnd && lastSel) {
+          lastSel = null;
+          owner.callMethod('onSelectionReport', null);
+        }
+      };
+      document.addEventListener('touchend', this._onTouch, true);
+    };
+    bind();
+  },
+  methods: {
+    report(el) {
+      const owner = this.$ownerInstance;
+      if (!owner) return;
+      if (el.selectionStart !== el.selectionEnd) {
+        owner.callMethod('onSelectionReport', { start: el.selectionStart, end: el.selectionEnd });
+      }
+    },
+    writeCaret(cmd) {
+      if (!cmd || typeof cmd.text !== 'string') return;
+      const el = anchor();
+      if (!el) return;
+      el.focus();
+      el.value = cmd.text;
+      el.setSelectionRange(cmd.start, cmd.end);
+    }
+  }
+};
+</script>
