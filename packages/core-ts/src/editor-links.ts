@@ -133,10 +133,13 @@ export async function searchLocalBlobs(opts: {
   ownerIdentityId?: string;
   query?: string;
   limit?: number;
+  /** 分页偏移（默认 0）：图库「加载更多」按上次返回条数累加传入 */
+  offset?: number;
   /** 'image'（默认，只显示图片）| 'all'（全部类型） */
   filter?: 'image' | 'all';
 }): Promise<BlobSearchRow[]> {
   const limit = opts.limit ?? 50;
+  const offset = opts.offset ?? 0;
   const filter = opts.filter ?? 'image';
   const where: string[] = [];
   const params: unknown[] = [];
@@ -165,8 +168,8 @@ export async function searchLocalBlobs(opts: {
      LEFT JOIN blob_references ref ON ref.blob_id = b.blob_id` +
     (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '') +
     ` GROUP BY b.blob_id` +
-    ` ORDER BY b.verified_at DESC LIMIT ?`;
-  params.push(limit);
+    ` ORDER BY b.verified_at DESC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
 
   const rows = await opts.db.select(sql, params);
   return rows.map((r) => ({

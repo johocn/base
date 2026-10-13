@@ -166,8 +166,8 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
     expect(db.lastSql).toContain('ORDER BY b.verified_at DESC');
     expect(db.lastSql).toContain('GROUP BY b.blob_id');
     expect(db.lastSql).toContain('LEFT JOIN blob_references');
-    // query 三搜 original_name/item_id/owner_id 各 1 param，最后 limit 共 4
-    expect(db.lastParams).toEqual(['%rust%', '%rust%', '%rust%', 10]);
+    // query 三搜 original_name/item_id/owner_id 各 1 param，尾部 limit+offset 共 5
+    expect(db.lastParams).toEqual(['%rust%', '%rust%', '%rust%', 10, 0]);
 
     expect(rows.length).toBe(2);
     expect(rows[0]!.blobId).toBe('b1');
@@ -193,11 +193,11 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
     expect(db.lastSql).not.toContain('original_name LIKE');
   });
 
-  it('limit 默认 50', async () => {
+  it('limit 默认 50（offset 默认 0）', async () => {
     const db = new FakeDb();
     db.setResponse('FROM blob_index', []);
     await searchLocalBlobs({ db });
-    expect(db.lastParams?.[db.lastParams.length - 1]).toBe(50);
+    expect(db.lastParams?.slice(-2)).toEqual([50, 0]);
   });
 
   it("filter='all' 时不加 content_type 条件", async () => {
@@ -216,5 +216,19 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
     const rows = await searchLocalBlobs({ db });
     expect(db.lastSql).toContain('b.blob_id, b.owner_id, b.item_id, b.size, b.verified_at, b.original_name, b.content_type, b.path,');
     expect(rows[0]!.path).toBe('/data/blobs/b1');
+  });
+
+  it('offset 分页：SQL 尾 LIMIT ? OFFSET ?，params 依次 limit/offset，行照常映射', async () => {
+    const db = new FakeDb();
+    db.setResponse('FROM blob_index', [
+      { blob_id: 'b51', item_id: 'x', size: 100, verified_at: '2026-10-03', original_name: 'next.png', content_type: 'image/png', path: '' },
+    ]);
+    const rows = await searchLocalBlobs({ db, offset: 50 });
+    expect(db.lastSql).toContain('ORDER BY b.verified_at DESC LIMIT ? OFFSET ?');
+    expect(db.lastParams?.[db.lastParams.length - 2]).toBe(50);
+    expect(db.lastParams?.[db.lastParams.length - 1]).toBe(50);
+    expect(rows).toEqual([
+      { blobId: 'b51', name: 'next.png', contentType: 'image/png', path: '', size: 100, createdAt: expect.any(Number), refs: 0 },
+    ]);
   });
 });
