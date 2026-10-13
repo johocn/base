@@ -236,8 +236,15 @@ function parseBracket(s: string): Parsed | null {
     if (end < 0) return null;
     const len = k + 1 + end + 1;
     const cls = rest.slice(2, end);
-    if (colorClasses.has(cls) || sizeClasses.has(cls)) {
-      return { html: '<span class="' + cls + '">' + inline(content) + '</span>', len };
+    // 多 class 组合：按空白拆段（trim → split → 过滤空串），剥掉每段自带的头点（{.a .b} 段式），
+    // 每段都须在色块/字号白名单内，join(' ') 保持用户书写顺序；任一段未知 → 整段字面量（与 Go 逐决策镜像）。
+    const parts = cls
+      .trim()
+      .split(/\s+/)
+      .filter((p) => p !== '')
+      .map((p) => (p.startsWith('.') ? p.slice(1) : p));
+    if (parts.length > 0 && parts.every((p) => colorClasses.has(p) || sizeClasses.has(p))) {
+      return { html: '<span class="' + parts.join(' ') + '">' + inline(content) + '</span>', len };
     }
     // 未知类名：整段按字面量原样输出，不产 span。
     return { html: '[' + escapeText(content) + ']' + escapeText(rest.slice(0, end + 1)), len };

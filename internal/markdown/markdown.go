@@ -258,8 +258,19 @@ func parseBracket(s string) (string, int, bool) {
 		}
 		n := closeIdx + 1 + end + 1
 		class := rest[2:end]
-		if colorClasses[class] || sizeClasses[class] {
-			return `<span class="` + class + `">` + inline(content) + "</span>", n, true
+		// 多 class 组合：strings.Fields 按空白拆段并滤空，剥掉每段自带的头点（{.a .b} 段式），
+		// 每段都须在色块/字号白名单内，join(" ") 保持用户书写顺序；任一段未知 → 整段字面量（与 TS 逐决策镜像）。
+		parts := strings.Fields(class)
+		allKnown := len(parts) > 0
+		for i := range parts {
+			parts[i] = strings.TrimPrefix(parts[i], ".")
+			if !colorClasses[parts[i]] && !sizeClasses[parts[i]] {
+				allKnown = false
+				break
+			}
+		}
+		if allKnown {
+			return `<span class="` + strings.Join(parts, " ") + `">` + inline(content) + "</span>", n, true
 		}
 		// 未知类名：整段按字面量原样输出，不产 span。
 		return "[" + escapeText(content) + "]" + escapeText(rest[:end+1]), n, true

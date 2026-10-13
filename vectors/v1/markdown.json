@@ -230,6 +230,21 @@
       "name": "老数据纯文本等价",
       "src": "本课讲解 Markdown 渲染。\n\n请按顺序阅读。",
       "html": "<p>本课讲解 Markdown 渲染。</p><p>请按顺序阅读。</p>"
+    },
+    {
+      "name": "多 class 组合 色块+字号",
+      "src": "[文字]{.c-red .fs-lg}",
+      "html": "<p><span class=\"c-red fs-lg\">文字</span></p>"
+    },
+    {
+      "name": "多 class 含未知段整段字面量",
+      "src": "[文字]{.c-red .bogus}",
+      "html": "<p>[文字]{.c-red .bogus}</p>"
+    },
+    {
+      "name": "单 class 字号回归 fs-xl",
+      "src": "[文字]{.fs-xl}",
+      "html": "<p><span class=\"fs-xl\">文字</span></p>"
     }
   ]
 }
