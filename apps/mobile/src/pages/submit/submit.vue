@@ -125,18 +125,18 @@
           </view>
         </view>
       </view>
-      <textarea
-        id="body-caret-anchor"
-        ref="bodyRef"
-        v-model="bodyMd"
-        class="area"
-        placeholder="正文内容"
-        :focus="bodyFocus"
-        :prop="caretCmd"
-        :change:prop="caretBridge.writeCaret"
-        @input="onBodyInput"
-        @blur="onBodyBlur"
-      />
+      <view :prop="caretCmd" :change:prop="caretBridge.writeCaret">
+        <textarea
+          id="body-caret-anchor"
+          ref="bodyRef"
+          v-model="bodyMd"
+          class="area"
+          placeholder="正文内容"
+          :focus="bodyFocus"
+          @input="onBodyInput"
+          @blur="onBodyBlur"
+        />
+      </view>
       <text class="hint">正文以 Markdown 源文本保存，与课时同口径；支持 [文字]{.c-red} 变色</text>
       <text class="preview-label">预览</text>
       <rich-text :nodes="previewHtml" class="preview" />
@@ -238,9 +238,8 @@ const bodyRef = ref<{ $el?: Element } | null>(null);
 const bodyFocus = ref(false);
 /** 光标台账：单点 = @input/@blur 的 detail.cursor（组件层同步事件）；工具动作后 = 变换产出的目标光标/选区 */
 const caretLedger = ref<{ start: number; end: number } | null>(null);
-/** App 端 renderjs 写命令：{seq,start,end,len}——seq 递增保证连续同值也触发 observer；'' = 不干预 */
-const caretCmd = ref('');
-let caretSeq = 0;
+/** App 端 renderjs 写命令：{start,end,text} 对象直传（0.20.7 验证口径），每次换新对象触发 observer */
+const caretCmd = ref<{ start: number; end: number; text: string } | null>(null);
 /** App 选区台账（renderjs DOM 上报，v3）：非空选区入账；touchend 塌陷报 null 清账 */
 const selLedger = ref<{ start: number; end: number } | null>(null);
 /** uni 编译器注入的 renderjs 模块实例：模板 :change:prop 按 module 名匹配；占位仅供 vue-tsc */
@@ -320,7 +319,7 @@ function runToolbar(start: number, end: number, source: 'live' | 'ledger' | 'fal
  * len 门控等 v-model flush 完成、rAF 重试防时序竞争（caret-bridge v3）；H5 只走 DOM 双拍（久经验证） */
 function writeCaret(start: number, end: number) {
   // #ifdef APP-PLUS
-  caretCmd.value = JSON.stringify({ seq: ++caretSeq, start, end, len: bodyMd.value.length });
+  caretCmd.value = { start, end, text: bodyMd.value };
   // #endif
   setTimeout(() => {
     const el = bodyTextarea();
@@ -697,5 +696,6 @@ async function submit() {
 .act-disabled { color: #ccc; }
 </style>
 
-<!-- renderjs 桥：App 视图层声明 caretBridge（uni 编译器改写为 <renderjs>，vue-tsc 不参与运行） -->
-<script module="caretBridge" lang="renderjs" src="../../core/caret-bridge.renderjs.js"></script>
+<!-- renderjs 桥：App 视图层声明 caretBridge（uni 编译器改写为 <renderjs>，vue-tsc 不参与运行）；
+     src 必须项目根相对（../../core/ 会解析到项目外导致模块不加载，v3/v3.1 失效根因） -->
+<script module="caretBridge" lang="renderjs" src="src/core/caret-bridge.renderjs.js"></script>
