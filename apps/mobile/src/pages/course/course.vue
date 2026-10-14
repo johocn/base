@@ -1,106 +1,26 @@
 <template>
-  <view class="wrap">
-    <view class="bar">
-      <text class="title">课程</text>
-      <button size="mini" @click="createCourse">新建课程</button>
-      <button size="mini" @click="publishArticle">发表文章</button>
-      <button size="mini" :disabled="busy || syncBlocked" @click="doSync">{{ busy ? '同步中…' : '同步' }}</button>
+  <view class="page">
+    <view class="hero">
+      <text class="hero-title">base 学习</text>
     </view>
-    <view class="searchbox" @click="openSearch">
-      <text class="searchtext">搜索标题与正文</text>
+    <input class="search" placeholder="搜索课程与文章" :value="keyword" @input="onSearch" />
+    <!-- B 宫格区：2×2（册子 §3.2）；tabBar 页走 switchTab -->
+    <view class="grid">
+      <view class="cell" @click="go('/pages/course/course')"><text class="cell-ico">📚</text><text class="cell-tx">学课程</text></view>
+      <view class="cell" @click="go('/pages/search/search')"><text class="cell-ico">📰</text><text class="cell-tx">看文章</text></view>
+      <view class="cell" @click="go('/pages/submit/submit')"><text class="cell-ico">✍️</text><text class="cell-tx">去投稿</text></view>
+      <view class="cell" @click="go('/pages/mine/mine')"><text class="cell-ico">👤</text><text class="cell-tx">我的</text></view>
     </view>
-    <view class="sec">
-      <text class="sec-title">我创建的（{{ myCreated.length }}）</text>
-      <text v-if="myCreated.length === 0" class="hint">还没有我创建的内容</text>
-      <view v-for="row in myCreated" :key="row.itemId" class="item" @click="openMyCreated(row)">
-        <text class="item-title">{{ typeLabel(row.type) }} · {{ row.title }}</text>
-        <text class="meta" :style="`color:${statusColor(row.state)}`">{{ row.statusLabel }}</text>
-        <text v-if="categoryHint(row.itemId) !== ''" class="hint">{{ categoryHint(row.itemId) }}</text>
-        <text v-if="row.reason !== ''" class="reason">{{ row.reason }}</text>
-        <text v-if="canRemoveMyCreated(row)" class="act" @click.stop="removeMyCreated(row)">删除</text>
+    <!-- A 大卡瀑布区：最近更新（课程/文章混合） -->
+    <view class="feed">
+      <text class="feed-head">最近更新</text>
+      <text v-if="rows.length === 0" class="feed-hint">{{ keyword.trim() === '' ? '还没有内容' : '没搜到' }}</text>
+      <view class="card" v-for="row in rows" :key="row.itemId" @click="open(row)">
+        <text class="card-title">{{ row.title }}</text>
+        <text class="card-meta">{{ row.meta }}</text>
       </view>
+      <text v-if="error" class="feed-error">{{ error }}</text>
     </view>
-    <text v-if="tip" class="tip">{{ tip }}</text>
-    <text v-if="error" class="error">{{ error }}</text>
-    <text v-if="syncBlocked" class="error">本地文件不可写，无法同步（设置 → 基座自检 可看原因）</text>
-    <text v-if="total === 0 && !error" class="hint">还没有内容，点「同步」从节点拉取。</text>
-    <block v-if="groups.length > 0">
-      <block v-for="g in groups" :key="g.slug">
-        <text class="group group-cat" @click="toggle(g.slug)">
-          {{ collapsed[g.slug] ? '▸ ' : '▾ ' }}{{ groupTitle(g) }}<text v-if="groupPending(g)" class="term-badge">待票选</text>
-        </text>
-        <block v-if="!collapsed[g.slug]">
-          <view v-for="it in g.courses" :key="it.itemId" class="item" :class="{ 'course-card': !!courseCover(it.itemId) }" @click="openCourse(it.itemId)">
-            <image v-if="courseCover(it.itemId)" :src="courseCover(it.itemId)" mode="aspectFill" class="course-cover" />
-            <view class="course-content">
-              <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-              <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-                <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-              </view>
-              <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-              <view v-if="completionPercent(it.itemId)" class="completion-bar">
-                <view class="progress-track">
-                  <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
-                </view>
-                <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
-              </view>
-            </view>
-          </view>
-        </block>
-      </block>
-      <text v-if="unclassified.length > 0" class="group">未归类课程</text>
-      <view v-for="it in unclassified" :key="it.itemId" class="item" :class="{ 'course-card': !!courseCover(it.itemId) }" @click="openCourse(it.itemId)">
-        <image v-if="courseCover(it.itemId)" :src="courseCover(it.itemId)" mode="aspectFill" class="course-cover" />
-        <view class="course-content">
-          <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-          <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-            <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-          </view>
-          <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-          <view v-if="completionPercent(it.itemId)" class="completion-bar">
-            <view class="progress-track">
-              <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
-            </view>
-            <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
-          </view>
-        </view>
-      </view>
-      <text v-if="standalone.length > 0" class="group">独立内容</text>
-      <view v-for="it in standalone" :key="it.itemId" class="item" @click="openStandalone(it)">
-        <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-        <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-          <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-        </view>
-        <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-      </view>
-    </block>
-    <block v-else>
-      <text v-if="courses.length > 0" class="group">课程</text>
-      <view v-for="it in courses" :key="it.itemId" class="item" :class="{ 'course-card': !!courseCover(it.itemId) }" @click="openCourse(it.itemId)">
-        <image v-if="courseCover(it.itemId)" :src="courseCover(it.itemId)" mode="aspectFill" class="course-cover" />
-        <view class="course-content">
-          <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-          <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-            <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-          </view>
-          <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-          <view v-if="completionPercent(it.itemId)" class="completion-bar">
-            <view class="progress-track">
-              <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
-            </view>
-            <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
-          </view>
-        </view>
-      </view>
-      <text v-if="standalone.length > 0" class="group">未归类</text>
-      <view v-for="it in standalone" :key="it.itemId" class="item" @click="openStandalone(it)">
-        <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-        <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-          <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-        </view>
-        <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-      </view>
-    </block>
   </view>
 </template>
 
@@ -360,6 +280,66 @@ function openCourse(itemId: string) {
   uni.navigateTo({ url: `/pages/course/detail?courseId=${encodeURIComponent(itemId)}` });
 }
 
+/** 首页搜索关键字：本地过滤「最近更新」大卡流（册子 §3.2 大搜索框） */
+const keyword = ref('');
+
+/** 大卡流行视图：大字标题 + 标注字 meta（类型 · 更新日期） */
+interface FeedRow {
+  itemId: string;
+  title: string;
+  meta: string;
+  kind: string;
+  updatedAt: string;
+}
+
+const FEED_LABEL: Record<string, string> = { course: '课程', article: '文章', quiz: '题库' };
+
+/** 「最近更新」大卡流（册子 §3.2 A 瀑布区）：课程 ∪ 独立内容，updatedAt 倒序，关键字本地过滤。 */
+const rows = computed<FeedRow[]>(() => {
+  const kw = keyword.value.trim().toLowerCase();
+  const all: FeedRow[] = [...courses.value, ...standalone.value].map((it) => ({
+    itemId: it.itemId,
+    title: it.title || it.itemId,
+    kind: it.type,
+    updatedAt: it.updatedAt || '',
+    meta: `${FEED_LABEL[it.type] ?? it.type} · ${(it.updatedAt || '').slice(0, 10)}`,
+  }));
+  const filtered =
+    kw === '' ? all : all.filter((r) => r.title.toLowerCase().includes(kw) || r.itemId.toLowerCase().includes(kw));
+  return filtered.sort((a, b) =>
+    a.updatedAt === b.updatedAt ? (a.itemId < b.itemId ? -1 : 1) : a.updatedAt < b.updatedAt ? 1 : -1,
+  );
+});
+
+/** 宫格跳转：tabBar 页走 switchTab（tab 页不可 navigateTo），其余 navigateTo。 */
+const TAB_PATHS = new Set(['/pages/course/course', '/pages/circle/circle', '/pages/comment/comment', '/pages/mine/mine']);
+
+function go(url: string) {
+  if (TAB_PATHS.has(url)) {
+    uni.switchTab({ url });
+    return;
+  }
+  uni.navigateTo({ url });
+}
+
+function onSearch(e: Event) {
+  const detail = (e as { detail?: { value?: string } }).detail;
+  keyword.value = detail?.value ?? '';
+}
+
+/** 大卡点开：沿用既有详情跳转（课程→课程详情，题库→答题页，其余→文章页）。 */
+function open(row: FeedRow) {
+  if (row.kind === 'course') {
+    openCourse(row.itemId);
+    return;
+  }
+  if (row.kind === 'quiz') {
+    uni.navigateTo({ url: `/pages/quiz/quiz?itemId=${encodeURIComponent(row.itemId)}` });
+    return;
+  }
+  openArticle(row.itemId);
+}
+
 const TYPE_LABEL: Record<MyCreatedType, string> = { course: '课程', lesson: '课时', article: '文章', quiz: '题库' };
 
 function typeLabel(t: MyCreatedType): string {
@@ -407,45 +387,22 @@ onShow(() => {
 </script>
 
 <style>
-.wrap { padding: 16px; }
-.bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.title { font-size: 20px; font-weight: 600; }
-/* 课程卡片：仿 Discuz 版块条目 */
-.item { padding: 14px 14px; margin-bottom: 12px; background: #ffffff; border: 1px solid #edf2f7; border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-.item:active { background: #f7fafc; }
-/* 带封面的课程卡片：左图右文 flex */
-.item.course-card { padding: 12px; display: flex; gap: 12px; align-items: flex-start; }
-.course-cover { width: 80px; height: 60px; border-radius: 6px; flex-shrink: 0; background: #edf2f7; }
-.course-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.course-content .item-title { font-size: 15px; }
-.course-content .meta { margin-top: 2px; }
-.item-title { font-size: 16px; font-weight: 500; }
-.meta { display: block; color: #888888; font-size: 12px; }
-/* 进度条：完成度从文字改成可视化 */
-.completion-bar { display: flex; align-items: center; margin-top: 8px; gap: 8px; }
-.progress-track { flex: 1; height: 4px; background: #edf2f7; border-radius: 2px; overflow: hidden; }
-.progress-fill { height: 100%; background: #2b6cb0; border-radius: 2px; transition: width 0.3s ease; }
-.progress-fill.done { background: #2f855a; }
-.progress-text { font-size: 12px; color: #718096; min-width: 48px; text-align: right; }
-.progress-text.done { color: #2f855a; font-weight: 600; }
-.hint { color: #888888; }
-.tip { color: #2f855a; font-size: 13px; }
-.error { color: #c53030; font-size: 13px; }
-.searchbox { padding: 10px 12px; margin: 8px 0 12px; background: #f5f5f5; border-radius: 6px; }
-.searchtext { color: #999999; font-size: 14px; }
-.sec { margin-bottom: 18px; }
-.sec-title { display: block; font-size: 15px; font-weight: 600; margin-bottom: 6px; }
-.reason { display: block; color: #c53030; font-size: 13px; }
-.act { display: inline-block; color: #2b6cb0; font-size: 14px; margin-top: 4px; }
-.group { display: block; margin: 16px 0 4px; color: #888888; font-size: 13px; }
-.group-cat { color: #2b6cb0; }
-.term-badge { display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 6px; background: #edf2f7; color: #718096; font-size: 11px; }
-.chips { display: flex; flex-wrap: wrap; margin-top: 4px; }
-.badge { display: inline-block; font-size: 12px; color: #666666; border: 1px solid #dddddd; border-radius: 10px; padding: 0 8px; margin-right: 6px; }
-.c-red { color: #C53030; }
-.c-orange { color: #B7791F; }
-.c-green { color: #2F855A; }
-.c-blue { color: #2B6CB0; }
-.c-purple { color: #6B46C1; }
-.c-gray { color: #718096; }
+/* 首页适老重排（册子 §3.2 A+B 融合）：字号全部引用全局字阶令牌（#84） */
+.page { padding-bottom: 32px; }
+.hero { padding: 16px 16px 0; }
+.hero-title { font-size: var(--fs-title); font-weight: 600; }
+.search { height: 48px; border-radius: 24px; background: #fff; border: 1px solid #d9e1ea; padding: 0 20px; font-size: var(--fs-body); margin: 12px 16px; }
+.grid { display: flex; flex-wrap: wrap; padding: 0 8px; }
+.cell { width: 50%; box-sizing: border-box; padding: 8px; min-height: 96px; }
+.cell { background: #fff; border: 1px solid #d9e1ea; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+.cell:active { background: #f7fafc; }
+.cell-ico { font-size: var(--fs-title); }
+.cell-tx { font-size: var(--fs-title); }
+.feed-head { font-size: var(--fs-title); font-weight: 600; display: block; padding: 16px 16px 8px; }
+.card { background: #fff; border: 1px solid #d9e1ea; border-radius: 12px; padding: 16px; margin: 8px 16px; min-height: 48px; display: flex; flex-direction: column; gap: 6px; }
+.card:active { background: #f7fafc; }
+.card-title { font-size: var(--fs-body); font-weight: 500; }
+.card-meta { font-size: var(--fs-annotate); color: #64748b; }
+.feed-hint { display: block; font-size: var(--fs-annotate); color: #64748b; padding: 8px 16px; }
+.feed-error { display: block; font-size: var(--fs-annotate); color: #c53030; padding: 8px 16px; }
 </style>
