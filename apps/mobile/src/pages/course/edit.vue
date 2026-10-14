@@ -486,18 +486,18 @@ async function submit() {
 
 <style>
 .wrap { padding: 16px; }
-.title { display: block; font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+.title { display: block; font-size: var(--fs-title); font-weight: 600; margin-bottom: 6px; }
 .field { margin-bottom: 14px; }
 .section { margin-top: 18px; padding-top: 12px; border-top: 1px solid #eeeeee; }
 .shead { display: flex; justify-content: space-between; align-items: center; }
 .acts { display: flex; align-items: center; }
-.label { display: block; font-size: 14px; color: #666666; margin-bottom: 6px; }
-.hint { display: block; font-size: 12px; color: #999999; margin-top: 4px; }
-.sub { display: block; font-size: 11px; color: #aaaaaa; }
-.input { border: 1px solid #eeeeee; border-radius: 6px; padding: 8px; font-size: 14px; }
-.area-sm { border: 1px solid #eeeeee; border-radius: 6px; padding: 8px; width: 100%; height: 90px; font-size: 14px; }
+.label { display: block; font-size: var(--fs-body); color: #666666; margin-bottom: 6px; }
+.hint { display: block; font-size: var(--fs-annotate); color: #999999; margin-top: 4px; }
+.sub { display: block; font-size: var(--fs-annotate); color: #aaaaaa; }
+.input { border: 1px solid #eeeeee; border-radius: 6px; padding: 8px; font-size: var(--fs-body); }
+.area-sm { border: 1px solid #eeeeee; border-radius: 6px; padding: 8px; width: 100%; height: 90px; font-size: var(--fs-body); }
 .chips { display: flex; flex-wrap: wrap; }
-.chip { padding: 4px 14px; border: 1px solid #dddddd; border-radius: 14px; margin: 0 10px 6px 0; color: #666666; font-size: 13px; }
+.chip { padding: 4px 14px; border: 1px solid #dddddd; border-radius: 14px; margin: 0 10px 6px 0; color: #666666; font-size: var(--fs-annotate); }
 .chip-on { border-color: #2b6cb0; color: #2b6cb0; }
 .swatch { background: #fafafa; }
 .swatch-on { border-color: #2b6cb0; border-width: 2px; }
@@ -513,11 +513,11 @@ async function submit() {
 .card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 12px; }
 .row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f5f5f5; }
 .row-main { flex: 1; }
-.val { flex: 1; font-size: 14px; color: #333333; }
-.act { color: #2b6cb0; font-size: 13px; padding: 0 6px; }
-.del { color: #c53030; font-size: 13px; padding: 0 6px; }
-.add { display: block; color: #2b6cb0; font-size: 14px; padding: 6px 0; }
-.error { display: block; color: #c53030; font-size: 13px; margin: 8px 0; }
-.notice { display: block; color: #b7791f; font-size: 13px; margin: 8px 0; }
+.val { flex: 1; font-size: var(--fs-body); color: #333333; }
+.act { color: #2b6cb0; font-size: var(--fs-annotate); padding: 0 6px; }
+.del { color: #c53030; font-size: var(--fs-annotate); padding: 0 6px; }
+.add { display: block; color: #2b6cb0; font-size: var(--fs-body); padding: 6px 0; }
+.error { display: block; color: #c53030; font-size: var(--fs-annotate); margin: 8px 0; }
+.notice { display: block; color: #b7791f; font-size: var(--fs-annotate); margin: 8px 0; }
 .submit { margin-top: 16px; background: #2b6cb0; color: #ffffff; }
 </style>

@@ -121,20 +121,20 @@ onLoad(() => {
 <style>
 .wrap { padding: 16px; padding-bottom: 40px; }
 .bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.title { font-size: 20px; font-weight: 600; }
-.act { color: #2b6cb0; font-size: 14px; }
-.hint { display: block; color: #888888; font-size: 13px; }
-.warn { display: block; margin-bottom: 8px; color: #c05621; font-size: 13px; }
+.title { font-size: var(--fs-title); font-weight: 600; }
+.act { color: #2b6cb0; font-size: var(--fs-body); }
+.hint { display: block; color: #888888; font-size: var(--fs-annotate); }
+.warn { display: block; margin-bottom: 8px; color: #c05621; font-size: var(--fs-annotate); }
 .grp { margin-top: 16px; }
-.grp-name { display: block; color: #888888; font-size: 13px; margin-bottom: 4px; }
+.grp-name { display: block; color: #888888; font-size: var(--fs-annotate); margin-bottom: 4px; }
 .row { display: flex; padding: 8px 0; border-bottom: 1px solid #eeeeee; }
-.mark { width: 24px; font-size: 15px; }
+.mark { width: 24px; font-size: var(--fs-body); }
 .body { flex: 1; }
-.row-name { display: block; font-size: 15px; }
-.row-detail { display: block; color: #666666; font-size: 12px; margin-top: 2px; }
-.row-affects { display: block; color: #999999; font-size: 12px; margin-top: 2px; }
-.meta { display: block; margin-top: 16px; color: #666666; font-size: 12px; }
+.row-name { display: block; font-size: var(--fs-body); }
+.row-detail { display: block; color: #666666; font-size: var(--fs-annotate); margin-top: 2px; }
+.row-affects { display: block; color: #999999; font-size: var(--fs-annotate); margin-top: 2px; }
+.meta { display: block; margin-top: 16px; color: #666666; font-size: var(--fs-annotate); }
 .copy { margin-top: 16px; }
 .log { margin-top: 20px; }
-.log-body { white-space: pre-wrap; word-break: break-all; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 11px; color: #444444; }
+.log-body { white-space: pre-wrap; word-break: break-all; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: var(--fs-annotate); color: #444444; }
 </style>

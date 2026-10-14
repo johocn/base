@@ -193,15 +193,15 @@ function decodedId(raw: string): string {
 
 <style>
 .wrap { padding: 16px; }
-.progress { display: block; color: #888888; font-size: 13px; margin-bottom: 8px; }
-.q { display: block; font-size: 18px; font-weight: 600; margin-bottom: 16px; line-height: 1.6; }
+.progress { display: block; color: #888888; font-size: var(--fs-annotate); margin-bottom: 8px; }
+.q { display: block; font-size: var(--fs-title); font-weight: 600; margin-bottom: 16px; line-height: 1.6; }
 .opt { padding: 12px; border: 1px solid #dddddd; border-radius: 6px; margin-bottom: 10px; }
-.opt-text { font-size: 15px; }
+.opt-text { font-size: var(--fs-body); }
 .opt-right { border-color: #2f855a; background: #f0fff4; }
 .opt-wrong { border-color: #c53030; background: #fff5f5; }
-.explain { display: block; color: #666666; font-size: 14px; line-height: 1.7; margin: 12px 0; }
-.score { display: block; font-size: 20px; font-weight: 600; margin-bottom: 20px; }
+.explain { display: block; color: #666666; font-size: var(--fs-body); line-height: 1.7; margin: 12px 0; }
+.score { display: block; font-size: var(--fs-title); font-weight: 600; margin-bottom: 20px; }
 .next { margin-top: 8px; }
-.error { color: #c53030; font-size: 13px; }
-.edit-link { display: block; color: #2b6cb0; font-size: 14px; margin-bottom: 8px; }
+.error { color: #c53030; font-size: var(--fs-annotate); }
+.edit-link { display: block; color: #2b6cb0; font-size: var(--fs-body); margin-bottom: 8px; }
 </style>

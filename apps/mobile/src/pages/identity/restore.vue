@@ -133,18 +133,18 @@ async function doRestore(fn: () => Promise<void>) {
 
 <style>
 .wrap { padding: 16px; }
-.title { font-size: 20px; font-weight: 600; }
-.hint { display: block; color: #666666; font-size: 12px; margin-top: 4px; }
+.title { font-size: var(--fs-title); font-weight: 600; }
+.hint { display: block; color: #666666; font-size: var(--fs-annotate); margin-top: 4px; }
 .tabs { display: flex; margin-top: 14px; }
-.tab { padding: 6px 12px; border: 1px solid #dddddd; border-radius: 14px; margin-right: 8px; font-size: 13px; color: #666666; }
+.tab { padding: 6px 12px; border: 1px solid #dddddd; border-radius: 14px; margin-right: 8px; font-size: var(--fs-annotate); color: #666666; }
 .tab-on { border-color: #2b6cb0; color: #2b6cb0; }
 .section { margin-top: 14px; }
 .field { margin-top: 10px; }
-.label { display: block; color: #666666; font-size: 13px; margin-bottom: 4px; }
-.input { border: 1px solid #dddddd; border-radius: 6px; padding: 8px; font-size: 14px; width: 100%; }
-.area { border: 1px solid #dddddd; border-radius: 6px; padding: 8px; width: 100%; height: 140px; font-size: 12px; font-family: ui-monospace, monospace; word-break: break-all; }
+.label { display: block; color: #666666; font-size: var(--fs-annotate); margin-bottom: 4px; }
+.input { border: 1px solid #dddddd; border-radius: 6px; padding: 8px; font-size: var(--fs-body); width: 100%; }
+.area { border: 1px solid #dddddd; border-radius: 6px; padding: 8px; width: 100%; height: 140px; font-size: var(--fs-annotate); font-family: ui-monospace, monospace; word-break: break-all; }
 .submit { margin-top: 12px; background: #2b6cb0; color: #ffffff; }
 .submit[disabled] { background: #dddddd; color: #888888; }
-.tip { display: block; color: #2f855a; font-size: 13px; margin-top: 8px; }
-.err { display: block; color: #c53030; font-size: 13px; margin-top: 8px; }
+.tip { display: block; color: #2f855a; font-size: var(--fs-annotate); margin-top: 8px; }
+.err { display: block; color: #c53030; font-size: var(--fs-annotate); margin-top: 8px; }
 </style>

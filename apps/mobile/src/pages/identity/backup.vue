@@ -167,24 +167,24 @@ function hideBackup() {
 
 <style>
 .wrap { padding: 16px; }
-.title { font-size: 20px; font-weight: 600; }
-.hint { display: block; color: #666666; font-size: 12px; margin-top: 4px; }
+.title { font-size: var(--fs-title); font-weight: 600; }
+.hint { display: block; color: #666666; font-size: var(--fs-annotate); margin-top: 4px; }
 .section { margin-top: 20px; padding-top: 12px; border-top: 1px solid #eeeeee; }
-.shead { display: block; font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.shead { display: block; font-size: var(--fs-body); font-weight: 600; margin-bottom: 6px; }
 .row { display: flex; justify-content: space-between; padding: 4px 0; }
-.label { color: #666666; font-size: 13px; }
-.val { color: #333333; font-size: 13px; max-width: 60%; }
-.mono { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+.label { color: #666666; font-size: var(--fs-annotate); }
+.val { color: #333333; font-size: var(--fs-annotate); max-width: 60%; }
+.mono { font-family: ui-monospace, monospace; font-size: var(--fs-annotate); word-break: break-all; }
 .field { margin-top: 10px; }
-.input { border: 1px solid #dddddd; border-radius: 6px; padding: 8px; font-size: 14px; width: 100%; }
+.input { border: 1px solid #dddddd; border-radius: 6px; padding: 8px; font-size: var(--fs-body); width: 100%; }
 .submit { margin-top: 12px; background: #2b6cb0; color: #ffffff; }
 .submit[disabled] { background: #dddddd; color: #888888; }
-.tip { display: block; color: #2f855a; font-size: 13px; margin-top: 8px; }
-.err { display: block; color: #c53030; font-size: 13px; margin-top: 6px; }
+.tip { display: block; color: #2f855a; font-size: var(--fs-annotate); margin-top: 8px; }
+.err { display: block; color: #c53030; font-size: var(--fs-annotate); margin-top: 6px; }
 .ghost { margin-top: 8px; }
 .backup-box { margin-top: 10px; padding: 12px; background: #fafafa; border-radius: 6px; }
-.backup { display: block; word-break: break-all; font-size: 12px; background: #fff; padding: 8px; border-radius: 4px; border: 1px solid #eee; }
-.warn { display: block; color: #c53030; font-size: 12px; margin-top: 8px; }
-.copy { display: block; margin-top: 8px; color: #2b6cb0; font-size: 13px; text-align: right; }
-.link { display: block; color: #2b6cb0; font-size: 14px; margin-top: 4px; }
+.backup { display: block; word-break: break-all; font-size: var(--fs-annotate); background: #fff; padding: 8px; border-radius: 4px; border: 1px solid #eee; }
+.warn { display: block; color: #c53030; font-size: var(--fs-annotate); margin-top: 8px; }
+.copy { display: block; margin-top: 8px; color: #2b6cb0; font-size: var(--fs-annotate); text-align: right; }
+.link { display: block; color: #2b6cb0; font-size: var(--fs-body); margin-top: 4px; }
 </style>

@@ -183,15 +183,15 @@ onShow(() => {
 <style>
 .wrap { padding: 16px; }
 .bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.title { font-size: 20px; font-weight: 600; }
-.act { color: #2b6cb0; font-size: 14px; margin-right: 18px; }
+.title { font-size: var(--fs-title); font-weight: 600; }
+.act { color: #2b6cb0; font-size: var(--fs-body); margin-right: 18px; }
 .acts { display: flex; margin-bottom: 10px; }
 .card { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #eeeeee; }
 .card-avatar { width: 40px; height: 40px; margin-right: 10px; border-radius: 8px; }
 .card-body { flex: 1; }
-.t { display: block; font-size: 17px; }
-.meta { display: block; color: #888888; font-size: 12px; margin-top: 4px; }
-.empty { display: block; color: #999999; font-size: 13px; padding: 6px 0; line-height: 1.7; }
-.error { display: block; color: #c53030; font-size: 13px; margin-bottom: 8px; }
-.notice { display: block; color: #b7791f; font-size: 13px; margin-bottom: 8px; }
+.t { display: block; font-size: var(--fs-body); }
+.meta { display: block; color: #888888; font-size: var(--fs-annotate); margin-top: 4px; }
+.empty { display: block; color: #999999; font-size: var(--fs-annotate); padding: 6px 0; line-height: 1.7; }
+.error { display: block; color: #c53030; font-size: var(--fs-annotate); margin-bottom: 8px; }
+.notice { display: block; color: #b7791f; font-size: var(--fs-annotate); margin-bottom: 8px; }
 </style>

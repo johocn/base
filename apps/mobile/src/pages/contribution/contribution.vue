@@ -72,16 +72,16 @@ async function save() {
 
 <style>
 .wrap { padding: 16px; }
-.title { display: block; font-size: 20px; font-weight: 600; margin-bottom: 12px; }
-.sec-title { display: block; font-size: 15px; font-weight: 600; margin: 14px 0 8px; }
+.title { display: block; font-size: var(--fs-title); font-weight: 600; margin-bottom: 12px; }
+.sec-title { display: block; font-size: var(--fs-body); font-weight: 600; margin: 14px 0 8px; }
 .card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
 .me { border-color: #2b6cb0; }
-.label { display: block; font-size: 14px; color: #666666; margin-bottom: 6px; }
-.t { display: block; font-size: 15px; }
-.meta { display: block; color: #888888; font-size: 12px; margin-top: 2px; }
-.input { border: 1px solid #eeeeee; border-radius: 6px; padding: 8px; font-size: 14px; }
-.act { display: block; color: #2b6cb0; font-size: 14px; margin-top: 10px; }
-.empty { display: block; color: #999999; font-size: 13px; padding: 6px 0; }
-.error { display: block; color: #c53030; font-size: 13px; margin-bottom: 8px; }
-.notice { display: block; color: #b7791f; font-size: 13px; margin-bottom: 8px; }
+.label { display: block; font-size: var(--fs-body); color: #666666; margin-bottom: 6px; }
+.t { display: block; font-size: var(--fs-body); }
+.meta { display: block; color: #888888; font-size: var(--fs-annotate); margin-top: 2px; }
+.input { border: 1px solid #eeeeee; border-radius: 6px; padding: 8px; font-size: var(--fs-body); }
+.act { display: block; color: #2b6cb0; font-size: var(--fs-body); margin-top: 10px; }
+.empty { display: block; color: #999999; font-size: var(--fs-annotate); padding: 6px 0; }
+.error { display: block; color: #c53030; font-size: var(--fs-annotate); margin-bottom: 8px; }
+.notice { display: block; color: #b7791f; font-size: var(--fs-annotate); margin-bottom: 8px; }
 </style>

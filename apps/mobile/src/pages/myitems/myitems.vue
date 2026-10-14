@@ -102,17 +102,17 @@ async function remove(row: MySubmissionRow) {
 
 <style>
 .wrap { padding: 16px; }
-.title { display: block; font-size: 20px; font-weight: 600; margin-bottom: 12px; }
+.title { display: block; font-size: var(--fs-title); font-weight: 600; margin-bottom: 12px; }
 .sec { margin-bottom: 22px; }
-.sec-title { display: block; font-size: 15px; font-weight: 600; margin-bottom: 8px; }
-.note { display: block; font-size: 12px; color: #999999; margin-bottom: 8px; }
-.empty { display: block; color: #999999; font-size: 13px; padding: 6px 0; }
+.sec-title { display: block; font-size: var(--fs-body); font-weight: 600; margin-bottom: 8px; }
+.note { display: block; font-size: var(--fs-annotate); color: #999999; margin-bottom: 8px; }
+.empty { display: block; color: #999999; font-size: var(--fs-annotate); padding: 6px 0; }
 .card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
-.t { display: block; font-size: 15px; }
-.meta { display: block; color: #888888; font-size: 12px; }
-.reason { display: block; color: #c53030; font-size: 13px; margin-top: 4px; }
+.t { display: block; font-size: var(--fs-body); }
+.meta { display: block; color: #888888; font-size: var(--fs-annotate); }
+.reason { display: block; color: #c53030; font-size: var(--fs-annotate); margin-top: 4px; }
 .acts { display: flex; margin-top: 8px; }
-.act { margin-right: 18px; color: #2b6cb0; font-size: 14px; }
-.error { display: block; color: #c53030; font-size: 13px; margin-bottom: 8px; }
-.notice { display: block; color: #b7791f; font-size: 13px; margin-bottom: 8px; }
+.act { margin-right: 18px; color: #2b6cb0; font-size: var(--fs-body); }
+.error { display: block; color: #c53030; font-size: var(--fs-annotate); margin-bottom: 8px; }
+.notice { display: block; color: #b7791f; font-size: var(--fs-annotate); margin-bottom: 8px; }
 </style>
