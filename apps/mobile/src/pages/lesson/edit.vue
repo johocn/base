@@ -84,7 +84,7 @@
             <input v-model="blobQuery" class="input" placeholder="按文件名搜索" @input="refreshBlobs" />
             <scroll-view scroll-y class="modal-scroll" style="max-height:60vh" @scrolltolower="onBlobScrollLower">
               <view class="blob-grid">
-                <view v-for="b in blobRows" :key="b.blobId" class="blob-cell" @click="submitBlobImage(b)">
+                <view v-for="b in blobRows" :key="b.blobId" class="blob-cell" @click="submitBlobImage(b)" @longpress="onBlobLongpress(b)">
                   <image :src="thumbSrcOf(b)" class="thumb" mode="aspectFill" />
                 </view>
               </view>
@@ -301,6 +301,7 @@ import { listCarrierCandidates, type CarrierCandidate } from '../../core/carrier
 import { myIdentityId, roster } from '../../core/contribution';
 import { decodeSafe, loadContainerForm, mimeFromName, saveContainer, startNewLesson, uploadAndStoreBlob, type ContainerForm } from '../../core/course-edit';
 import {
+  buildBlobImage,
   composeBlobImg,
   composeExternalLink,
   composeInternalLink,
@@ -632,6 +633,22 @@ function submitBlobImage(b: BlobSearchRow) {
   const md = composeBlobImg(ctx.opts.nodeBaseUrl, b.blobId, 'image');
   insertMarkdownAtCursor(md);
   closeImageDialog();
+}
+/** 长按图库图片：预览大图 / 复制 markdown 引用（系统 ActionSheet，适老原生可用） */
+function onBlobLongpress(b: BlobSearchRow) {
+  uni.showActionSheet({
+    itemList: ['预览大图', '复制引用'],
+    success: (res) => {
+      if (res.tapIndex === 0) {
+        uni.previewImage({ urls: [thumbSrcOf(b)] });
+      } else if (res.tapIndex === 1) {
+        uni.setClipboardData({
+          data: buildBlobImage(b.blobId, b.name),
+          success: () => uni.showToast({ title: '引用已复制', icon: 'none' }),
+        });
+      }
+    },
+  });
 }
 
 /** 载体选择面板：关键词 + kind 过滤 + 候选列表 */
