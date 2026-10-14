@@ -390,6 +390,18 @@ export class MemoryRepo implements LocalRepo {
   async listCheckinDays(): Promise<CheckinDayRow[]> {
     return [...this.checkinDays.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
   }
+
+  notes = new Map<string, { noteId: string; title: string; bodyMd: string; tags: string[]; updatedAt: string }>(); // noteId -> row
+
+  async upsertNote(row: { noteId: string; title: string; bodyMd: string; tags: string[]; updatedAt: string }): Promise<void> {
+    this.notes.set(row.noteId, { ...row });
+  }
+  async listNotes(): Promise<Array<{ noteId: string; title: string; bodyMd: string; tags: string[]; updatedAt: string }>> {
+    return [...this.notes.values()];
+  }
+  async deleteNote(noteId: string): Promise<void> {
+    this.notes.delete(noteId);
+  }
 }
 
 /** 按 URL 精确应答；再按「同路径 + 同查询参数（解码后）」应答；最后忽略 query 兜底。 */

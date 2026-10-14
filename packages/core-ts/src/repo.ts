@@ -152,6 +152,12 @@ export interface LocalRepo {
   getProgress(itemId: string): Promise<ProgressRow | null>;
   /** 全部打卡日，按 `day ASC`（连续天数回溯用）。 */
   listCheckinDays(): Promise<CheckinDayRow[]>;
+  /** 私有笔记（#84 §4）：仅本机存储，写/覆盖一篇（同 note_id 覆盖全部字段）。 */
+  upsertNote(row: { noteId: string; title: string; bodyMd: string; tags: string[]; updatedAt: string }): Promise<void>;
+  /** 全部笔记行（tags 逗号串已还原为数组）；排序与过滤由 core/notes.ts 做。 */
+  listNotes(): Promise<Array<{ noteId: string; title: string; bodyMd: string; tags: string[]; updatedAt: string }>>;
+  /** 删一篇私有笔记；不存在无副作用。 */
+  deleteNote(noteId: string): Promise<void>;
 }
 
 /** 本地库建表语句（P0 只建用得到的 5 张表）。 */
@@ -215,6 +221,9 @@ export const SCHEMA_SQL: string[] = [
      day TEXT NOT NULL, updated_at INTEGER NOT NULL, event_id TEXT NOT NULL, dirty INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS checkin_days(
      day TEXT PRIMARY KEY, first_event_id TEXT NOT NULL, created_at INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS notes(
+     note_id TEXT PRIMARY KEY, title TEXT NOT NULL, body_md TEXT NOT NULL DEFAULT '',
+     tags TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)`,
 ];
 
 /**
@@ -850,6 +859,30 @@ export class SqlRepo implements LocalRepo {
   async listCheckinDays(): Promise<CheckinDayRow[]> {
     const rows = await this.db.select(`SELECT day,first_event_id,created_at FROM checkin_days ORDER BY day ASC`);
     return rows.map(toCheckinDayRow);
+  }
+
+  async upsertNote(row: { noteId: string; title: string; bodyMd: string; tags: string[]; updatedAt: string }): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO notes(note_id,title,body_md,tags,updated_at) VALUES(?,?,?,?,?)
+       ON CONFLICT(note_id) DO UPDATE SET title=excluded.title,body_md=excluded.body_md,
+         tags=excluded.tags,updated_at=excluded.updated_at`,
+      [row.noteId, row.title, row.bodyMd, row.tags.join(','), row.updatedAt],
+    );
+  }
+
+  async listNotes(): Promise<Array<{ noteId: string; title: string; bodyMd: string; tags: string[]; updatedAt: string }>> {
+    const rows = await this.db.select(`SELECT note_id,title,body_md,tags,updated_at FROM notes`);
+    return rows.map((r) => ({
+      noteId: String(r.note_id),
+      title: String(r.title ?? ''),
+      bodyMd: String(r.body_md ?? ''),
+      tags: String(r.tags ?? '') === '' ? [] : String(r.tags).split(',').filter(Boolean),
+      updatedAt: String(r.updated_at ?? ''),
+    }));
+  }
+
+  async deleteNote(noteId: string): Promise<void> {
+    await this.db.execute(`DELETE FROM notes WHERE note_id=?`, [noteId]);
   }
 }
 
