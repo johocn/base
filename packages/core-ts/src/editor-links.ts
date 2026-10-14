@@ -125,7 +125,7 @@ export interface BlobSearchRow {
  *
  * blob_index 现有列：blob_id, item_id, path, size, verified_at, original_name, content_type
  *  - 默认 content_type LIKE 'image/%' 只看图片（编辑器图库场景）
- *  - query 同时模糊匹配 original_name 和 item_id（文件名 + 条目路径）
+ *  - query 包含匹配 original_name 和 blob_id（文件名 + 内容哈希，% 在 SQL 内拼接）
  *  - content_type = '' 的老数据（sync 拉的块）也会被收进来（image/% LIKE '' 不匹配，fallback）
  */
 export async function searchLocalBlobs(opts: {
@@ -155,10 +155,9 @@ export async function searchLocalBlobs(opts: {
     where.push(`(b.content_type LIKE 'image/%' OR b.content_type = '')`);
   }
   if (opts.query && opts.query.trim() !== '') {
-    const like = `%${opts.query.trim()}%`;
-    // 文件名 / 条目路径 / owner 三搜（全部加 b. 前缀，因为 LEFT JOIN）
-    where.push(`(b.original_name LIKE ? OR b.item_id LIKE ? OR b.owner_id LIKE ?)`);
-    params.push(like, like, like);
+    // 包含匹配：文件名 / blob_id 双列（% 在 SQL 内拼接，keyword 参数传两份）
+    where.push(`(b.original_name LIKE '%' || ? || '%' OR b.blob_id LIKE '%' || ? || '%')`);
+    params.push(opts.query.trim(), opts.query.trim());
   }
 
   const sql =

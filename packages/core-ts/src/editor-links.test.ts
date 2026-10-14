@@ -147,8 +147,8 @@ describe('searchLocalItems：FakeDb 验证 SQL 和返回映射', () => {
   });
 });
 
-describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路径搜索', () => {
-  it('有关键词 → original_name LIKE OR item_id LIKE + 图片过滤', async () => {
+describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/blob_id 搜索', () => {
+  it('有关键词 → original_name LIKE OR blob_id LIKE（包含匹配）+ 图片过滤', async () => {
     const db = new FakeDb();
     db.setResponse('FROM blob_index', [
       { blob_id: 'b1', item_id: 'course/rust/lesson/l1/cover', size: 1024, verified_at: '2026-10-01', original_name: 'cover.png', content_type: 'image/png' },
@@ -162,12 +162,12 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
     });
     expect(db.lastSql).toContain('FROM blob_index');
     expect(db.lastSql).toContain('(b.content_type LIKE');
-    expect(db.lastSql).toContain('(b.original_name LIKE ? OR b.item_id LIKE ? OR b.owner_id LIKE ?)');
+    expect(db.lastSql).toContain("(b.original_name LIKE '%' || ? || '%' OR b.blob_id LIKE '%' || ? || '%')");
     expect(db.lastSql).toContain('ORDER BY b.verified_at DESC');
     expect(db.lastSql).toContain('GROUP BY b.blob_id');
     expect(db.lastSql).toContain('LEFT JOIN blob_references');
-    // query 三搜 original_name/item_id/owner_id 各 1 param，尾部 limit+offset 共 5
-    expect(db.lastParams).toEqual(['%rust%', '%rust%', '%rust%', 10, 0]);
+    // keyword 两列各 1 param（% 在 SQL 内拼接），尾部 limit+offset 共 4
+    expect(db.lastParams).toEqual(['rust', 'rust', 10, 0]);
 
     expect(rows.length).toBe(2);
     expect(rows[0]!.blobId).toBe('b1');
@@ -230,5 +230,15 @@ describe('searchLocalBlobs：按 content_type 过滤图片 + 文件名/条目路
     expect(rows).toEqual([
       { blobId: 'b51', name: 'next.png', contentType: 'image/png', path: '', size: 100, createdAt: expect.any(Number), refs: 0 },
     ]);
+  });
+
+  it('搜索词为包含匹配（%kw%）且同时命中 original_name 与 blob_id', async () => {
+    const db = new FakeDb();
+    db.setResponse('FROM blob_index', []);
+    await searchLocalBlobs({ db, query: '海' });
+    expect(db.lastSql).toContain('LIKE');
+    expect(db.lastSql).toContain("(b.original_name LIKE '%' || ? || '%' OR b.blob_id LIKE '%' || ? || '%')");
+    // keyword 传两份 param（% 在 SQL 内拼接），尾部 limit+offset
+    expect(db.lastParams).toEqual(['海', '海', 50, 0]);
   });
 });
