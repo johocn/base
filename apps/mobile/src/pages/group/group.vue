@@ -68,7 +68,12 @@
           <text class="cmt-meta">· {{ rel(m.createdAt) }}</text>
         </view>
         <text v-if="m.replyTo" class="cmt-reply">回复 {{ short(m.replyTo) }}</text>
-        <text class="cmt-text">{{ m.text ?? '（无法解密）' }}</text>
+        <view class="cmt-text">
+          <template v-for="(seg, si) in parseCmtSegs(m.text ?? '（无法解密）')" :key="si">
+            <text v-if="seg.link" class="cmt-link" @click="openCmtLink(seg.link)">{{ seg.text }}</text>
+            <text v-else>{{ seg.text }}</text>
+          </template>
+        </view>
       </view>
       <text v-if="loading" class="hint">加载中…</text>
       <text v-else-if="!error && feed.length > 0 && nextCursor === null" class="hint">没有更多了</text>
@@ -77,9 +82,29 @@
 
     <text v-if="blocked" class="blocked">{{ blocked }}</text>
     <view class="composer">
+      <!-- 引用入口：把本机公开课程/文章以内链 markdown 挂进发言，圈友点开即读、返回即回本页 -->
+      <text class="ref-open" @click="openRef">引用课程/文章</text>
       <!-- 输入框只按「结构性不可写」禁用：若用 canSend（含「草稿非空」），空草稿会锁死输入框，永远打不出字 -->
-      <input v-model="draft" class="input" :disabled="!canInput" placeholder="说点什么…" />
-      <button size="mini" :disabled="!canSend" @click="send">{{ sending ? '发表中…' : '发表' }}</button>
+      <view class="composer-row">
+        <input v-model="draft" class="input" :disabled="!canInput" placeholder="说点什么…" />
+        <button size="mini" :disabled="!canSend" @click="send">{{ sending ? '发表中…' : '发表' }}</button>
+      </view>
+    </view>
+    <!-- 引用弹层：列本机 items（type ∈ {course, article}），顶部搜索本地过滤，与 lesson/edit.vue 内链同手法 -->
+    <view v-if="refOpen" class="modal-mask" @click.self="refOpen = false">
+      <view class="modal">
+        <input v-model="refQuery" class="ref-input" placeholder="搜索本机课程/文章标题" @input="refreshRefItems" />
+        <scroll-view scroll-y class="ref-scroll">
+          <view v-for="it in refItems" :key="it.itemId" class="ref-row" @click="pickRefItem(it)">
+            <text class="ref-title">{{ it.title || it.itemId }}</text>
+            <text class="ref-kind">{{ it.kind === 'course' ? '课程' : '文章' }} · {{ it.itemId }}</text>
+          </view>
+          <text v-if="refItems.length === 0" class="hint">没有匹配的课程或文章</text>
+        </scroll-view>
+        <view class="ref-acts">
+          <text class="act" @click="refOpen = false">取消</text>
+        </view>
+      </view>
     </view>
     <text v-if="tip" class="hint">{{ tip }}</text>
   </view>
@@ -108,10 +133,11 @@ import {
   type GroupOptions,
 } from '../../core/group';
 import { flushPending } from '../../core/comment';
+import { composeInternalLink } from '../../core/editor-dialogs';
 import { peekLocalIdentity } from '../../core/identity';
 import type { CommentOutRow } from '../../core/types';
 import { avatarBg, useActorNames } from '../../core/useActorNames';
-import { bootstrap } from '../../platform';
+import { bootstrap, type AppContext } from '../../platform';
 import {
   UNKNOWN_FLAGS,
   canPostComment,
@@ -173,6 +199,7 @@ async function load() {
     const ctx = await bootstrap();
     opts.value = { adapters: ctx.opts.adapters, repo: ctx.repo, nodeBaseUrl: ctx.opts.nodeBaseUrl };
     caps.value = ctx.capabilities;
+    appCtx = ctx; // 引用弹层要拿 db（搜 items）与 nodeBaseUrl（拼内链）
     unconfigured.value = ctx.opts.nodeBaseUrl === '';
     // 本机身份（零网络）：用于创建者判定与「（我）」标注
     const ident = await peekLocalIdentity(opts.value.adapters.storage);
@@ -290,6 +317,115 @@ function pick(itemList: string[]): Promise<number | null> {
       fail: () => resolve(null),
     });
   });
+}
+
+/** ============ 引用课程/文章（与 lesson/edit.vue 内链同手法） ============ */
+
+interface RefItem {
+  itemId: string;
+  title: string;
+  kind: string;
+}
+
+const refOpen = ref(false);
+const refQuery = ref('');
+const refItems = ref<RefItem[]>([]);
+/** bootstrap 产物：引用弹层要拿 db（搜本机 items）与 nodeBaseUrl（拼内链） */
+let appCtx: AppContext | null = null;
+
+async function openRef() {
+  if (!appCtx) return;
+  refQuery.value = '';
+  refOpen.value = true;
+  await refreshRefItems();
+}
+
+/** 本机 items 搜课程/文章（searchLocalItems 无 type 过滤，这里直查并限定 type ∈ {course, article}） */
+async function refreshRefItems() {
+  if (!appCtx) {
+    refItems.value = [];
+    return;
+  }
+  const kw = refQuery.value.trim();
+  let rows: Record<string, unknown>[];
+  if (kw === '') {
+    rows = await appCtx.db.select(
+      `SELECT item_id, title, type FROM items WHERE type IN ('course','article') ORDER BY updated_at DESC LIMIT 100`,
+    );
+  } else {
+    rows = await appCtx.db.select(
+      `SELECT item_id, title, type FROM items WHERE type IN ('course','article') AND title LIKE ? ORDER BY updated_at DESC LIMIT 100`,
+      [`%${kw}%`],
+    );
+  }
+  refItems.value = rows.map((r) => ({
+    itemId: String(r.item_id ?? ''),
+    title: String(r.title ?? ''),
+    kind: String(r.type ?? ''),
+  }));
+}
+
+/** 点选条目：发言正文末尾追加内链 markdown（格式与 lesson/edit.vue 的内链插入逐字一致） */
+function pickRefItem(it: RefItem) {
+  if (!appCtx) return;
+  const md = composeInternalLink(appCtx.opts.nodeBaseUrl, it.itemId, it.title);
+  const base = draft.value.trimEnd();
+  draft.value = base === '' ? md : `${base} ${md}`;
+  refOpen.value = false;
+}
+
+/** ============ 消息正文内链渲染（对应 buildItemLink 产出） ============ */
+
+interface CmtLink {
+  itemId: string;
+  kind: 'course' | 'article';
+}
+
+interface CmtSeg {
+  text: string;
+  link: CmtLink | null;
+}
+
+const CMT_LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+
+function parseCmtSegs(text: string): CmtSeg[] {
+  const segs: CmtSeg[] = [];
+  let last = 0;
+  for (const m of text.matchAll(CMT_LINK_RE)) {
+    const link = intLinkOf(m[2]);
+    if (!link) continue;
+    const start = m.index!;
+    if (start > last) segs.push({ text: text.slice(last, start), link: null });
+    segs.push({ text: m[1], link });
+    last = start + m[0].length;
+  }
+  if (last < text.length) segs.push({ text: text.slice(last), link: null });
+  return segs.length > 0 ? segs : [{ text, link: null }];
+}
+
+/** 只认内链（baseUrl/#/pages/xxx/detail?itemId=…）；course/lesson 之外的条目不渲染为链接 */
+function intLinkOf(url: string): CmtLink | null {
+  if (!url.includes('/#/pages/')) return null;
+  const m = url.match(/[?&]itemId=([^&]+)/);
+  if (!m) return null;
+  let itemId = m[1];
+  try {
+    itemId = decodeURIComponent(itemId);
+  } catch {
+    // 保留原串
+  }
+  if (itemId.startsWith('article/')) return { itemId, kind: 'article' };
+  if (itemId.startsWith('course/') && !itemId.includes('/lesson/')) return { itemId, kind: 'course' };
+  return null;
+}
+
+/** 点内链跳详情（参数形态与 course.vue / tag/detail.vue 既有跳转一致）；系统返回即回本页 */
+function openCmtLink(l: CmtLink) {
+  const url =
+    l.kind === 'course'
+      ? `/pages/course/detail?courseId=${encodeURIComponent(l.itemId)}`
+      : `/pages/article/article?itemId=${encodeURIComponent(l.itemId)}`;
+  uni.navigateTo({ url });
 }
 
 /**
@@ -486,7 +622,7 @@ onReachBottom(() => {
 </script>
 
 <style>
-.wrap { padding: 16px; padding-bottom: 80px; }
+.wrap { padding: 16px; padding-bottom: 130px; }
 .bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .title { font-size: var(--fs-title); font-weight: 600; }
 .act { color: #2b6cb0; font-size: var(--fs-body); }
@@ -519,6 +655,17 @@ onReachBottom(() => {
 .error { display: block; color: #c53030; font-size: var(--fs-annotate); }
 .notice { display: block; margin-bottom: 8px; color: #b7791f; font-size: var(--fs-annotate); }
 .blocked { display: block; margin-bottom: 8px; color: #c05621; font-size: var(--fs-annotate); }
-.composer { position: fixed; left: 0; right: 0; bottom: 0; display: flex; align-items: center; padding: 8px 12px; background: #ffffff; border-top: 1px solid #eeeeee; }
+.composer { position: fixed; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; padding: 8px 12px; background: #ffffff; border-top: 1px solid #eeeeee; }
+.composer-row { display: flex; align-items: center; }
+.ref-open { min-height: 48px; color: #2b6cb0; font-size: var(--fs-body); line-height: 48px; }
+.modal-mask { position: fixed; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, 0.4); z-index: 99; }
+.modal { width: 92%; max-width: 520px; padding: 12px; background: #ffffff; border-radius: 8px 8px 0 0; }
+.ref-input { min-height: 48px; padding: 8px; border: 1px solid #eeeeee; border-radius: 6px; font-size: var(--fs-body); box-sizing: border-box; }
+.ref-scroll { max-height: 60vh; margin-top: 8px; }
+.ref-row { min-height: 48px; padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
+.ref-title { display: block; font-size: var(--fs-body); }
+.ref-kind { display: block; margin-top: 2px; color: #888888; font-size: var(--fs-annotate); }
+.ref-acts { display: flex; justify-content: flex-end; padding-top: 12px; }
 .input { flex: 1; height: 36px; margin-right: 8px; padding: 0 10px; background: #f5f5f5; border-radius: 6px; font-size: var(--fs-body); }
+.cmt-link { color: #2b6cb0; font-size: var(--fs-body); text-decoration: underline; }
 </style>
