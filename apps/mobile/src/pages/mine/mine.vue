@@ -134,12 +134,12 @@ onShow(async () => {
 
 <style>
 .wrap { padding: 16px; }
-.title { display: block; font-size: 20px; font-weight: 600; margin-bottom: 16px; }
-.card { border: 1px solid #eeeeee; border-radius: 8px; padding: 4px 12px; margin-bottom: 20px; }
+.title { display: block; font-size: var(--fs-title); font-weight: 600; margin-bottom: 16px; }
+.card { border: 1px solid #eeeeee; border-radius: 8px; padding: 4px 12px; margin-bottom: 20px; min-height: 96px; }
 .row { display: flex; justify-content: space-between; padding: 10px 0; }
-.k { color: #666666; font-size: 14px; }
-.v { font-size: 14px; }
-.link { display: block; padding: 14px 0; border-bottom: 1px solid #eeeeee; color: #2b6cb0; }
-.group { display: block; font-size: 13px; color: #999999; margin: 8px 0 4px; }
-.tail { color: #2b6cb0; font-size: 13px; }
+.k { color: #666666; font-size: var(--fs-annotate); }
+.v { font-size: var(--fs-title); }
+.link { display: flex; align-items: center; min-height: 56px; padding: 0 16px; border-bottom: 1px solid #eeeeee; color: #2b6cb0; font-size: var(--fs-body); }
+.group { display: block; font-size: var(--fs-annotate); color: #999999; margin: 8px 0 4px; }
+.tail { color: #2b6cb0; font-size: var(--fs-annotate); }
 </style>
