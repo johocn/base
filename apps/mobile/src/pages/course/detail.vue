@@ -62,6 +62,9 @@
             </view>
           </view>
         </view>
+        <view class="cmt-entry">
+          <button class="cmt-btn" @click="openComments">查看评论 / 发表评论</button>
+        </view>
       </block>
     </block>
   </view>
@@ -72,6 +75,7 @@ import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 
 import { fetchBlob } from '../../core/blob';
+import { setPendingTarget } from '../../core/comment';
 import { attrsOf, childrenRowsOf, digestOf, type AttachmentVM } from '../../core/container-view';
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
@@ -332,6 +336,12 @@ function openLesson(ls: LessonVM) {
   });
 }
 
+/** 评论入口（#84）：课程 id 走模块级锚定态（评论 tab 不能带 query） */
+function openComments() {
+  setPendingTarget(courseId.value);
+  uni.switchTab({ url: '/pages/comment/comment' });
+}
+
 function openEdit() {
   uni.navigateTo({ url: `/pages/course/edit?courseId=${encodeURIComponent(courseId.value)}` });
 }
@@ -475,4 +485,6 @@ async function openAttachment(a: AttachmentVM) {
 .tag-note { margin: 0 0 6px; color: #888888; font-size: var(--fs-annotate); display: inline-flex; align-items: center; min-height: 48px; }
 .tag-more { margin: 0 8px 6px 0; color: #888888; font-size: var(--fs-annotate); }
 .term-badge { display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 6px; background: #edf2f7; color: #718096; font-size: var(--fs-annotate); }
+.cmt-entry { padding: 16px; }
+.cmt-btn { min-height: 48px; font-size: var(--fs-body); }
 </style>
