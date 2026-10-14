@@ -29,9 +29,19 @@ onLaunch(() => {
 </script>
 
 <style>
+/* 适老化固定字阶（册子 #84 §3.1）：全部页面 font-size 一律引用变量，禁止新写死字号 */
+:root {
+  --fs-annotate: 15px;
+  --fs-body: 19px;
+  --fs-title: 24px;
+}
 page {
   background: #ffffff;
   color: #1a1a1a;
-  font-size: 16px;
+  font-size: var(--fs-body);
+  line-height: 1.6;
 }
+.fs-annotate { font-size: var(--fs-annotate); }
+.fs-body { font-size: var(--fs-body); }
+.fs-title { font-size: var(--fs-title); }
 </style>
