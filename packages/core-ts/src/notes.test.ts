@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { MemoryRepo } from './fakes';
+import { utf8 } from '@base/protocol-ts';
+
+import { emptyContainerForm, saveContainer } from './course-edit';
+import { FakeHttp, FakePackReader, MemoryFs, MemoryRepo, fakeAdapters } from './fakes';
 import { writeNote, listNotes, deleteNote, newNoteID } from './notes';
+import { decodeUtf8 } from './sync';
+import type { SubmitOptions } from './submit';
 
 describe('notes 本地存储（册子 #84 §4）', () => {
   it('writeNote 落库并 listNotes 倒序返回', async () => {
@@ -28,5 +33,32 @@ describe('notes 本地存储（册子 #84 §4）', () => {
     await writeNote(repo, { noteId: id, title: '删我', bodyMd: '', tags: [], updatedAt: '2026-10-14T10:00:00Z' });
     await deleteNote(repo, id);
     expect(await listNotes(repo)).toEqual([]);
+  });
+});
+
+const BASE = 'https://node.test';
+
+function json(v: unknown) {
+  return { status: 200, body: utf8(JSON.stringify(v)) };
+}
+
+describe('笔记隐私隔离（册子 #84 §4：不进提交/同步/catalog）', () => {
+  it('saveContainer 提交文章后，所有 /v1/submit 请求体不含 note/ 前缀与笔记正文 secret', async () => {
+    const http = new FakeHttp();
+    const repo = new MemoryRepo();
+    const adapters = fakeAdapters(http, new MemoryFs(), new FakePackReader());
+    const o: SubmitOptions = { adapters, repo, nodeBaseUrl: BASE };
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/submit`, json({ item_id: 'x', created: true }));
+
+    await writeNote(repo, { noteId: newNoteID(), title: '私有', bodyMd: 'secret', tags: [], updatedAt: '2026-10-14T10:00:00Z' });
+    const form = { ...emptyContainerForm('lesson', 'course/c1/lesson/l1'), title: '公开文章', bodyMd: 'public' };
+    const out = await saveContainer(o, form);
+    expect(out.ledgerState).toBe('sent');
+
+    const submits = http.posted.filter((p) => p.url.endsWith('/v1/submit'));
+    expect(submits.length).toBeGreaterThan(0);
+    expect(submits.every((p) => !decodeUtf8(p.body).includes('note/'))).toBe(true);
+    expect(submits.every((p) => !decodeUtf8(p.body).includes('secret'))).toBe(true);
   });
 });
