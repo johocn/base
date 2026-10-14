@@ -82,13 +82,14 @@
           </block>
           <block v-else>
             <input v-model="blobQuery" class="input" placeholder="按文件名搜索" @input="refreshBlobs" />
-            <scroll-view scroll-y class="modal-scroll">
+            <scroll-view scroll-y class="modal-scroll" style="max-height:60vh" @scrolltolower="onBlobScrollLower">
               <view class="blob-grid">
                 <view v-for="b in blobRows" :key="b.blobId" class="blob-cell" @click="submitBlobImage(b)">
                   <image :src="thumbSrcOf(b)" class="thumb" mode="aspectFill" />
                 </view>
               </view>
-              <text v-if="blobHasMore" class="add" @click="loadMoreBlobs">加载更多</text>
+              <text v-if="blobHasMore" class="hint">上滑加载更多（已加载 {{ blobRows.length }} 张）</text>
+              <text v-else-if="blobRows.length > 0" class="hint">已全部加载</text>
               <text v-if="blobRows.length === 0" class="hint">本机还没有上传过图片</text>
             </scroll-view>
             <view class="modal-actions">
@@ -360,10 +361,12 @@ const uploadAlt = ref('');
 const uploadPreview = ref('');
 const blobQuery = ref('');
 const blobRows = ref<BlobSearchRow[]>([]);
-/** 图库分页：偏移随「加载更多」前进；搜索词/开弹窗/上传/删除刷新一律归 0 并替换 */
+/** 图库分页：偏移随触底翻页前进；搜索词/开弹窗/上传/删除刷新一律归 0 并替换 */
 const blobOffset = ref(0);
-/** 上次返回条数 === limit(50) 时才显示「加载更多」 */
+/** 上次返回条数 === limit(50) 时视为仍有下一页（触底继续拉） */
 const blobHasMore = ref(false);
+/** 触底翻页防重入：in-flight 时忽略后续 scrolltolower */
+const blobBusy = ref(false);
 
 /** 正文编辑：工具栏产出源文本标记；预览是只读派生，不落库（保存口径零改动） */
 const bodyRef = ref<{ $el?: Element } | null>(null);
@@ -557,19 +560,28 @@ async function refreshBlobs() {
   blobHasMore.value = rows.length === 50;
 }
 
-/** 图库「加载更多」：offset 前进一页并 append 到现有行后 */
+/** 图库触底翻页：offset 前进一页并 append 到现有行后（busy 防重入） */
 async function loadMoreBlobs() {
-  if (!ctx) return;
-  blobOffset.value += 50;
-  const rows = await searchLocalBlobs({
-    db: ctx.db,
-    ownerIdentityId: 'me',
-    query: blobQuery.value,
-    limit: 50,
-    offset: blobOffset.value,
-  });
-  blobRows.value = [...blobRows.value, ...rows];
-  blobHasMore.value = rows.length === 50;
+  if (!ctx || blobBusy.value) return;
+  blobBusy.value = true;
+  try {
+    blobOffset.value += 50;
+    const rows = await searchLocalBlobs({
+      db: ctx.db,
+      ownerIdentityId: 'me',
+      query: blobQuery.value,
+      limit: 50,
+      offset: blobOffset.value,
+    });
+    blobRows.value = [...blobRows.value, ...rows];
+    blobHasMore.value = rows.length === 50;
+  } finally {
+    blobBusy.value = false;
+  }
+}
+/** 滚动触底自动加载下一页（仍有下一页时才拉） */
+function onBlobScrollLower() {
+  if (blobHasMore.value) void loadMoreBlobs();
 }
 async function pickAndUploadImage() {
   if (!ctx) {
