@@ -65,6 +65,18 @@
       "style": { "navigationBarTitleText": "我的条目" }
     },
     {
+      "path": "pages/note/list",
+      "style": { "navigationBarTitleText": "我的笔记" }
+    },
+    {
+      "path": "pages/note/edit",
+      "style": { "navigationBarTitleText": "编辑笔记" }
+    },
+    {
+      "path": "pages/note/detail",
+      "style": { "navigationBarTitleText": "笔记详情" }
+    },
+    {
       "path": "pages/governance/governance",
       "style": { "navigationBarTitleText": "提案与投票" }
     },

@@ -20,6 +20,7 @@
     <text class="group">创作</text>
     <navigator url="/pages/submit/submit" class="link">新建投稿</navigator>
     <navigator url="/pages/myitems/myitems" class="link">我的条目<text class="tail">{{ pendingText }}</text></navigator>
+    <navigator url="/pages/note/list" class="link">我的笔记</navigator>
 
     <text class="group">治理</text>
     <navigator url="/pages/governance/governance" class="link">提案与投票<text class="tail">{{ rosterText }}</text></navigator>
