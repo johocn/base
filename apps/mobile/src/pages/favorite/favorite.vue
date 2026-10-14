@@ -34,8 +34,8 @@ function open(itemId: string) {
 
 <style>
 .wrap { padding: 16px; }
-.card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
-.t { display: block; font-size: 15px; }
-.meta { display: block; color: #888888; font-size: 12px; }
-.hint { display: block; color: #888888; font-size: 13px; }
+.card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-bottom: 10px; min-height: 48px; }
+.t { display: block; font-size: var(--fs-body); }
+.meta { display: block; color: #888888; font-size: var(--fs-annotate); }
+.hint { display: block; color: #888888; font-size: var(--fs-annotate); }
 </style>

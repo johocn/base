@@ -50,9 +50,9 @@ function open(itemId: string) {
 
 <style>
 .wrap { padding: 16px; }
-.input { border: 1px solid #dddddd; border-radius: 6px; padding: 10px; font-size: 15px; }
-.card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-top: 10px; }
-.t { display: block; font-size: 15px; }
-.meta { display: block; color: #888888; font-size: 12px; }
-.hint { display: block; margin-top: 16px; color: #888888; font-size: 13px; }
+.input { border: 1px solid #dddddd; border-radius: 6px; padding: 10px; font-size: var(--fs-body); min-height: 48px; box-sizing: border-box; }
+.card { border: 1px solid #eeeeee; border-radius: 8px; padding: 10px; margin-top: 10px; min-height: 48px; }
+.t { display: block; font-size: var(--fs-body); }
+.meta { display: block; color: #888888; font-size: var(--fs-annotate); }
+.hint { display: block; margin-top: 16px; color: #888888; font-size: var(--fs-annotate); }
 </style>

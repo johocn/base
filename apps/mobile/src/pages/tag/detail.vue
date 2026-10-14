@@ -117,11 +117,11 @@ function decodedId(raw: string): string {
 
 <style>
 .wrap { padding: 16px; }
-.title { display: block; font-size: 20px; font-weight: 600; }
-.meta { display: block; color: #888888; font-size: 12px; margin-bottom: 12px; }
-.group { display: block; margin: 14px 0 6px; color: #888888; font-size: 13px; }
-.row { padding: 10px 0; border-bottom: 1px solid #f2f2f2; }
-.t { font-size: 15px; }
-.hint { color: #888888; font-size: 13px; }
-.error { display: block; color: #c53030; font-size: 13px; }
+.title { display: block; font-size: var(--fs-title); font-weight: 600; }
+.meta { display: block; color: #888888; font-size: var(--fs-annotate); margin-bottom: 12px; }
+.group { display: block; margin: 14px 0 6px; color: #888888; font-size: var(--fs-annotate); }
+.row { padding: 10px 0; border-bottom: 1px solid #f2f2f2; min-height: 48px; }
+.t { font-size: var(--fs-body); }
+.hint { color: #888888; font-size: var(--fs-annotate); }
+.error { display: block; color: #c53030; font-size: var(--fs-annotate); }
 </style>

@@ -308,12 +308,12 @@ async function doCreate() {
   padding: 60rpx 32rpx 40rpx;
   color: #fff;
 }
-.hero-title { font-size: 40rpx; font-weight: 700; display: block; }
-.hero-sub { font-size: 24rpx; opacity: 0.75; display: block; margin-top: 8rpx; }
+.hero-title { font-size: var(--fs-title); font-weight: 700; display: block; }
+.hero-sub { font-size: var(--fs-annotate); opacity: 0.75; display: block; margin-top: 8rpx; }
 .hero-stats { display: flex; gap: 32rpx; margin-top: 32rpx; }
 .stat { text-align: center; }
-.stat-val { font-size: 40rpx; font-weight: 700; display: block; }
-.stat-lbl { font-size: 22rpx; opacity: 0.8; }
+.stat-val { font-size: var(--fs-title); font-weight: 700; display: block; }
+.stat-lbl { font-size: var(--fs-annotate); opacity: 0.8; }
 
 .new-btn {
   margin: 24rpx 32rpx;
@@ -322,13 +322,14 @@ async function doCreate() {
   color: #fff;
   border-radius: 12rpx;
   text-align: center;
-  font-size: 28rpx;
+  font-size: var(--fs-body);
   font-weight: 600;
+  min-height: 48px;
 }
 
 .empty { padding: 120rpx 32rpx; text-align: center; }
-.empty-text { color: #888; font-size: 28rpx; }
-.retry-btn { margin-top: 24rpx; color: #1e3a5f; font-size: 26rpx; }
+.empty-text { color: #888; font-size: var(--fs-body); }
+.retry-btn { margin-top: 24rpx; color: #1e3a5f; font-size: var(--fs-annotate); display: inline-flex; align-items: center; min-height: 48px; }
 
 .card {
   background: #fff;
@@ -344,7 +345,7 @@ async function doCreate() {
   display: inline-block;
   padding: 6rpx 16rpx;
   border-radius: 8rpx;
-  font-size: 22rpx;
+  font-size: var(--fs-annotate);
   font-weight: 600;
   background: #eef2f7;
   color: #1e3a5f;
@@ -361,7 +362,7 @@ async function doCreate() {
   background: #fff6e6; color: #d48806;
 }
 .lvl-badge {
-  font-size: 20rpx;
+  font-size: var(--fs-annotate);
   padding: 4rpx 12rpx;
   background: #fff1f0;
   color: #f5222d;
@@ -369,7 +370,7 @@ async function doCreate() {
   font-weight: 600;
 }
 .status-tag {
-  font-size: 20rpx;
+  font-size: var(--fs-annotate);
   padding: 4rpx 12rpx;
   border-radius: 6rpx;
   font-weight: 600;
@@ -377,27 +378,28 @@ async function doCreate() {
 .status-tag.s-pending { background: #e6f7ff; color: #1890ff; }
 .status-tag.s-effective { background: #f6ffed; color: #52c41a; }
 .status-tag.s-voided { background: #fff1f0; color: #ff4d4f; }
-.proposal-id { color: #aaa; font-size: 22rpx; }
+.proposal-id { color: #aaa; font-size: var(--fs-annotate); }
 
 .item-link {
   display: block;
   margin-top: 16rpx;
   color: #1e3a5f;
-  font-size: 26rpx;
+  font-size: var(--fs-annotate);
   font-weight: 500;
+  min-height: 48px;
 }
 .reason {
   display: block;
   margin-top: 8rpx;
   color: #555;
-  font-size: 24rpx;
-  line-height: 1.5;
+  font-size: var(--fs-annotate);
+  line-height: 1.6;
 }
 .edit-hint {
   display: block;
   margin-top: 6rpx;
   color: #a66;
-  font-size: 22rpx;
+  font-size: var(--fs-annotate);
 }
 
 .phase {
@@ -411,13 +413,13 @@ async function doCreate() {
 .phase.phase-pass { border-color: #52c41a; background: #f6ffed; }
 .phase.phase-fail { border-color: #ff4d4f; background: #fff1f0; }
 .phase-row { display: flex; justify-content: space-between; align-items: center; }
-.phase-label { font-size: 24rpx; color: #333; font-weight: 600; }
-.phase-val { font-size: 24rpx; }
+.phase-label { font-size: var(--fs-annotate); color: #333; font-weight: 600; }
+.phase-val { font-size: var(--fs-annotate); }
 .phase-val .approve { color: #52c41a; }
 .phase-val .reject { color: #ff4d4f; }
 .phase-val .eq { color: #666; margin-left: 8rpx; }
 .phase-val .vs { color: #999; margin: 0 4rpx; }
-.phase-hint { display: block; margin-top: 8rpx; font-size: 20rpx; color: #999; }
+.phase-hint { display: block; margin-top: 8rpx; font-size: var(--fs-annotate); color: #999; }
 
 .bar {
   margin-top: 10rpx;
@@ -439,8 +441,8 @@ async function doCreate() {
   padding: 10rpx 0;
   border-top: 2rpx solid #f0f0f0;
 }
-.th-lbl { font-size: 22rpx; color: #888; }
-.th-val { font-size: 24rpx; color: #333; font-weight: 600; }
+.th-lbl { font-size: var(--fs-annotate); color: #888; }
+.th-val { font-size: var(--fs-annotate); color: #333; font-weight: 600; }
 
 .vote-actions {
   margin-top: 16rpx;
@@ -452,8 +454,13 @@ async function doCreate() {
   padding: 18rpx 0;
   text-align: center;
   border-radius: 10rpx;
-  font-size: 26rpx;
+  font-size: var(--fs-annotate);
   font-weight: 600;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
 }
 .vote-btn.approve { background: #52c41a; color: #fff; }
 .vote-btn.reject { background: #ff4d4f; color: #fff; }
@@ -465,7 +472,7 @@ async function doCreate() {
   border-radius: 8rpx;
   text-align: center;
 }
-.voted-label { font-size: 24rpx; color: #666; }
+.voted-label { font-size: var(--fs-annotate); color: #666; }
 
 /* Modal */
 .modal-mask {
@@ -483,19 +490,20 @@ async function doCreate() {
   max-height: 80vh;
   overflow-y: auto;
 }
-.modal-title { font-size: 32rpx; font-weight: 700; display: block; margin-bottom: 24rpx; }
+.modal-title { font-size: var(--fs-body); font-weight: 700; display: block; margin-bottom: 24rpx; }
 
 .field { margin-bottom: 20rpx; }
-.field-lbl { display: block; font-size: 24rpx; color: #555; margin-bottom: 8rpx; }
+.field-lbl { display: block; font-size: var(--fs-annotate); color: #555; margin-bottom: 8rpx; }
 .field-input, .field-textarea {
   width: 100%;
   padding: 16rpx;
   border: 2rpx solid #e8e8e8;
   border-radius: 10rpx;
-  font-size: 26rpx;
+  font-size: var(--fs-annotate);
   box-sizing: border-box;
   background: #fafbfc;
 }
+.field-input { min-height: 48px; }
 .field-textarea { min-height: 160rpx; }
 
 .action-grid { display: flex; flex-wrap: wrap; gap: 12rpx; }
@@ -503,9 +511,13 @@ async function doCreate() {
   padding: 10rpx 20rpx;
   border-radius: 20rpx;
   background: #f0f0f0;
-  font-size: 24rpx;
+  font-size: var(--fs-annotate);
   color: #555;
   border: 2rpx solid transparent;
+  display: inline-flex;
+  align-items: center;
+  min-height: 48px;
+  box-sizing: border-box;
 }
 .action-chip.active {
   background: #1e3a5f;
@@ -520,8 +532,13 @@ async function doCreate() {
   text-align: center;
   background: #f0f0f0;
   border-radius: 10rpx;
-  font-size: 28rpx;
+  font-size: var(--fs-body);
   color: #666;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
 }
 .submit-btn {
   flex: 1;
@@ -529,9 +546,14 @@ async function doCreate() {
   text-align: center;
   background: #1e3a5f;
   border-radius: 10rpx;
-  font-size: 28rpx;
+  font-size: var(--fs-body);
   color: #fff;
   font-weight: 600;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
 }
 .submit-btn.disabled { opacity: 0.5; }
 </style>

@@ -88,14 +88,14 @@ async function submit() {
 
 <style>
 .wrap { padding: 16px; }
-.title { display: block; font-size: 20px; font-weight: 600; margin-bottom: 8px; }
-.target { display: block; color: #444444; font-size: 14px; margin-bottom: 12px; }
-.warn { display: block; color: #c05621; font-size: 12px; margin-bottom: 12px; }
+.title { display: block; font-size: var(--fs-title); font-weight: 600; margin-bottom: 8px; }
+.target { display: block; color: #444444; font-size: var(--fs-body); margin-bottom: 12px; }
+.warn { display: block; color: #c05621; font-size: var(--fs-annotate); margin-bottom: 12px; }
 .field { margin-bottom: 14px; }
-.label { display: block; font-size: 14px; color: #666666; margin-bottom: 6px; }
-.input { border: 1px solid #eeeeee; border-radius: 6px; padding: 8px; font-size: 14px; }
-.hint { display: block; font-size: 12px; color: #999999; margin-bottom: 12px; }
-.error { display: block; color: #c53030; font-size: 13px; margin: 8px 0; }
-.notice { display: block; color: #b7791f; font-size: 13px; margin: 8px 0; }
-.submit { margin-top: 16px; background: #2b6cb0; color: #ffffff; }
+.label { display: block; font-size: var(--fs-body); color: #666666; margin-bottom: 6px; }
+.input { border: 1px solid #eeeeee; border-radius: 6px; padding: 8px; font-size: var(--fs-body); min-height: 48px; box-sizing: border-box; }
+.hint { display: block; font-size: var(--fs-annotate); color: #999999; margin-bottom: 12px; }
+.error { display: block; color: #c53030; font-size: var(--fs-annotate); margin: 8px 0; }
+.notice { display: block; color: #b7791f; font-size: var(--fs-annotate); margin: 8px 0; }
+.submit { margin-top: 16px; background: #2b6cb0; color: #ffffff; min-height: 48px; padding: 12px 16px; }
 </style>

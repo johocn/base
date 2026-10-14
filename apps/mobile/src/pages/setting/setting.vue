@@ -9,7 +9,7 @@
       <text class="label">节点公钥（hex64）</text>
       <input v-model="pubkey" class="input" placeholder="d75a9801…" />
     </view>
-    <button size="mini" @click="save">保存</button>
+    <button size="mini" class="btn" @click="save">保存</button>
     <text v-if="tip" class="tip">{{ tip }}</text>
     <text v-if="error" class="error">{{ error }}</text>
 
@@ -21,7 +21,7 @@
 
     <view class="ver">
       <text class="meta">当前版本：{{ localVersion }}</text>
-      <button size="mini" @click="checkUpdate">检查更新</button>
+      <button size="mini" class="btn" @click="checkUpdate">检查更新</button>
       <text v-if="updateLine" class="meta">{{ updateLine }}</text>
     </view>
 
@@ -132,17 +132,18 @@ function openSelfCheck() {
 
 <style>
 .wrap { padding: 16px; }
-.title { font-size: 20px; font-weight: 600; }
+.title { font-size: var(--fs-title); font-weight: 600; }
 .field { margin-top: 16px; }
-.label { display: block; color: #666666; font-size: 13px; margin-bottom: 6px; }
-.input { border: 1px solid #dddddd; border-radius: 6px; padding: 8px; font-size: 14px; }
-.tip { display: block; color: #2f855a; font-size: 13px; margin-top: 8px; }
-.error { display: block; color: #c53030; font-size: 13px; margin-top: 8px; }
-.meta { display: block; color: #666666; font-size: 12px; margin-top: 4px; }
+.label { display: block; color: #666666; font-size: var(--fs-annotate); margin-bottom: 6px; }
+.input { border: 1px solid #dddddd; border-radius: 6px; padding: 8px; font-size: var(--fs-body); min-height: 48px; box-sizing: border-box; }
+.tip { display: block; color: #2f855a; font-size: var(--fs-annotate); margin-top: 8px; }
+.error { display: block; color: #c53030; font-size: var(--fs-annotate); margin-top: 8px; }
+.meta { display: block; color: #666666; font-size: var(--fs-annotate); margin-top: 4px; }
 .acts { display: flex; margin-top: 24px; }
+.btn, .probe { min-height: 48px; padding: 12px 16px; }
 .probe { margin-right: 8px; }
 .ver { margin-top: 24px; }
 .identity { margin-top: 24px; padding-top: 12px; border-top: 1px solid #eeeeee; }
-.identity-title { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
-.nav-link { display: block; color: #2b6cb0; font-size: 13px; padding: 6px 0; }
+.identity-title { display: block; font-size: var(--fs-body); font-weight: 600; margin-bottom: 8px; }
+.nav-link { display: block; color: #2b6cb0; font-size: var(--fs-annotate); padding: 6px 0; min-height: 48px; display: flex; align-items: center; }
 </style>

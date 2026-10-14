@@ -45,7 +45,7 @@
     <view class="composer">
       <!-- 输入框只按「结构性不可写」禁用（canInput）；若用 canSend（含「草稿非空」）空草稿会锁死输入框 -->
       <input v-model="draft" class="input" :disabled="!canInput" placeholder="说点什么…" />
-      <button size="mini" :disabled="!canSend" @click="send">{{ sending ? '发送中…' : '发送' }}</button>
+      <button size="mini" class="btn" :disabled="!canSend" @click="send">{{ sending ? '发送中…' : '发送' }}</button>
     </view>
     <text v-if="tip" class="hint">{{ tip }}</text>
   </view>
@@ -226,26 +226,27 @@ onReachBottom(() => {
 <style>
 .wrap { padding: 16px; padding-bottom: 80px; }
 .bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.title { font-size: 20px; font-weight: 600; }
-.act { color: #2b6cb0; font-size: 14px; }
+.title { font-size: var(--fs-title); font-weight: 600; }
+.act { color: #2b6cb0; font-size: var(--fs-body); min-height: 48px; display: inline-flex; align-items: center; }
 .pending { margin-bottom: 12px; padding: 10px; background: #fffaf0; border: 1px solid #f6e05e; border-radius: 6px; }
 .pending-bar { display: flex; align-items: center; justify-content: space-between; }
-.pending-title { font-size: 14px; font-weight: 600; }
+.pending-title { font-size: var(--fs-body); font-weight: 600; }
 .po { padding: 8px 0; border-top: 1px solid #f6e05e; }
 .po-foot { display: flex; align-items: center; justify-content: space-between; }
-.po-state { color: #888888; font-size: 12px; }
-.po-reason { color: #c05621; font-size: 12px; }
+.po-state { color: #888888; font-size: var(--fs-annotate); }
+.po-reason { color: #c05621; font-size: var(--fs-annotate); }
 .cmt-floor { padding: 10px 0; border-bottom: 1px solid #eeeeee; }
 .cmt-head { display: flex; align-items: center; }
-.cmt-floor-no { margin-right: 6px; color: #2b6cb0; font-size: 12px; }
+.cmt-floor-no { margin-right: 6px; color: #2b6cb0; font-size: var(--fs-annotate); }
 .cmt-avatar { width: 20px; height: 20px; margin-right: 6px; border-radius: 50%; }
-.cmt-author-name { margin-right: 4px; color: #2b6cb0; font-size: 13px; }
-.cmt-meta { display: block; color: #888888; font-size: 12px; }
-.cmt-text { display: block; margin-top: 4px; font-size: 15px; line-height: 1.6; }
-.hint { display: block; margin-top: 8px; color: #888888; font-size: 13px; }
-.error { display: block; color: #c53030; font-size: 13px; }
-.notice { display: block; margin-bottom: 8px; color: #b7791f; font-size: 13px; }
-.blocked { display: block; margin-bottom: 8px; color: #c05621; font-size: 13px; }
+.cmt-author-name { margin-right: 4px; color: #2b6cb0; font-size: var(--fs-annotate); }
+.cmt-meta { display: block; color: #888888; font-size: var(--fs-annotate); }
+.cmt-text { display: block; margin-top: 4px; font-size: var(--fs-body); line-height: 1.6; }
+.hint { display: block; margin-top: 8px; color: #888888; font-size: var(--fs-annotate); }
+.error { display: block; color: #c53030; font-size: var(--fs-annotate); }
+.notice { display: block; margin-bottom: 8px; color: #b7791f; font-size: var(--fs-annotate); }
+.blocked { display: block; margin-bottom: 8px; color: #c05621; font-size: var(--fs-annotate); }
 .composer { position: fixed; left: 0; right: 0; bottom: 0; display: flex; align-items: center; padding: 8px 12px; background: #ffffff; border-top: 1px solid #eeeeee; }
-.input { flex: 1; height: 36px; margin-right: 8px; padding: 0 10px; background: #f5f5f5; border-radius: 6px; font-size: 14px; }
+.input { flex: 1; height: 48px; margin-right: 8px; padding: 0 10px; background: #f5f5f5; border-radius: 6px; font-size: var(--fs-body); }
+.btn { min-height: 48px; padding: 12px 16px; }
 </style>
