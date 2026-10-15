@@ -496,8 +496,26 @@ async function removeMyCreated(row: MyCreatedRow) {
   await load();
 }
 
+/** 首启引导检查只做一次：guide_seen 未写则跳引导页；标志位防 onShow 反复跳（#84） */
+let guideChecked = false;
+
+async function checkGuide() {
+  if (guideChecked) return;
+  guideChecked = true;
+  try {
+    const { repo } = await bootstrap();
+    const seen = await repo.getConfig('guide_seen');
+    if (!seen) {
+      uni.navigateTo({ url: '/pages/guide/guide' });
+    }
+  } catch {
+    // 读取失败不阻断首页
+  }
+}
+
 onShow(() => {
   void load();
+  void checkGuide();
 });
 </script>
 
