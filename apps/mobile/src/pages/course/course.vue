@@ -3,6 +3,24 @@
     <view class="hero">
       <text class="hero-title">base 学习</text>
     </view>
+    <!-- 公告条（#84 §4.4）：读本机生效公告 config，多条竖向轮播 3s/条，空隐藏 -->
+    <view v-if="announcements.length > 0" class="notice-bar">
+      <swiper
+        class="notice-swiper"
+        :vertical="announcements.length > 1"
+        :circular="announcements.length > 1"
+        :autoplay="announcements.length > 1"
+        :interval="3000"
+        :duration="500"
+      >
+        <swiper-item v-for="(a, i) in announcements" :key="i">
+          <view class="notice-item">
+            <text class="notice-tag">公告</text>
+            <text class="notice-text">{{ a }}</text>
+          </view>
+        </swiper-item>
+      </swiper>
+    </view>
     <input class="search" placeholder="搜索课程与文章" :value="keyword" @input="onSearch" />
     <!-- B 宫格区：2×2（册子 §3.2）；tabBar 页走 switchTab -->
     <view class="grid">
@@ -152,6 +170,8 @@ const coverByCourse = ref(new Map<string, string>());
 const total = computed(
   () => courses.value.length + groups.value.reduce((n, g) => n + g.courses.length, 0) + standalone.value.length,
 );
+/** 生效公告（#84 §4.4）：config announcements_active（票选生效后由治理页写入），空数组 ⇒ 公告条隐藏 */
+const announcements = ref<string[]>([]);
 const error = ref('');
 const tip = ref('');
 const busy = ref(false);
@@ -205,6 +225,16 @@ async function load() {
     const { repo, capabilities, opts } = await bootstrap();
     directory.value = await loadDirectory(repo);
     syncBlocked.value = !canSync(capabilities);
+    // 生效公告（#84 §4.4）：读失败不阻断首页，按空处理
+    try {
+      const raw = await repo.getConfig('announcements_active');
+      const parsed: unknown = raw === null ? [] : JSON.parse(raw);
+      announcements.value = Array.isArray(parsed)
+        ? parsed.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+        : [];
+    } catch {
+      announcements.value = [];
+    }
     // 一次性自愈迁移（册子 #56 §2.4）：幂等——标志位已存在即零动作；未配置节点则跳过。
     if (opts.nodeBaseUrl !== '') {
       await runCreatorVisibilityMigration(opts);
@@ -524,6 +554,12 @@ onShow(() => {
 .page { padding-bottom: 32px; }
 .hero { padding: 16px 16px 0; }
 .hero-title { font-size: var(--fs-title); font-weight: 600; }
+/* 公告条（#84 §4.4）：标签 fs-annotate + 正文 fs-body，整条点击目标 ≥48px，空隐藏 */
+.notice-bar { margin: 12px 16px 0; background: #fffbeb; border: 1px solid #f6e05e; border-radius: 12px; overflow: hidden; }
+.notice-swiper { height: 48px; }
+.notice-item { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 12px; box-sizing: border-box; }
+.notice-tag { flex-shrink: 0; font-size: var(--fs-annotate); color: #b7791f; background: #fefcbf; border: 1px solid #f6e05e; border-radius: 8px; padding: 2px 8px; }
+.notice-text { flex: 1; font-size: var(--fs-body); color: #744210; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .search { height: 48px; border-radius: 24px; background: #fff; border: 1px solid #d9e1ea; padding: 0 20px; font-size: var(--fs-body); margin: 12px 16px; }
 .grid { display: flex; flex-wrap: wrap; padding: 0 8px; }
 .cell { width: 50%; box-sizing: border-box; padding: 8px; min-height: 96px; }

@@ -9,6 +9,25 @@
       </view>
     </view>
 
+    <!-- 公告条（#84 §4.4）：与首页同一 announcements_active 数据源，多条竖向轮播 3s/条，空隐藏 -->
+    <view v-if="announcements.length > 0" class="notice-bar">
+      <swiper
+        class="notice-swiper"
+        :vertical="announcements.length > 1"
+        :circular="announcements.length > 1"
+        :autoplay="announcements.length > 1"
+        :interval="3000"
+        :duration="500"
+      >
+        <swiper-item v-for="(a, i) in announcements" :key="i">
+          <view class="notice-item">
+            <text class="notice-tag">公告</text>
+            <text class="notice-text">{{ a }}</text>
+          </view>
+        </swiper-item>
+      </swiper>
+    </view>
+
     <!-- feed.notice 原文：被移出 / 密钥已轮换，读不出新消息时必须原位告知，禁止静默跳过 -->
     <text v-if="notice" class="notice">{{ notice }}</text>
     <text v-if="error" class="error">{{ error }}</text>
@@ -161,6 +180,8 @@ const loading = ref(false);
 const sending = ref(false);
 const draft = ref('');
 const unconfigured = ref(false);
+/** 生效公告（#84 §4.4）：与首页同一 config 数据源，空数组 ⇒ 公告条隐藏 */
+const announcements = ref<string[]>([]);
 
 /** 多签编排的待提交态：请求码 + 已收集回执 + 轮换产出的信封（信封不进签名域，但必须随提交带上）。 */
 const pendingRequest = ref('');
@@ -204,6 +225,16 @@ async function load() {
     // 本机身份（零网络）：用于创建者判定与「（我）」标注
     const ident = await peekLocalIdentity(opts.value.adapters.storage);
     myId.value = ident?.id ?? '';
+    // 生效公告（#84 §4.4）：读失败不阻断本页，按空处理
+    try {
+      const raw = await ctx.repo.getConfig('announcements_active');
+      const parsed: unknown = raw === null ? [] : JSON.parse(raw);
+      announcements.value = Array.isArray(parsed)
+        ? parsed.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+        : [];
+    } catch {
+      announcements.value = [];
+    }
   } catch (e) {
     error.value = (e as Error).message;
   }
@@ -624,6 +655,12 @@ onReachBottom(() => {
 <style>
 .wrap { padding: 16px; padding-bottom: 130px; }
 .bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+/* 公告条（#84 §4.4）：与首页同款，标签 fs-annotate + 正文 fs-body，空隐藏 */
+.notice-bar { margin: 0 0 8px; background: #fffbeb; border: 1px solid #f6e05e; border-radius: 12px; overflow: hidden; }
+.notice-swiper { height: 48px; }
+.notice-item { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 12px; box-sizing: border-box; }
+.notice-tag { flex-shrink: 0; font-size: var(--fs-annotate); color: #b7791f; background: #fefcbf; border: 1px solid #f6e05e; border-radius: 8px; padding: 2px 8px; }
+.notice-text { flex: 1; font-size: var(--fs-body); color: #744210; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .title { font-size: var(--fs-title); font-weight: 600; }
 .act { color: #2b6cb0; font-size: var(--fs-body); }
 .bar-acts { display: flex; }

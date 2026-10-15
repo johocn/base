@@ -22,7 +22,7 @@ const GOVERN_EVENT_TYPE = 'govern.v1';
 /** 提案撞号（conflict）时的重取重发上限：重取最大 id 再发，避免会话内无限循环。 */
 const PROPOSAL_CONFLICT_ATTEMPTS = 3;
 
-/** 受审动作（#27 §2.1）+ 词条补录 `directory_add`（#58 §3.1）+ Spec v2 扩 12 种。 */
+/** 受审动作（#27 §2.1）+ 词条补录 `directory_add`（#58 §3.1）+ Spec v2 扩 12 种 + 公告 `announcement`（#84 §4.4）。 */
 export type GovernAction =
   | 'remove'
   | 'edit'
@@ -36,7 +36,8 @@ export type GovernAction =
   | 'highlight'
   | 'pin'
   | 'recommend'
-  | 'feature';
+  | 'feature'
+  | 'announcement';
 
 /** 提案状态三值（#27 §4.4）。 */
 export type GovernStatus = 'pending' | 'effective' | 'void';
@@ -63,6 +64,7 @@ export const ACTION_LABEL: Record<GovernAction, string> = {
   pin: '置顶',
   recommend: '推荐',
   feature: '精华',
+  announcement: '公告',
 };
 
 /** 投票类型（Spec v2 §4）。 */
@@ -251,8 +253,9 @@ async function snapshotWatermark(o: GovernOptions): Promise<{ contentVersion: nu
 
 export interface CreateProposalInput {
   action: GovernAction;
-  /** 仅非 `directory_add` 需要（词条无对应内容条目） */
+  /** 仅非 `directory_add` / `announcement` 需要（两者无对应内容条目） */
   itemId: string;
+  /** 公告正文（仅 `announcement` 必填）；其余动作为发起理由 */
   reason: string;
   /** 仅 `edit` 需要（#27 §3.1） */
   edit?: { title: string; bodyMd: string };
@@ -275,6 +278,7 @@ export async function createProposal(o: GovernOptions, input: CreateProposalInpu
   // directory_add 无对应内容条目：跳过本地内容哈希前置，改用派生载荷哈希与派生 item_id（#58 §3.1）。
   let dir: { kind: string; termKey: string; displayName: string; targetItemId: string } | null = null;
   let contentHash = '';
+  let targetItemId = input.itemId;
   if (input.action === 'directory_add') {
     if (!input.directory) throw new GovernError('client', '缺少词条信息（kind / termKey / displayName）');
     const digest = directoryDigest(input.directory.kind, input.directory.termKey);
@@ -285,6 +289,12 @@ export async function createProposal(o: GovernOptions, input: CreateProposalInpu
       targetItemId: `dir/${input.directory.kind}/${digest.slice(0, 16)}`,
     };
     contentHash = digest;
+  } else if (input.action === 'announcement') {
+    // 公告提案同样无目标条目（#84 §4.4）：公告文本走 reason，id / 载荷哈希由文本同源派生（同文同 id）。
+    if (input.reason.trim() === '') throw new GovernError('client', '公告内容不能为空');
+    const digest = sha256Hex(utf8(input.reason));
+    contentHash = digest;
+    targetItemId = `ann/${digest.slice(0, 16)}`;
   } else {
     const item = await o.repo.getItem(input.itemId);
     contentHash = item?.contentHash ?? '';
@@ -300,7 +310,7 @@ export async function createProposal(o: GovernOptions, input: CreateProposalInpu
     const body: Record<string, Json> = {
       action: 'proposal',
       proposal_id: proposalId,
-      target_item_id: dir ? dir.targetItemId : input.itemId,
+      target_item_id: dir ? dir.targetItemId : targetItemId,
       verb: input.action,
       content_hash: contentHash,
       content_version: contentVersion,

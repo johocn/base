@@ -24,8 +24,9 @@
       </view>
     </view>
 
-    <!-- 发起人按钮 -->
+    <!-- 发起人按钮（#84 §4.4：公告提案独立入口） -->
     <view class="new-btn" @click="openForm">发起提案</view>
+    <view class="new-btn announce" @click="openAnnounceForm">发起公告提案</view>
 
     <!-- 空态 -->
     <view v-if="!loading && !error && proposals.length === 0" class="empty">
@@ -113,7 +114,7 @@
           <text class="field-lbl">动作类型</text>
           <view class="action-grid">
             <view
-              v-for="(lbl, act) in ACTION_LABEL"
+              v-for="[act, lbl] in genericActions"
               :key="act"
               class="action-chip"
               :class="{ active: form.action === act }"
@@ -136,6 +137,22 @@
         <view class="modal-actions">
           <view class="cancel-btn" @click="showForm = false">取消</view>
           <view class="submit-btn" @click="doCreate" :class="{ disabled: submitting }">
+            {{ submitting ? '提交中…' : '确认发起' }}
+          </view>
+        </view>
+      </view>
+    </view>
+    <!-- 发起公告提案表单（#84 §4.4）：大字表单，公告文本走 reason -->
+    <view v-if="showAnnounce" class="modal-mask" @click.self="showAnnounce = false">
+      <view class="modal">
+        <text class="modal-title">发起公告提案</text>
+        <view class="field">
+          <text class="field-lbl">公告内容（票选生效后展示在首页与圈子页顶部）</text>
+          <textarea v-model="announceText" class="field-textarea announce-textarea" placeholder="输入公告正文" />
+        </view>
+        <view class="modal-actions">
+          <view class="cancel-btn" @click="showAnnounce = false">取消</view>
+          <view class="submit-btn" :class="{ disabled: submitting }" @click="doCreateAnnouncement">
             {{ submitting ? '提交中…' : '确认发起' }}
           </view>
         </view>
@@ -177,6 +194,15 @@ const form = reactive({
   bodyMd: '',
 });
 
+// 公告提案（#84 §4.4）：独立大字表单入口，正文即公告文本
+const showAnnounce = ref(false);
+const announceText = ref('');
+
+/** 通用提案动作不含 announcement：公告走「发起公告提案」独立入口 */
+const genericActions = computed(() =>
+  (Object.entries(ACTION_LABEL) as Array<[GovernAction, string]>).filter(([act]) => act !== 'announcement'),
+);
+
 // 条目举报快捷提案预填（#79 §7.4）：打开表单时消费举报入口写入的 remove 预填并清理
 function openForm() {
   const p = takePendingProposalPrefill();
@@ -206,6 +232,10 @@ async function loadProposals() {
   error.value = '';
   try {
     proposals.value = await listProposals(opts.value);
+    // 生效公告对账（#84 §4.4）：每次刷新把已生效公告落 config（其他设备经此链路同步）
+    for (const p of proposals.value) {
+      if (p.action === 'announcement' && p.status === 'effective') await addActiveAnnouncement(p.reason || p.title);
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败';
   } finally {
@@ -260,7 +290,11 @@ async function doVote(p: ProposalItem, voteType: VoteType) {
   p.netWeight = (p.netWeight ?? 0) + incApprove - incReject;
   p.voterCount = (p.voterCount ?? 0) + 1;
   try {
-    await vote(opts.value, p.proposalId, { voteType, voteWeight: 1 });
+    const res = await vote(opts.value, p.proposalId, { voteType, voteWeight: 1 });
+    // 投票达门槛生效（#84 §4.4）：公告提案生效即写回本机 announcements_active
+    if (res.status === 'effective' && p.action === 'announcement') {
+      await addActiveAnnouncement(p.reason || p.title);
+    }
   } catch {
     myVoteCache.value.delete(p.proposalId);
     p.approveWeight = (p.approveWeight ?? 0) - incApprove;
@@ -298,6 +332,48 @@ async function doCreate() {
     submitting.value = false;
   }
 }
+
+function openAnnounceForm() {
+  announceText.value = '';
+  showAnnounce.value = true;
+}
+
+/** 发起公告提案（#84 §4.4）：公告文本走 reason，无目标条目，走既有 postGovernEvent 链路。 */
+async function doCreateAnnouncement() {
+  if (!opts.value) return;
+  const text = announceText.value.trim();
+  if (text === '') { uni.showToast({ title: '请填写公告内容', icon: 'none' }); return; }
+  submitting.value = true;
+  try {
+    await createProposal(opts.value, { action: 'announcement', itemId: '', reason: text });
+    showAnnounce.value = false;
+    announceText.value = '';
+    uni.showToast({ title: '已发起', icon: 'success' });
+    await loadProposals();
+  } catch (e) {
+    uni.showToast({ title: e instanceof Error ? e.message : '发起失败', icon: 'none' });
+  } finally {
+    submitting.value = false;
+  }
+}
+
+/** 公告决议生效写回（#84 §4.4）：文本进 announcements_active（去重、最新在前、上限 10 条）。 */
+async function addActiveAnnouncement(text: string): Promise<void> {
+  if (!opts.value) return;
+  const t = text.trim();
+  if (t === '') return;
+  let list: string[] = [];
+  try {
+    const raw = await opts.value.repo.getConfig('announcements_active');
+    const parsed: unknown = raw === null ? [] : JSON.parse(raw);
+    if (Array.isArray(parsed)) list = parsed.filter((x): x is string => typeof x === 'string');
+  } catch {
+    list = [];
+  }
+  if (list.includes(t)) return;
+  list.unshift(t);
+  await opts.value.repo.setConfig('announcements_active', JSON.stringify(list.slice(0, 10)));
+}
 </script>
 
 <style lang="scss" scoped>
@@ -325,7 +401,10 @@ async function doCreate() {
   font-size: var(--fs-body);
   font-weight: 600;
   min-height: 48px;
+  box-sizing: border-box;
 }
+/* 公告提案入口（#84 §4.4）：描边琥珀变体，与公告条同一色系 */
+.new-btn.announce { background: #fff; color: #b7791f; border: 2rpx solid #b7791f; }
 
 .empty { padding: 120rpx 32rpx; text-align: center; }
 .empty-text { color: #888; font-size: var(--fs-body); }
@@ -355,6 +434,7 @@ async function doCreate() {
 .action-tag.revive { background: #efe; color: #3a3; }
 .action-tag.edit { background: #fff6e6; color: #a66; }
 .action-tag.directory_add { background: #e6f7ff; color: #1890ff; }
+.action-tag.announcement { background: #fffbeb; color: #b7791f; }
 .action-tag.highlight, .action-tag.pin, .action-tag.recommend, .action-tag.feature {
   background: #f3e6ff; color: #722ed1;
 }
@@ -505,6 +585,8 @@ async function doCreate() {
 }
 .field-input { min-height: 48px; }
 .field-textarea { min-height: 160rpx; }
+/* 公告表单大字（#84 §4.4）：正文用 fs-body */
+.announce-textarea { min-height: 240rpx; font-size: var(--fs-body); }
 
 .action-grid { display: flex; flex-wrap: wrap; gap: 12rpx; }
 .action-chip {

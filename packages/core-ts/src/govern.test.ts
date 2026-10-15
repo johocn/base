@@ -189,6 +189,39 @@ describe('govern', () => {
     expect(verify(pub, utf8(canonicalize({ event_id: env.event_id, type: env.type, created_at: env.created_at, body: env.body })), env.sig)).toBe(true);
   });
 
+  it('发起 announcement：公告提案不依赖本地条目（#84 §4.4），文本走 reason，id/hash 由文本同源派生', async () => {
+    const http = new FakeHttp();
+    http.routes.set(`${BASE}/v1/proposal`, json({ proposals: [] }));
+    http.postRoutes.set(`${BASE}/v1/identity/register`, json({}));
+    http.postRoutes.set(`${BASE}/v1/event`, json({ event_id: 'e', received_at: 1 }));
+    const repo = new MemoryRepo(); // 空仓库：无任何条目，验证跳过了 getItem 前置
+    const o: GovernOptions = { adapters: fakeAdapters(http, new MemoryFs(), new FakePackReader()), repo, nodeBaseUrl: BASE };
+
+    const text = '10 月 20 日晚 22 点停机维护';
+    const res = await createProposal(o, { action: 'announcement', itemId: '', reason: text });
+    expect(res.proposalId).toBe('1');
+
+    // 独立重算（与 directory_add 用例同手法）
+    const digest = sha256Hex(utf8(text));
+    const env = parseEvent(http);
+    expect(env.body).toEqual({
+      action: 'proposal',
+      proposal_id: 1,
+      target_item_id: `ann/${digest.slice(0, 16)}`,
+      verb: 'announcement',
+      content_hash: digest,
+      content_version: 0,
+      revoked_rev: 0,
+      reason: text,
+    });
+    const body = env.body as Record<string, unknown>;
+    expect('title' in body).toBe(false);
+    expect('body_md' in body).toBe(false);
+    expect('directory_kind' in body).toBe(false);
+    const pub = registeredPub(http);
+    expect(verify(pub, utf8(canonicalize({ event_id: env.event_id, type: env.type, created_at: env.created_at, body: env.body })), env.sig)).toBe(true);
+  });
+
   it('失败映射：错误码转中文；429 与 5xx 各归其类', async () => {
     const cases: Array<[number, string, string, string]> = [
       [403, 'proposer_not_governor', 'rejected', '不在本节点治理者名册内'],
