@@ -145,11 +145,17 @@
 <script lang="ts">
 // Options 块：renderjs callMethod 官方仅支持「选项式 methods」，故桥回调挂这里；
 // 状态本体在 core/caret-report（与 script setup 共享同一 ref 实例）
-import { selLedger as selLedgerStore, probeInfo as probeStore } from '../../core/caret-report';
+import { caretLedger as caretLedgerStore, selLedger as selLedgerStore, probeInfo as probeStore } from '../../core/caret-report';
 
 export default {
   methods: {
     onSelectionReport(c: { start: number; end: number } | null) {
+      if (c && c.start === c.end) {
+        // v3.4：塌陷单点入 caretLedger（点空白处移动光标也保鲜），选区台账清账
+        selLedgerStore.value = null;
+        caretLedgerStore.value = { start: c.start, end: c.end };
+        return;
+      }
       selLedgerStore.value = c;
     },
     onBridgeProbe(info: Record<string, unknown>) {
@@ -163,7 +169,7 @@ export default {
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
 
-import { selLedger } from '../../core/caret-report';
+import { caretLedger, selLedger } from '../../core/caret-report';
 
 import { decodeSafe, mimeFromName, uploadAndStoreBlob } from '../../core/course-edit';
 import {
@@ -228,8 +234,7 @@ const blobBusy = ref(false);
 /** 正文编辑：工具栏产出源文本标记；预览是只读派生，不落库 */
 const bodyRef = ref<{ $el?: Element } | null>(null);
 const bodyFocus = ref(false);
-/** 光标台账：单点 = @input/@blur 的 detail.cursor（组件层同步事件）；工具动作后 = 变换产出的目标光标/选区 */
-const caretLedger = ref<{ start: number; end: number } | null>(null);
+// caretLedger 单点光标台账在 core/caret-report（v3.4 起桥的塌陷上报也入账，跨 script 块共享）
 /** App 端 renderjs 写命令：{start,end,text} 对象直传，每次换新对象触发 observer */
 const caretCmd = ref<{ start: number; end: number; text: string } | null>(null);
 /** uni 编译器注入的 renderjs 模块实例：模板 :change:prop 按 module 名匹配；占位仅供 vue-tsc */
@@ -636,6 +641,9 @@ export default {
         if (e.selectionStart !== e.selectionEnd) {
           lastSel = { start: e.selectionStart, end: e.selectionEnd };
           owner.callMethod('onSelectionReport', lastSel);
+        } else {
+          // v3.4：塌陷位移也上报（方向键/程序置位等不触发 touch 的路径），caretLedger 才能保鲜
+          owner.callMethod('onSelectionReport', { start: e.selectionStart, end: e.selectionEnd });
         }
       }, 200);
       this._onTouch = (ev) => {
@@ -643,12 +651,16 @@ export default {
         const owner = this.$ownerInstance;
         if (!e || !owner) return;
         const inArea = ev.target === e || e.contains(ev.target);
-        if (!inArea && lastSel) {
-          owner.callMethod('onSelectionReport', lastSel);
-        } else if (inArea && e.selectionStart === e.selectionEnd && lastSel) {
-          lastSel = null;
-          owner.callMethod('onSelectionReport', null);
+        if (!inArea) {
+          // 区外触碰（含点工具栏）：补报最近一次非空选区，不毁台账（v3.3 既定口径）
+          if (lastSel) owner.callMethod('onSelectionReport', lastSel);
+          return;
         }
+        // v3.4：区内触碰一律上报当前位置——塌陷单点入 caretLedger（修「空白处插入落错位」），
+        // 非空选区入 selLedger；lastSel 按塌陷与否维护
+        const sel = { start: e.selectionStart, end: e.selectionEnd };
+        lastSel = sel.start !== sel.end ? sel : null;
+        owner.callMethod('onSelectionReport', sel);
       };
       document.addEventListener('touchend', this._onTouch, true);
     };
@@ -658,9 +670,7 @@ export default {
     report(el) {
       const owner = this.$ownerInstance;
       if (!owner) return;
-      if (el.selectionStart !== el.selectionEnd) {
-        owner.callMethod('onSelectionReport', { start: el.selectionStart, end: el.selectionEnd });
-      }
+      owner.callMethod('onSelectionReport', { start: el.selectionStart, end: el.selectionEnd });
     },
     writeCaret(cmd) {
       if (!cmd || typeof cmd.text !== 'string') return;
@@ -674,10 +684,13 @@ export default {
       el.focus();
       el.value = cmd.text;
       el.setSelectionRange(cmd.start, cmd.end);
-      setTimeout(() => {
-        const e = anchor();
-        if (e && e.value.length === cmd.text.length) e.setSelectionRange(cmd.start, cmd.end);
-      }, 150);
+      [150, 400, 800].forEach((delay) => {
+        setTimeout(() => {
+          const e = anchor();
+          if (!e || e.value !== cmd.text) return;
+          if (e.selectionStart !== cmd.start || e.selectionEnd !== cmd.end) e.setSelectionRange(cmd.start, cmd.end);
+        }, delay);
+      });
     }
   }
 };
