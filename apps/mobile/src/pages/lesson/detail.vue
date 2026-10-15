@@ -442,9 +442,9 @@ function openLesson(itemId: string) {
   uni.navigateTo({ url: `/pages/lesson/detail?lessonId=${encodeURIComponent(itemId)}&courseId=${encodeURIComponent(courseId.value)}` });
 }
 
-/** Discuz 仿效：讨论入口 → 跳 comment tabBar 页 */
+/** Discuz 仿效：讨论入口 → 跳 comment 评论页 */
 function openDiscussion() {
-  uni.switchTab({ url: '/pages/comment/comment' });
+  uni.navigateTo({ url: '/pages/comment/comment' });
 }
 
 /** 附件按需取回：下载字节 → 落本地文件 → 交给系统打开 */

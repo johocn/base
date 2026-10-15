@@ -99,7 +99,7 @@ function openTarget(r: TargetVM): void {
   }
   if (r.kind === 'comment') {
     setPendingTarget(r.targetId);
-    uni.switchTab({ url: '/pages/comment/comment' });
+    uni.navigateTo({ url: '/pages/comment/comment' });
     return;
   }
   uni.showToast({ title: '暂不支持的类型', icon: 'none' });

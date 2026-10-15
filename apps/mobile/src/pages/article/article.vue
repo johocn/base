@@ -387,10 +387,10 @@ async function cycleTheme() {
   await repo.setConfig('reader_theme', theme.value);
 }
 
-/** 评论 tab 不能带 query，target_id 走模块级锚定态（册子 §6.3） */
+/** target_id 走模块级锚定态（册子 §6.3） */
 function openComments() {
   setPendingTarget(itemId.value);
-  uni.switchTab({ url: '/pages/comment/comment' });
+  uni.navigateTo({ url: '/pages/comment/comment' });
 }
 
 function openQuiz(itemId: string) {

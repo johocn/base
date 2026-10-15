@@ -336,10 +336,10 @@ function openLesson(ls: LessonVM) {
   });
 }
 
-/** 评论入口（#84）：课程 id 走模块级锚定态（评论 tab 不能带 query） */
+/** 评论入口（#84）：课程 id 走模块级锚定态 */
 function openComments() {
   setPendingTarget(courseId.value);
-  uni.switchTab({ url: '/pages/comment/comment' });
+  uni.navigateTo({ url: '/pages/comment/comment' });
 }
 
 function openEdit() {

@@ -399,7 +399,7 @@ const rows = computed<FeedRow[]>(() => {
 });
 
 /** 宫格跳转：tabBar 页走 switchTab（tab 页不可 navigateTo），其余 navigateTo。 */
-const TAB_PATHS = new Set(['/pages/course/course', '/pages/circle/circle', '/pages/comment/comment', '/pages/mine/mine']);
+const TAB_PATHS = new Set(['/pages/course/course', '/pages/circle/circle', '/pages/mine/mine']);
 
 function go(url: string) {
   if (TAB_PATHS.has(url)) {
