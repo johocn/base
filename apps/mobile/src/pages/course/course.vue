@@ -22,25 +22,18 @@
       </swiper>
     </view>
     <input class="search" placeholder="搜索课程与文章" :value="keyword" @input="onSearch" />
-    <!-- 宫格区（#84 Task 3）：每行 3 大图标；必修/选修/精品→过滤态+滚动列表，文章→文章 tab（switchTab），评论→评论页（navigateTo），动态分类→分组锚点，更多分类→分组树顶 -->
+    <!-- 宫格区（#84 Task 3）：每行 3 大图标；必修/选修/精品→课程列表按类目过滤，文章→文章 tab（switchTab），评论→评论页（navigateTo），动态分类→分类过滤+滚动列表，更多分类→滚动课程列表 -->
     <view class="grid">
       <view class="cell" @click="applyFilter('required')"><text class="cell-ico">📕</text><text class="cell-tx">必修</text></view>
       <view class="cell" @click="applyFilter('elective')"><text class="cell-ico">📗</text><text class="cell-tx">选修</text></view>
       <view class="cell" @click="applyFilter('featured')"><text class="cell-ico">⭐</text><text class="cell-tx">精品</text></view>
       <view class="cell" @click="go('/pages/search/search')"><text class="cell-ico">📰</text><text class="cell-tx">文章</text></view>
       <view class="cell" @click="go('/pages/comment/comment')"><text class="cell-ico">💬</text><text class="cell-tx">评论</text></view>
-      <view v-for="c in gridCategories" :key="c.slug" class="cell" @click="scrollToCategory(c.index)">
+      <view v-for="c in gridCategories" :key="c.slug" class="cell" @click="applyCategory(c.slug)">
         <text class="cell-ico">📚</text><text class="cell-tx">{{ c.label }}</text>
       </view>
       <view class="cell" @click="scrollToCourses"><text class="cell-ico">🗂️</text><text class="cell-tx">更多分类</text></view>
     </view>
-    <!-- 操作行（#84 回补）：同步 / 新建课程 / 我创建的，三大按钮均分宽 -->
-    <view class="ops">
-      <button class="op-btn" :disabled="busy || syncBlocked" @click="doSync">{{ busy ? '同步中…' : (syncBlocked ? '无法同步' : '同步') }}</button>
-      <button class="op-btn" @click="createCourse">新建课程</button>
-      <button class="op-btn" @click="showMyCreated">我创建的（{{ myCreated.length }}）</button>
-    </view>
-    <text v-if="syncBlocked" class="ops-error">本地文件不可写，无法同步（设置 → 基座自检 可看原因）</text>
     <!-- A 大卡瀑布区：最近更新（课程/文章混合） -->
     <view class="feed">
       <text class="feed-head">最近更新</text>
@@ -51,87 +44,36 @@
       </view>
       <text v-if="error" class="feed-error">{{ error }}</text>
     </view>
-    <!-- C 课程分组列表（#84 回补，适老放大）：区头 id 即宫格必修/选修/精品/更多分类的滚动锚点；过滤态本 Task 仅标题联动（列表重构在 Task 4） -->
+    <!-- 课程列表区（#84 Task 4）：Discuz 平铺，角标置顶/加精/推荐按权重排序截 20；区头 id 即宫格滚动锚点 -->
     <text id="course-list" class="list-head">{{ listHeadText }}</text>
-    <text v-if="listFilter !== ''" class="filter-clear" @click="clearFilter">✕ 取消筛选</text>
-    <text v-if="total === 0 && !error" class="feed-hint">还没有内容，点「同步」从节点拉取。</text>
-    <block v-if="groups.length > 0">
-      <block v-for="(g, gi) in groups" :key="g.slug">
-        <text :id="'cat-' + gi" class="group group-cat" @click="toggle(g.slug)">
-          {{ collapsed[g.slug] ? '▸ ' : '▾ ' }}{{ groupTitle(g) }}<text v-if="groupPending(g)" class="term-badge">待票选</text>
-        </text>
-        <block v-if="!collapsed[g.slug]">
-          <view v-for="it in g.courses" :key="it.itemId" class="item" :class="{ 'course-card': !!courseCover(it.itemId) }" @click="openCourse(it.itemId)">
-            <image v-if="courseCover(it.itemId)" :src="courseCover(it.itemId)" mode="aspectFill" class="course-cover" />
-            <view class="course-content">
-              <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-              <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-                <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-              </view>
-              <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-              <view v-if="completionPercent(it.itemId)" class="completion-bar">
-                <view class="progress-track">
-                  <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
-                </view>
-                <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
-              </view>
-            </view>
-          </view>
-        </block>
-      </block>
-      <text v-if="unclassified.length > 0" class="group">未归类课程</text>
-      <view v-for="it in unclassified" :key="it.itemId" class="item" :class="{ 'course-card': !!courseCover(it.itemId) }" @click="openCourse(it.itemId)">
-        <image v-if="courseCover(it.itemId)" :src="courseCover(it.itemId)" mode="aspectFill" class="course-cover" />
-        <view class="course-content">
-          <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-          <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-            <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-          </view>
-          <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-          <view v-if="completionPercent(it.itemId)" class="completion-bar">
-            <view class="progress-track">
-              <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
-            </view>
-            <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
-          </view>
-        </view>
+    <text v-if="filterActive" class="filter-clear" @click="clearFilter">✕ 取消筛选</text>
+    <text v-if="courseRows.length === 0" class="feed-hint">{{ filterActive ? '没有匹配的课程' : '下拉同步后可见' }}</text>
+    <view v-for="row in courseRows" :key="row.itemId" class="flat-row" @click="openCourse(row.itemId)">
+      <view class="flat-head">
+        <text v-if="row.flagText !== ''" class="flag" :class="row.flagCls">{{ row.flagText }}</text>
+        <text class="flat-title">{{ row.title }}</text>
       </view>
-      <text v-if="standalone.length > 0" class="group">独立内容</text>
-      <view v-for="it in standalone" :key="it.itemId" class="item" @click="openStandalone(it)">
-        <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-        <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-          <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-        </view>
-        <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
+      <text v-if="row.meta !== ''" class="flat-meta">{{ row.meta }}</text>
+    </view>
+    <!-- 精选文章区（#84 Task 4）：本机文章 items，同一角标规则排序截 20 -->
+    <text class="list-head">精选文章</text>
+    <text v-if="articleRows.length === 0" class="feed-hint">下拉同步后可见</text>
+    <view v-for="row in articleRows" :key="row.itemId" class="flat-row" @click="openArticle(row.itemId)">
+      <view class="flat-head">
+        <text v-if="row.flagText !== ''" class="flag" :class="row.flagCls">{{ row.flagText }}</text>
+        <text class="flat-title">{{ row.title }}</text>
       </view>
-    </block>
-    <block v-else>
-      <text v-if="courses.length > 0" class="group">课程</text>
-      <view v-for="it in courses" :key="it.itemId" class="item" :class="{ 'course-card': !!courseCover(it.itemId) }" @click="openCourse(it.itemId)">
-        <image v-if="courseCover(it.itemId)" :src="courseCover(it.itemId)" mode="aspectFill" class="course-cover" />
-        <view class="course-content">
-          <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-          <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-            <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-          </view>
-          <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-          <view v-if="completionPercent(it.itemId)" class="completion-bar">
-            <view class="progress-track">
-              <view class="progress-fill" :class="{ done: completionPercent(it.itemId)?.done }" :style="`width:${completionPercent(it.itemId)?.percent}%`"></view>
-            </view>
-            <text class="progress-text" :class="{ done: completionPercent(it.itemId)?.done }">{{ completionPercent(it.itemId)?.done ? '已完成' : (completionPercent(it.itemId)?.percent ?? 0) + '%' }}</text>
-          </view>
-        </view>
+      <text v-if="row.meta !== ''" class="flat-meta">{{ row.meta }}</text>
+    </view>
+    <!-- 公开圈子区（#84 Task 4）：本机 groups 形态公开（encrypted=0）的圈子，截 20 -->
+    <text class="list-head">公开圈子</text>
+    <text v-if="circleRows.length === 0" class="feed-hint">下拉同步后可见</text>
+    <view v-for="row in circleRows" :key="row.groupId" class="flat-row" @click="openGroup(row.groupId)">
+      <view class="flat-head">
+        <text class="flat-title">{{ row.title }}</text>
       </view>
-      <text v-if="standalone.length > 0" class="group">未归类</text>
-      <view v-for="it in standalone" :key="it.itemId" class="item" @click="openStandalone(it)">
-        <text class="item-title" :class="titleColorOf(it.itemId) ? 'c-' + titleColorOf(it.itemId) : ''">{{ it.title }}</text>
-        <view v-if="badgesOf(it.itemId).length > 0" class="chips">
-          <text v-for="b in badgesOf(it.itemId)" :key="b" class="badge">{{ b }}</text>
-        </view>
-        <text class="meta">{{ it.itemId }} · {{ it.rev }}</text>
-      </view>
-    </block>
+      <text class="flat-meta">{{ row.meta }}</text>
+    </view>
   </view>
 </template>
 
@@ -139,17 +81,11 @@
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
-import { syncOnce } from '../../core/sync';
 import { runCreatorVisibilityMigration, runLedgerHealMigration } from '../../core/creator-migrate';
-import { childrenOf, groupCoursesByCategory, splitCourses } from '../../core/course-tree';
-import { attrsOf } from '../../core/container-view';
-import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot, type PendingTerm } from '../../core/directory';
-import { buildMyCreatedView, canRemoveMyCreated, containerFormFromLedger, type MyCreatedRow, type MyCreatedType } from '../../core/my-created';
-import type { ItemRow, ProgressRow, SegmentRow } from '../../core/types';
+import { groupCoursesByCategory, splitCourses } from '../../core/course-tree';
+import { displayOf, loadDirectory, normalizeTermKey, type DirectorySnapshot } from '../../core/directory';
+import type { GroupRow, ItemRow, SegmentRow } from '../../core/types';
 import { bootstrap } from '../../platform';
-import { canSync } from '../../core/selfcheck';
-import type { LocalRepo } from '../../core/repo';
-import { lessonCompleted } from '../../core/progress';
 
 interface CategoryGroupVM {
   slug: string;
@@ -158,79 +94,21 @@ interface CategoryGroupVM {
 }
 
 const courses = ref<ItemRow[]>([]);
+const articles = ref<ItemRow[]>([]);
 const groups = ref<CategoryGroupVM[]>([]);
-const unclassified = ref<ItemRow[]>([]);
 const standalone = ref<ItemRow[]>([]);
-const collapsed = ref<Record<string, boolean>>({});
-const myCreated = ref<MyCreatedRow[]>([]);
-/** 「我创建的」提示行：itemId -> 「分类待票选 · 已有 n/N 票」（#58 §5.2） */
-const categoryHints = ref(new Map<string, string>());
-/** 目录快照（三态判定用）：进入页面时读本地缓存，模板只读 */
+/** 公开圈子（#84 Task 4）：本机 groups 形态公开（encrypted=0）的圈子 */
+const circles = ref<GroupRow[]>([]);
+/** 目录快照：分类展示名判定（groupTitle）用；进入页面时读本地缓存，模板只读 */
 const directory = ref<DirectorySnapshot>({ version: 0, approved: new Map(), pending: new Map() });
-// 图章与标题色（册子 #53 §2.5）：只读派生映射，仅供展示；无属性行则空数组 / 空串
-const marksByItemId = ref(new Map<string, { badge: string[]; titleColor: string }>());
-/** 每门课的完成度（已学 a / b 讲）；分母为 0 的课**不入 Map** ⇒ 模板不显示该行（#8 册子 §6） */
-const completionByCourse = ref(new Map<string, { done: number; total: number }>());
-/** 课程封面图路径；key=courseItemId → 本地 blob 路径（无封面不入 Map） */
-const coverByCourse = ref(new Map<string, string>());
-const total = computed(
-  () => courses.value.length + groups.value.reduce((n, g) => n + g.courses.length, 0) + standalone.value.length,
-);
 /** 生效公告（#84 §4.4）：config announcements_active（票选生效后由治理页写入），空数组 ⇒ 公告条隐藏 */
 const announcements = ref<string[]>([]);
 const error = ref('');
-const tip = ref('');
-const busy = ref(false);
-const syncBlocked = ref(false);
-
-/**
- * 一门课的完成度（#8 册子 §6）。分母 = **可达** lesson 数，分子 = 其中「可达叶子非空且全 done」的 lesson 数。
- * 未下载的子条目（不在本地 `items` 里）**不计入分母**；分母为 0 时由调用方不显示该行（不是显示 0 / 0）。
- * 只用于展示：**不产生事件、不落表**。
- */
-async function courseCompletion(
-  courseId: string,
-  repo: LocalRepo,
-  byId: Map<string, ItemRow>,
-  progressByItem: Map<string, ProgressRow>,
-): Promise<{ done: number; total: number }> {
-  let done = 0;
-  let total = 0;
-  for (const lessonId of childrenOf(await repo.listSegments(courseId))) {
-    if (!byId.has(lessonId)) continue;
-    const leafDone: boolean[] = [];
-    for (const leafId of childrenOf(await repo.listSegments(lessonId))) {
-      const leaf = byId.get(leafId);
-      if (!leaf) continue;
-      // 叶子载体只有这三类才有 position / done（#8 册子 §3.2）
-      if (leaf.type !== 'article' && leaf.type !== 'video' && leaf.type !== 'quiz') continue;
-      leafDone.push(progressByItem.get(leafId)?.done === true);
-    }
-    if (leafDone.length === 0) continue;
-    total += 1;
-    if (lessonCompleted(leafDone)) done += 1;
-  }
-  return { done, total };
-}
-
-/** 完成度百分比 & 是否全完成；无数据返回 null ⇒ 模板不渲染进度条。 */
-function completionPercent(courseId: string): { percent: number; done: boolean } | null {
-  const c = completionByCourse.value.get(courseId);
-  if (!c || c.total === 0) return null;
-  const percent = Math.round((c.done / c.total) * 100);
-  return { percent, done: c.done === c.total };
-}
-
-/** 课程封面图路径；无封面返回空串 ⇒ 模板不渲染封面缩略图。 */
-function courseCover(itemId: string): string {
-  return coverByCourse.value.get(itemId) ?? '';
-}
 
 async function load() {
   try {
-    const { repo, capabilities, opts } = await bootstrap();
+    const { repo, opts } = await bootstrap();
     directory.value = await loadDirectory(repo);
-    syncBlocked.value = !canSync(capabilities);
     // 生效公告（#84 §4.4）：读失败不阻断首页，按空处理
     try {
       const raw = await repo.getConfig('announcements_active');
@@ -251,8 +129,10 @@ async function load() {
     const active = all.filter((i) => i.state !== 'removed');
     const tree = splitCourses(active);
     courses.value = tree.courses;
+    articles.value = active.filter((i) => i.type === 'article');
 
-    // 分类分组（册子 #49 §3）：双来源 + 优先级，组标题与未归类口径都由纯函数给出。
+    // 分类分组（册子 #49 §3）：双来源 + 优先级。分组树不再渲染（#84 Task 4），
+    // 组数据仍供宫格动态分类与课程列表的必修/选修/精品类判定（角标/过滤）使用；
     // 需要课程自身的 attr.category（逐课程取 segments）与分类清单行（逐分类取 segments）；只读、零写入。
     const segsByItemId = new Map<string, SegmentRow[]>();
     for (const it of active) {
@@ -260,62 +140,16 @@ async function load() {
         segsByItemId.set(it.itemId, await repo.listSegments(it.itemId));
       }
     }
-    const { groups: built, unclassified: orphan } = groupCoursesByCategory(active, segsByItemId);
-    groups.value = built;
-    unclassified.value = orphan;
+    groups.value = groupCoursesByCategory(active, segsByItemId).groups;
 
-    // 图章与标题色（册子 #53 §2.5）：只读派生，仅供展示；无属性行则空数组 / 空串
-    const marks = new Map<string, { badge: string[]; titleColor: string }>();
-    for (const [id, segs] of segsByItemId) {
-      const a = attrsOf(segs);
-      marks.set(id, { badge: a.badge, titleColor: a.titleColor });
-    }
-    marksByItemId.value = marks;
-
-    // 每门课的完成度（#8 册子 §6）：只读派生，复用上面已建的 segsByItemId；零写入。
-    // 循环内顺便查课程封面：cover item_id 约定 = {courseId}/cover（文章页同口径），零封面不入 Map。
-    const byId = new Map(active.map((i) => [i.itemId, i]));
-    const progressByItem = new Map((await repo.listProgress()).map((r) => [r.itemId, r]));
-    const completion = new Map<string, { done: number; total: number }>();
-    const covers = new Map<string, string>();
-    for (const it of active) {
-      if (it.type !== 'course') continue;
-      const c = await courseCompletion(it.itemId, repo, byId, progressByItem);
-      if (c.total > 0) completion.set(it.itemId, c);
-      const p = await repo.findBlobPathByItem(`${it.itemId}/cover`);
-      if (p) covers.set(it.itemId, p.startsWith('file://') ? p : `file://${p}`);
-    }
-    completionByCourse.value = completion;
-    coverByCourse.value = covers;
-
-    // 独立内容 = 独立文章 article/<aid> ∪ 独立题库 quiz/<qid>（册子 §5.2）
+    // 独立内容 = 独立文章 article/<aid> ∪ 独立题库 quiz/<qid>（册子 §5.2）：「最近更新」大卡流数据源
     standalone.value = [
       ...tree.ungrouped,
       ...active.filter((i) => i.type === 'quiz' && i.itemId.startsWith('quiz/')),
     ].sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0));
 
-    // 「我创建的」区（册子 #51 §3）：台账行集 + 包表 id 集合（复用上面已取的 all，不重复查询）。
-    // 去重全在 buildMyCreatedView 内，此处只消费结果。
-    const subs = await repo.listSubmissions();
-    const packIds = new Set(all.filter((i) => i.source !== 'local').map((i) => i.itemId));
-    myCreated.value = buildMyCreatedView(subs, packIds);
-
-    // 「分类待票选 · 已有 n/N 票」提示行（#58 §5.2）：只加提示行，不改主展示。
-    const hints = new Map<string, string>();
-    for (const sub of subs) {
-      if (sub.type !== 'course') continue;
-      const key = normalizeTermKey(containerFormFromLedger(sub).category) ?? '';
-      if (key === '') continue;
-      let term: PendingTerm | undefined;
-      for (const cand of directory.value.pending.values()) {
-        if (cand.kind === 'category' && cand.termKey === key) {
-          term = cand;
-          break;
-        }
-      }
-      if (term) hints.set(sub.itemId, `分类待票选 · 已有 ${term.votes}/${term.threshold} 票`);
-    }
-    categoryHints.value = hints;
+    // 公开圈子（#84 Task 4）：只取形态公开（encrypted=0）的圈子，零网络
+    circles.value = (await repo.listGroups()).filter((g) => g.encrypted === 0);
 
     error.value = '';
   } catch (e) {
@@ -323,84 +157,10 @@ async function load() {
   }
 }
 
-function badgesOf(itemId: string): string[] {
-  return marksByItemId.value.get(itemId)?.badge ?? [];
-}
-
-function titleColorOf(itemId: string): string {
-  return marksByItemId.value.get(itemId)?.titleColor ?? '';
-}
-
-/** 分类分组头的展示名（#58 §5.2）：词条键走目录展示名，键非法则回落既有组标题。 */
+/** 分类展示名（#58 §5.2）：词条键走目录展示名，键非法则回落既有组标题。 */
 function groupTitle(g: CategoryGroupVM): string {
   const key = normalizeTermKey(g.slug) ?? '';
   return key === '' ? g.title : displayOf(directory.value, 'category', key);
-}
-
-/** 分类分组头三态（#58 §5.1）：词条键非空且未 approved ⇒ 加「待票选」角标。 */
-function groupPending(g: CategoryGroupVM): boolean {
-  const key = normalizeTermKey(g.slug) ?? '';
-  return termState(directory.value, 'category', key) === 'pending';
-}
-
-/** 「我创建的」提示行文案（无则空串 ⇒ 模板不显示）。 */
-function categoryHint(itemId: string): string {
-  return categoryHints.value.get(itemId) ?? '';
-}
-
-function toggle(itemId: string) {
-  collapsed.value = { ...collapsed.value, [itemId]: !collapsed.value[itemId] };
-}
-
-function openStandalone(it: ItemRow) {
-  if (it.type === 'quiz') {
-    uni.navigateTo({ url: `/pages/quiz/quiz?itemId=${encodeURIComponent(it.itemId)}` });
-    return;
-  }
-  openArticle(it.itemId);
-}
-
-async function doSync() {
-  busy.value = true;
-  tip.value = '';
-  try {
-    const { opts } = await bootstrap();
-    if (!opts.nodeBaseUrl) {
-      tip.value = '请先在「我的 → 设置」里填写节点地址与公钥';
-      return;
-    }
-    const res = await syncOnce(opts);
-    tip.value =
-      res.status === 'noop'
-        ? '节点内容未更新'
-        : `已更新到版本 ${res.contentVersion}（条目 ${res.items}，块 ${res.blobs}）`;
-    await load();
-  } catch (e) {
-    error.value = (e as Error).message;
-  } finally {
-    busy.value = false;
-  }
-}
-
-function openSearch() {
-  uni.navigateTo({ url: '/pages/search/search' });
-}
-
-/** 发表文章入口（册子 #65 §4）：复用既有投稿页（内部已是「文章 / 题库」双 tab），零新页面。 */
-function publishArticle() {
-  uni.navigateTo({ url: '/pages/submit/submit' });
-}
-
-function createCourse() {
-  uni.navigateTo({ url: '/pages/course/edit' });
-}
-
-function openArticle(itemId: string) {
-  uni.navigateTo({ url: `/pages/article/article?itemId=${encodeURIComponent(itemId)}` });
-}
-
-function openCourse(itemId: string) {
-  uni.navigateTo({ url: `/pages/course/detail?courseId=${encodeURIComponent(itemId)}` });
 }
 
 /** 首页搜索关键字：本地过滤「最近更新」大卡流（册子 §3.2 大搜索框） */
@@ -445,19 +205,60 @@ function go(url: string) {
   uni.navigateTo({ url });
 }
 
-/** 课程列表过滤态（#84 Task 3）：宫格必修/选修/精品设置；列表区 Task 4 重构后按对应角标类过滤，本 Task 仅标题/锚点联动。 */
+/** 课程列表过滤态（#84 Task 4）：宫格必修/选修/精品按分类类目过滤；动态分类格按分类词条过滤。 */
 type ListFilter = 'required' | 'elective' | 'featured';
 const listFilter = ref<ListFilter | ''>('');
+const categoryFilter = ref('');
 const FILTER_HEAD: Record<ListFilter, string> = { required: '必修课程', elective: '选修课程', featured: '精品课程' };
-const listHeadText = computed(() => (listFilter.value === '' ? '全部课程' : FILTER_HEAD[listFilter.value]));
+
+/** courseId → 所属分类组：分组树不再渲染，分组数据仍是分类判定数据源 */
+const groupByCourse = computed<Map<string, CategoryGroupVM>>(() => {
+  const m = new Map<string, CategoryGroupVM>();
+  for (const g of groups.value) {
+    for (const c of g.courses) m.set(c.itemId, g);
+  }
+  return m;
+});
+
+/** 课程分类类目判定（沿用本页既有分类逻辑）：按分类展示名含「必修/选修/精品」归类，无分类返回 ''。 */
+function courseClassOf(itemId: string): ListFilter | '' {
+  const g = groupByCourse.value.get(itemId);
+  if (!g) return '';
+  const label = groupTitle(g);
+  if (label.includes('必修')) return 'required';
+  if (label.includes('选修')) return 'elective';
+  if (label.includes('精品')) return 'featured';
+  return '';
+}
+
+function categoryLabel(slug: string): string {
+  const g = groups.value.find((x) => x.slug === slug);
+  return g ? groupTitle(g) : slug;
+}
+
+const listHeadText = computed(() => {
+  if (categoryFilter.value !== '') return categoryLabel(categoryFilter.value);
+  return listFilter.value === '' ? '全部课程' : FILTER_HEAD[listFilter.value];
+});
+
+const filterActive = computed(() => listFilter.value !== '' || categoryFilter.value !== '');
 
 function applyFilter(f: ListFilter) {
   listFilter.value = f;
+  categoryFilter.value = '';
+  scrollToCourses();
+}
+
+/** 宫格动态分类格（#84 Task 4）：分组树已删，改为设置分类过滤并滚动到课程列表区头。 */
+function applyCategory(slug: string) {
+  categoryFilter.value = slug;
+  listFilter.value = '';
   scrollToCourses();
 }
 
 function clearFilter() {
   listFilter.value = '';
+  categoryFilter.value = '';
 }
 
 /** 宫格「必修/选修/精品/更多分类」：页内滚动定位到课程列表区头锚点（#84 Task 3）。 */
@@ -465,45 +266,128 @@ function scrollToCourses() {
   uni.pageScrollTo({ selector: '#course-list', duration: 300 });
 }
 
-/** 宫格动态分类格（#84 Task 3）：groupCoursesByCategory 分类展示名去重；index 对应分组树锚点 cat-<index>。 */
-const gridCategories = computed<Array<{ slug: string; label: string; index: number }>>(() => {
+/** 宫格动态分类格（#84 Task 3）：groupCoursesByCategory 分类展示名去重。 */
+const gridCategories = computed<Array<{ slug: string; label: string }>>(() => {
   const seen = new Set<string>();
-  const out: Array<{ slug: string; label: string; index: number }> = [];
-  groups.value.forEach((g, index) => {
+  const out: Array<{ slug: string; label: string }> = [];
+  for (const g of groups.value) {
     const label = groupTitle(g);
-    if (seen.has(label)) return;
+    if (seen.has(label)) continue;
     seen.add(label);
-    out.push({ slug: g.slug, label, index });
-  });
+    out.push({ slug: g.slug, label });
+  }
   return out;
 });
 
-/** 宫格分类格点击：滚动到分组树对应分类锚点。 */
-function scrollToCategory(index: number) {
-  uni.pageScrollTo({ selector: `#cat-${index}`, duration: 300 });
+/** Discuz 平铺行（#84 Task 4）：标题 + 角标 + meta，课程/文章区共用。 */
+interface FlatRow {
+  itemId: string;
+  title: string;
+  meta: string;
+  flagText: string;
+  flagCls: string;
+  /** 排序权重（#84 §4.3）：置顶1 > 加精2 > 推荐3 > 正常4 */
+  weight: number;
+  updatedAt: string;
 }
 
-/**
- * 「我创建的」大按钮（#84 回补）：ActionSheet 列出台账行标题，点开走既有详情路由。
- * 课程行 → openCourse；其余（课时/文章/题库）→ openMyCreated（带 from=ledger，未落库行只有台账渲染兜底）。
- */
-function showMyCreated() {
-  const rows = myCreated.value;
-  if (rows.length === 0) {
-    uni.showToast({ title: '还没有我创建的内容', icon: 'none' });
-    return;
+/** 角标映射（#84 §4.3）：置顶（红）=必修类、加精（橙）=精品类、推荐（蓝）=7 天内有更新；正常无标。 */
+type FlagKind = 'top' | 'feat' | 'rec' | '';
+const FLAG_META: Record<Exclude<FlagKind, ''>, { text: string; cls: string; weight: number }> = {
+  top: { text: '置顶', cls: 'flag-top', weight: 1 },
+  feat: { text: '加精', cls: 'flag-feat', weight: 2 },
+  rec: { text: '推荐', cls: 'flag-rec', weight: 3 },
+};
+const NORMAL_WEIGHT = 4;
+const REC_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function isRecent(updatedAt: string): boolean {
+  const t = Date.parse(updatedAt);
+  return Number.isFinite(t) && Date.now() - t <= REC_WINDOW_MS;
+}
+
+/** 角标判定：一条只取一个角标，按 置顶 > 加精 > 推荐 优先。 */
+function flagOf(itemId: string, updatedAt: string): FlagKind {
+  const cls = courseClassOf(itemId);
+  if (cls === 'required') return 'top';
+  if (cls === 'featured') return 'feat';
+  if (isRecent(updatedAt)) return 'rec';
+  return '';
+}
+
+/** 次要 meta：更新日期 + 点赞数，有啥显示啥。 */
+function metaOf(it: ItemRow): string {
+  const parts: string[] = [];
+  if (it.updatedAt !== '') parts.push(it.updatedAt.slice(0, 10));
+  const likes = it.likeCount ?? 0;
+  if (likes > 0) parts.push(`赞 ${likes}`);
+  return parts.join(' · ');
+}
+
+function toFlatRow(it: ItemRow): FlatRow {
+  const kind = flagOf(it.itemId, it.updatedAt);
+  const flag = kind === '' ? undefined : FLAG_META[kind];
+  return {
+    itemId: it.itemId,
+    title: it.title || it.itemId,
+    meta: metaOf(it),
+    flagText: flag?.text ?? '',
+    flagCls: flag?.cls ?? '',
+    weight: flag?.weight ?? NORMAL_WEIGHT,
+    updatedAt: it.updatedAt || '',
+  };
+}
+
+/** 排序（#84 §4.3）：权重升序，同权重 updated_at 倒序，itemId 兜底稳定。 */
+function byWeight(a: FlatRow, b: FlatRow): number {
+  if (a.weight !== b.weight) return a.weight - b.weight;
+  if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
+  return a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0;
+}
+
+/** 课程列表 20 条：按宫格过滤态过滤后角标排序截 20。 */
+const courseRows = computed<FlatRow[]>(() => {
+  let list = courses.value;
+  if (listFilter.value !== '') {
+    const f = listFilter.value;
+    list = list.filter((it) => courseClassOf(it.itemId) === f);
+  } else if (categoryFilter.value !== '') {
+    const slug = categoryFilter.value;
+    list = list.filter((it) => groupByCourse.value.get(it.itemId)?.slug === slug);
   }
-  uni.showActionSheet({
-    itemList: rows.map((r) => `${typeLabel(r.type)} · ${r.title}`),
-    success: ({ tapIndex }) => {
-      const row = rows[tapIndex];
-      if (row.type === 'course') {
-        openCourse(row.itemId);
-        return;
-      }
-      openMyCreated(row);
-    },
-  });
+  return list.map(toFlatRow).sort(byWeight).slice(0, 20);
+});
+
+/** 精选文章 20 条（#84 Task 4）：本机文章 items，同一角标规则排序截 20。 */
+const articleRows = computed<FlatRow[]>(() => articles.value.map(toFlatRow).sort(byWeight).slice(0, 20));
+
+/** 公开圈子行（#84 Task 4）：圈名 + 形态标注 + 成员数，截 20。 */
+interface CircleRow {
+  groupId: string;
+  title: string;
+  meta: string;
+}
+
+const circleRows = computed<CircleRow[]>(() =>
+  circles.value.slice(0, 20).map((g) => ({
+    groupId: g.groupId,
+    title: g.name || '未命名圈子',
+    meta: `公开 · 成员 ${groupMemberCount(g.memberIdsJson)}`,
+  })),
+);
+
+/** 成员数取自名单快照；投影损坏按 0，不让一行坏数据打断整页（与圈子页同口径）。 */
+function groupMemberCount(memberIdsJson: string): number {
+  try {
+    const ids = JSON.parse(memberIdsJson) as unknown;
+    return Array.isArray(ids) ? ids.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function openGroup(groupId: string) {
+  uni.navigateTo({ url: `/pages/group/group?groupId=${encodeURIComponent(groupId)}` });
 }
 
 function onSearch(e: Event) {
@@ -524,45 +408,12 @@ function open(row: FeedRow) {
   openArticle(row.itemId);
 }
 
-const TYPE_LABEL: Record<MyCreatedType, string> = { course: '课程', lesson: '课时', article: '文章', quiz: '题库' };
-
-function typeLabel(t: MyCreatedType): string {
-  return TYPE_LABEL[t];
+function openArticle(itemId: string) {
+  uni.navigateTo({ url: `/pages/article/article?itemId=${encodeURIComponent(itemId)}` });
 }
 
-/** 状态色照「我的条目」页既有色值：待补发 / 失败 / 已同步。 */
-function statusColor(state: MyCreatedRow['state']): string {
-  return state === 'pending' ? '#b7791f' : state === 'failed' ? '#c53030' : '#888888';
-}
-
-/**
- * 点开「我创建的」行 → 走既有详情页路由并带 `from=ledger`，详情页据此改从台账行集渲染。
- * 课时行：台账无 courseId 字段，按 id 形态 `course/<cid>/lesson/<lid>` 剥出（与 lesson/detail 既有口径同源）。
- */
-function openMyCreated(row: MyCreatedRow) {
-  const id = encodeURIComponent(row.itemId);
-  if (row.type === 'course') {
-    uni.navigateTo({ url: `/pages/course/detail?courseId=${id}&from=ledger` });
-    return;
-  }
-  if (row.type === 'lesson') {
-    const mid = row.itemId.indexOf('/lesson/');
-    const cid = mid > 0 ? row.itemId.slice(0, mid) : '';
-    uni.navigateTo({
-      url: `/pages/lesson/detail?courseId=${encodeURIComponent(cid)}&lessonId=${id}&from=ledger`,
-    });
-    return;
-  }
-  const page = row.type === 'quiz' ? 'quiz/quiz' : 'article/article';
-  uni.navigateTo({ url: `/pages/${page}?itemId=${id}&from=ledger` });
-}
-
-/** 删除台账行（册子 #61 §4.3）：台账行 + 本机乐观条目一起清，否则课程列表里仍留着它。 */
-async function removeMyCreated(row: MyCreatedRow) {
-  const { repo } = await bootstrap();
-  await repo.removeSubmission(row.itemId);
-  await repo.removeLocalContainer(row.itemId);
-  await load();
+function openCourse(itemId: string) {
+  uni.navigateTo({ url: `/pages/course/detail?courseId=${encodeURIComponent(itemId)}` });
 }
 
 /** 首启引导检查只做一次：guide_seen 未写则跳引导页；标志位防 onShow 反复跳（#84） */
@@ -615,40 +466,15 @@ onShow(() => {
 .card-meta { font-size: var(--fs-annotate); color: #64748b; }
 .feed-hint { display: block; font-size: var(--fs-annotate); color: #64748b; padding: 8px 16px; }
 .feed-error { display: block; font-size: var(--fs-annotate); color: #c53030; padding: 8px 16px; }
-/* 操作行（#84 回补）：三大按钮均分宽，点击目标 ≥48px；busy/阻断态 disabled 保留 */
-.ops { display: flex; gap: 8px; padding: 4px 16px 0; }
-.op-btn { flex: 1; min-height: 48px; line-height: 48px; margin: 0; padding: 0 8px; font-size: var(--fs-body); color: #2b6cb0; background: #fff; border: 1px solid #d9e1ea; border-radius: 12px; }
-.op-btn::after { border: none; }
-.op-btn[disabled] { color: #a0aec0; background: #f7fafc; }
-/* syncBlocked 行内提示（#84 回补，fs-annotate 小字） */
-.ops-error { display: block; font-size: var(--fs-annotate); color: #c53030; padding: 8px 16px 0; }
-/* 课程分组列表（#84 回补，适老放大）：项 min-height 48px、标题 fs-body、分组头 fs-title */
 .list-head { display: block; font-size: var(--fs-title); font-weight: 600; padding: 16px 16px 8px; }
-.group { display: block; min-height: 48px; line-height: 48px; padding: 0 16px; font-size: var(--fs-title); font-weight: 600; box-sizing: border-box; }
-.group-cat { color: #2b6cb0; }
-.term-badge { display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: 10px; background: #edf2f7; color: #718096; font-size: var(--fs-annotate); }
-.item { background: #fff; border: 1px solid #d9e1ea; border-radius: 12px; padding: 12px 16px; margin: 8px 16px; min-height: 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; }
-.item:active { background: #f7fafc; }
-/* 带封面的课程卡片：左图右文 flex */
-.item.course-card { flex-direction: row; align-items: flex-start; gap: 12px; }
-.course-cover { width: 80px; height: 60px; border-radius: 8px; flex-shrink: 0; background: #edf2f7; }
-.course-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.item-title { font-size: var(--fs-body); font-weight: 500; }
-.meta { font-size: var(--fs-annotate); color: #64748b; }
-/* 图章 chips 与完成度进度条 */
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.badge { font-size: var(--fs-annotate); color: #666666; border: 1px solid #dddddd; border-radius: 10px; padding: 0 8px; }
-.completion-bar { display: flex; align-items: center; gap: 8px; }
-.progress-track { flex: 1; height: 4px; background: #edf2f7; border-radius: 2px; overflow: hidden; }
-.progress-fill { height: 100%; background: #2b6cb0; border-radius: 2px; transition: width 0.3s ease; }
-.progress-fill.done { background: #2f855a; }
-.progress-text { font-size: var(--fs-annotate); color: #718096; min-width: 48px; text-align: right; }
-.progress-text.done { color: #2f855a; font-weight: 600; }
-/* 标题色（attrs titleColor 派生 class） */
-.c-red { color: #c53030; }
-.c-orange { color: #b7791f; }
-.c-green { color: #2f855a; }
-.c-blue { color: #2b6cb0; }
-.c-purple { color: #6b46c1; }
-.c-gray { color: #718096; }
+/* Discuz 平铺行（#84 Task 4）：课程/文章/圈子三区共用，标题 fs-body + 角标/meta fs-annotate，点击目标 ≥48px */
+.flat-row { display: flex; flex-direction: column; gap: 4px; background: #fff; border-bottom: 1px solid #edf2f7; padding: 12px 16px; min-height: 48px; box-sizing: border-box; }
+.flat-row:active { background: #f7fafc; }
+.flat-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.flat-title { flex: 1; font-size: var(--fs-body); font-weight: 500; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.flag { flex-shrink: 0; font-size: var(--fs-annotate); line-height: 30px; padding: 0 8px; border-radius: 6px; }
+.flag-top { color: #c53030; background: #fed7d7; }
+.flag-feat { color: #b7791f; background: #feebc8; }
+.flag-rec { color: #2b6cb0; background: #ebf8ff; }
+.flat-meta { font-size: var(--fs-annotate); color: #64748b; }
 </style>
