@@ -33,6 +33,7 @@
     <navigator url="/pages/tag/list" class="link">全部标签</navigator>
 
     <navigator url="/pages/favorite/favorite" class="link">我的收藏</navigator>
+    <navigator url="/pages/help/help" class="link">使用帮助</navigator>
     <navigator url="/pages/setting/setting" class="link">设置</navigator>
   </view>
 </template>

@@ -119,6 +119,14 @@
     {
       "path": "pages/identity/restore",
       "style": { "navigationBarTitleText": "恢复账号" }
+    },
+    {
+      "path": "pages/guide/guide",
+      "style": { "navigationBarTitleText": "欢迎使用" }
+    },
+    {
+      "path": "pages/help/help",
+      "style": { "navigationBarTitleText": "使用帮助" }
     }
   ],
   "tabBar": {
