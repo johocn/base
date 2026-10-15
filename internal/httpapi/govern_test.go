@@ -13,7 +13,7 @@ import (
 func trimSpace(s string) string { return strings.TrimSpace(s) }
 
 func TestValidProposalAction(t *testing.T) {
-	for _, a := range []string{"remove", "edit", "revive"} {
+	for _, a := range []string{"remove", "edit", "revive", "directory_add", "announcement"} {
 		if !validProposalAction(a) {
 			t.Fatalf("应合法: %q", a)
 		}

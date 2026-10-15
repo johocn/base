@@ -38,6 +38,8 @@ const (
 // 第四个受审动作：目录词条新增（册子 #58 §3.1）。与既有三动作共用提案 / 投票管线与事件。
 const (
 	GovernActionDirectoryAdd = "directory_add"
+	// #84 首页改版：公告提案（文本走 reason，生效后由客户端投影 config announcements_active，节点无副作用）。
+	GovernActionAnnouncement = "announcement"
 	// DirectoryAddQuorum 与 #27 同档 2 票；名册 < DirectorySmallNodeRosterMax 的节点豁免为 1 票（册子 §3.2）。
 	DirectoryAddQuorum          = 2
 	DirectorySmallNodeRosterMax = 10

@@ -29,10 +29,12 @@ const (
 	maxProposalReasonRunes = 200
 )
 
-// validProposalAction 按册子 §2.1：remove / edit / revive 三值枚举，另加 #58 §3.1 的 directory_add。
+// validProposalAction 按册子 §2.1：remove / edit / revive 三值枚举，另加 #58 §3.1 的 directory_add
+// 与 #84 的 announcement（公告提案，文本走 reason，节点侧无生效副作用）。
 func validProposalAction(a string) bool {
 	switch a {
-	case store.GovernActionRemove, store.GovernActionEdit, store.GovernActionRevive, store.GovernActionDirectoryAdd:
+	case store.GovernActionRemove, store.GovernActionEdit, store.GovernActionRevive, store.GovernActionDirectoryAdd,
+		store.GovernActionAnnouncement:
 		return true
 	}
 	return false
