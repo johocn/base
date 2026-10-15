@@ -22,12 +22,17 @@
       </swiper>
     </view>
     <input class="search" placeholder="搜索课程与文章" :value="keyword" @input="onSearch" />
-    <!-- B 宫格区：2×2（册子 §3.2）；tabBar 页走 switchTab -->
+    <!-- 宫格区（#84 Task 3）：每行 3 大图标；必修/选修/精品→过滤态+滚动列表，文章→文章 tab（switchTab），评论→评论页（navigateTo），动态分类→分组锚点，更多分类→分组树顶 -->
     <view class="grid">
-      <view class="cell" @click="scrollToCourses"><text class="cell-ico">📚</text><text class="cell-tx">学课程</text></view>
-      <view class="cell" @click="go('/pages/search/search')"><text class="cell-ico">📰</text><text class="cell-tx">看文章</text></view>
-      <view class="cell" @click="go('/pages/submit/submit')"><text class="cell-ico">✍️</text><text class="cell-tx">去投稿</text></view>
-      <view class="cell" @click="go('/pages/mine/mine')"><text class="cell-ico">👤</text><text class="cell-tx">我的</text></view>
+      <view class="cell" @click="applyFilter('required')"><text class="cell-ico">📕</text><text class="cell-tx">必修</text></view>
+      <view class="cell" @click="applyFilter('elective')"><text class="cell-ico">📗</text><text class="cell-tx">选修</text></view>
+      <view class="cell" @click="applyFilter('featured')"><text class="cell-ico">⭐</text><text class="cell-tx">精品</text></view>
+      <view class="cell" @click="go('/pages/search/search')"><text class="cell-ico">📰</text><text class="cell-tx">文章</text></view>
+      <view class="cell" @click="go('/pages/comment/comment')"><text class="cell-ico">💬</text><text class="cell-tx">评论</text></view>
+      <view v-for="c in gridCategories" :key="c.slug" class="cell" @click="scrollToCategory(c.index)">
+        <text class="cell-ico">📚</text><text class="cell-tx">{{ c.label }}</text>
+      </view>
+      <view class="cell" @click="scrollToCourses"><text class="cell-ico">🗂️</text><text class="cell-tx">更多分类</text></view>
     </view>
     <!-- 操作行（#84 回补）：同步 / 新建课程 / 我创建的，三大按钮均分宽 -->
     <view class="ops">
@@ -46,12 +51,13 @@
       </view>
       <text v-if="error" class="feed-error">{{ error }}</text>
     </view>
-    <!-- C 课程分组列表（#84 回补，适老放大）：区头 id 即宫格「学课程」的滚动锚点 -->
-    <text id="course-list" class="list-head">全部课程</text>
+    <!-- C 课程分组列表（#84 回补，适老放大）：区头 id 即宫格必修/选修/精品/更多分类的滚动锚点；过滤态本 Task 仅标题联动（列表重构在 Task 4） -->
+    <text id="course-list" class="list-head">{{ listHeadText }}</text>
+    <text v-if="listFilter !== ''" class="filter-clear" @click="clearFilter">✕ 取消筛选</text>
     <text v-if="total === 0 && !error" class="feed-hint">还没有内容，点「同步」从节点拉取。</text>
     <block v-if="groups.length > 0">
-      <block v-for="g in groups" :key="g.slug">
-        <text class="group group-cat" @click="toggle(g.slug)">
+      <block v-for="(g, gi) in groups" :key="g.slug">
+        <text :id="'cat-' + gi" class="group group-cat" @click="toggle(g.slug)">
           {{ collapsed[g.slug] ? '▸ ' : '▾ ' }}{{ groupTitle(g) }}<text v-if="groupPending(g)" class="term-badge">待票选</text>
         </text>
         <block v-if="!collapsed[g.slug]">
@@ -429,7 +435,7 @@ const rows = computed<FeedRow[]>(() => {
 });
 
 /** 宫格跳转：tabBar 页走 switchTab（tab 页不可 navigateTo），其余 navigateTo。 */
-const TAB_PATHS = new Set(['/pages/course/course', '/pages/circle/circle', '/pages/mine/mine']);
+const TAB_PATHS = new Set(['/pages/course/course', '/pages/circle/circle', '/pages/search/search', '/pages/mine/mine']);
 
 function go(url: string) {
   if (TAB_PATHS.has(url)) {
@@ -439,9 +445,42 @@ function go(url: string) {
   uni.navigateTo({ url });
 }
 
-/** 宫格「学课程」：页内滚动定位到课程列表区头锚点（#84 回补，不再 switchTab 自己）。 */
+/** 课程列表过滤态（#84 Task 3）：宫格必修/选修/精品设置；列表区 Task 4 重构后按对应角标类过滤，本 Task 仅标题/锚点联动。 */
+type ListFilter = 'required' | 'elective' | 'featured';
+const listFilter = ref<ListFilter | ''>('');
+const FILTER_HEAD: Record<ListFilter, string> = { required: '必修课程', elective: '选修课程', featured: '精品课程' };
+const listHeadText = computed(() => (listFilter.value === '' ? '全部课程' : FILTER_HEAD[listFilter.value]));
+
+function applyFilter(f: ListFilter) {
+  listFilter.value = f;
+  scrollToCourses();
+}
+
+function clearFilter() {
+  listFilter.value = '';
+}
+
+/** 宫格「必修/选修/精品/更多分类」：页内滚动定位到课程列表区头锚点（#84 Task 3）。 */
 function scrollToCourses() {
   uni.pageScrollTo({ selector: '#course-list', duration: 300 });
+}
+
+/** 宫格动态分类格（#84 Task 3）：groupCoursesByCategory 分类展示名去重；index 对应分组树锚点 cat-<index>。 */
+const gridCategories = computed<Array<{ slug: string; label: string; index: number }>>(() => {
+  const seen = new Set<string>();
+  const out: Array<{ slug: string; label: string; index: number }> = [];
+  groups.value.forEach((g, index) => {
+    const label = groupTitle(g);
+    if (seen.has(label)) return;
+    seen.add(label);
+    out.push({ slug: g.slug, label, index });
+  });
+  return out;
+});
+
+/** 宫格分类格点击：滚动到分组树对应分类锚点。 */
+function scrollToCategory(index: number) {
+  uni.pageScrollTo({ selector: `#cat-${index}`, duration: 300 });
 }
 
 /**
@@ -561,12 +600,14 @@ onShow(() => {
 .notice-tag { flex-shrink: 0; font-size: var(--fs-annotate); color: #b7791f; background: #fefcbf; border: 1px solid #f6e05e; border-radius: 8px; padding: 2px 8px; }
 .notice-text { flex: 1; font-size: var(--fs-body); color: #744210; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .search { height: 48px; border-radius: 24px; background: #fff; border: 1px solid #d9e1ea; padding: 0 20px; font-size: var(--fs-body); margin: 12px 16px; }
-.grid { display: flex; flex-wrap: wrap; padding: 0 8px; }
-.cell { width: 50%; box-sizing: border-box; padding: 8px; min-height: 96px; }
-.cell { background: #fff; border: 1px solid #d9e1ea; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+/* 宫格区（#84 Task 3）：每行 3 大图标网格，格高 ≥96px（适老大点击区），字号全引令牌 */
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 0 12px; }
+.cell { box-sizing: border-box; min-height: 96px; padding: 8px 4px; background: #fff; border: 1px solid #d9e1ea; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
 .cell:active { background: #f7fafc; }
 .cell-ico { font-size: var(--fs-title); }
-.cell-tx { font-size: var(--fs-title); }
+.cell-tx { font-size: var(--fs-title); text-align: center; }
+/* 过滤态清除行（#84 Task 3）：fs-annotate 小字，整行点击目标 ≥48px */
+.filter-clear { display: block; font-size: var(--fs-annotate); color: #2b6cb0; padding: 0 16px; min-height: 48px; line-height: 48px; }
 .feed-head { font-size: var(--fs-title); font-weight: 600; display: block; padding: 16px 16px 8px; }
 .card { background: #fff; border: 1px solid #d9e1ea; border-radius: 12px; padding: 16px; margin: 8px 16px; min-height: 48px; display: flex; flex-direction: column; gap: 6px; }
 .card:active { background: #f7fafc; }
