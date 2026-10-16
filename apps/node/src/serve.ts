@@ -17,7 +17,7 @@ import { blobGetHandler, blobHeadHandler, blobPostHandler, MAX_BLOB_BYTES } from
 import { releaseHandler } from "./routes/release";
 import { contributorsHandler } from "./routes/contributors";
 import { directoryHandler } from "./routes/directory";
-import { commentHandler } from "./routes/comment";
+import { commentHandler, commentTargetsHandler } from "./routes/comment";
 import {
   requireReviewKey,
   reviewFetchHandler,
@@ -164,6 +164,7 @@ export function mountPublicRoutes(adapters: ServerAdapters, db: Db, opts: Server
   adapters.http.handle("GET /v1/contributors", contributorsHandler({ db, storeKey }));
   adapters.http.handle("GET /v1/directory", directoryHandler({ db, storeKey, limiter: governLimiter }));
   adapters.http.handle("GET /v1/comment", commentHandler(db));
+  adapters.http.handle("GET /v1/comment/targets", commentTargetsHandler(db));
   // 审核路由：**未配置 BASE_REVIEW_KEY 的节点上这两条根本不存在**（册子 §4.3、风险 9；对齐 server.go:145-149）。
   const reviewKey = opts.reviewKey ?? "";
   if (reviewKey !== "") {

@@ -30,6 +30,26 @@ const TOMBSTONE_DDL = `CREATE TABLE comment_tombstone(
 	at          INTEGER NOT NULL,
 	received_at INTEGER NOT NULL
 )`;
+const ITEMS_DDL = `CREATE TABLE items(
+	item_id    TEXT PRIMARY KEY,
+	source     TEXT NOT NULL,
+	type       TEXT NOT NULL,
+	title      TEXT NOT NULL DEFAULT '',
+	source_rev TEXT NOT NULL DEFAULT '',
+	content_hash TEXT NOT NULL,
+	sqlite_table TEXT NOT NULL,
+	dist_class TEXT NOT NULL DEFAULT 'public',
+	state      TEXT NOT NULL DEFAULT 'active',
+	updated_at TEXT NOT NULL
+)`;
+
+function insertItem(db: Db, id: string, typ: string, title: string, state: string): void {
+	db.execute(
+		`INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		[id, typ, typ, title, "r", "h", "articles", "public", state, "2026-01-01T00:00:00Z"],
+	);
+}
 
 const A = "11111111111111111111111111111111";
 const B = "22222222222222222222222222222222";
@@ -79,6 +99,7 @@ beforeAll(async () => {
   db = openDb(join(dir, "base.db"));
   db.execute(EVENTS_DDL);
   db.execute(TOMBSTONE_DDL);
+  db.execute(ITEMS_DDL);
 
   db.execute(
     `INSERT INTO events(event_id,id,type,body_json,created_at,received_at,target_id,payload_cid,reply_to)
@@ -164,6 +185,7 @@ describe("GET /v1/comment 内联 like_count", () => {
     likeDb = openDb(join(likeDir, "base.db"));
     likeDb.execute(EVENTS_DDL);
     likeDb.execute(TOMBSTONE_DDL);
+    likeDb.execute(ITEMS_DDL);
 
     const insert = (
       eventId: string,
@@ -223,5 +245,63 @@ describe("GET /v1/comment 内联 like_count", () => {
         "target_id",
       ]);
     }
+  });
+});
+
+// ---------- #80：/v1/comment/targets 聚合 + kind 过滤（对齐 Go TestCommentTargetsAndKind） ----------
+describe("GET /v1/comment/targets 与 kind 过滤", () => {
+  let d: string;
+  let ldb: Db;
+  let ln: Listener;
+  let lb: string;
+  const T1 = "44444444444444444444444444444444";
+  const T2 = "55555555555555555555555555555555";
+
+  beforeAll(async () => {
+    d = mkdtempSync(join(tmpdir(), "base-node-comment-targets-"));
+    ldb = openDb(join(d, "base.db"));
+    ldb.execute(EVENTS_DDL);
+    ldb.execute(TOMBSTONE_DDL);
+    ldb.execute(ITEMS_DDL);
+    insertItem(ldb, "article/a", "article", "文章甲", "active");
+    insertItem(ldb, "course/c1", "course", "课程乙", "active");
+    insertItem(ldb, "article/gone", "article", "已删", "removed");
+    const insert = (eventId: string, target: string, createdAt: number): void => {
+      ldb.execute(
+        `INSERT INTO events(event_id,id,type,body_json,created_at,received_at,target_id,payload_cid,reply_to)
+					VALUES(?,?,?,?,?,?,?,?,?)`,
+        [eventId, "actor", "comment.v1", "{}", createdAt, createdAt, target, "", null],
+      );
+    };
+    insert(T1, "article/a", 100);
+    insert(T2, "course/c1", 200);
+    insert("6".repeat(32), "article/gone", 300);
+
+    ln = await startServer(adapters(), ldb, { host: "127.0.0.1", port: 0, dataDir: d });
+    lb = `http://${ln.addr()}`;
+  });
+
+  afterAll(async () => {
+    await ln.close();
+    ldb.close();
+    rmSync(d, { recursive: true, force: true });
+  });
+
+  it("聚合：只含 active 条目，last_at 倒序，键序与 Go 一致", async () => {
+    const res = await request(`${lb}/v1/comment/targets`);
+    const body =
+      `{"targets":[` +
+      `{"target_id":"course/c1","kind":"course","title":"课程乙","count":1,"last_at":200},` +
+      `{"target_id":"article/a","kind":"article","title":"文章甲","count":1,"last_at":100}` +
+      `]}\n`;
+    expect(res.status).toBe(200);
+    expect(res.body.toString("utf8")).toBe(body);
+  });
+
+  it("kind 过滤：列表只剩该类型", async () => {
+    const res = await request(`${lb}/v1/comment?kind=course`);
+    const parsed = JSON.parse(res.body.toString("utf8")) as { comments: Array<{ target_id: string }> };
+    expect(res.status).toBe(200);
+    expect(parsed.comments.map((c) => c.target_id)).toEqual(["course/c1"]);
   });
 });

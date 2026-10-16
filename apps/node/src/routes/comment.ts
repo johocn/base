@@ -17,9 +17,11 @@ interface CommentRow {
   createdAt: number;
 }
 
-/** ListComments（store/comment.go:21-61）：按 (created_at,event_id) 倒序分页，联表排除墓碑。 */
+/** ListComments（store/comment.go:58-108）：按 (created_at,event_id) 倒序分页，联表排除墓碑。
+ *  kind/targetId 为空不过滤；kind 匹配 items.type（不看 state），无 items 行的 target 按 id 前缀兜底（改版册子 §2.2）。 */
 function listComments(
   db: Db,
+  kind: string,
   targetId: string,
   cursorTS: number,
   cursorID: string,
@@ -31,6 +33,13 @@ function listComments(
     WHERE e.type='comment.v1'
       AND NOT EXISTS (SELECT 1 FROM comment_tombstone t WHERE t.event_id=e.event_id)`;
   const args: unknown[] = [];
+  if (kind !== "") {
+    // 有 items 行按 items.type 匹配；无 items 行的 target 按 id 前缀兜底
+    //（评论数据独立于条目存亡，kind 过滤不得藏掉这类评论——改版册子 §2.2）。
+    q += ` AND (EXISTS (SELECT 1 FROM items i WHERE i.item_id=e.target_id AND i.type=?)
+      OR (NOT EXISTS (SELECT 1 FROM items i WHERE i.item_id=e.target_id) AND e.target_id LIKE ? || '/%'))`;
+    args.push(kind, kind);
+  }
   if (targetId !== "") {
     q += ` AND e.target_id=?`;
     args.push(targetId);
@@ -76,7 +85,7 @@ export function commentHandler(db: Db): ServerHandler {
         if (n !== null && n > 0 && n <= COMMENT_MAX_LIMIT) limit = n;
       }
       const cur = parseCommentCursor(req.query.cursor ?? "");
-      const rows = listComments(db, req.query.target_id ?? "", cur.ts, cur.id, limit);
+      const rows = listComments(db, req.query.kind ?? "", req.query.target_id ?? "", cur.ts, cur.id, limit);
 
       // #79 §5.1：按页聚合 like_count（禁 N+1），无赞行 map 缺键按 0 填。
       const targets = rows.map((c) => c.eventId);
@@ -98,6 +107,53 @@ export function commentHandler(db: Db): ServerHandler {
         nextCursor = `${last.createdAt}_${last.eventId}`;
       }
       return jsonResponse(200, { comments, next_cursor: nextCursor });
+    } catch (err) {
+      return jsonResponse(500, { error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+}
+
+/** CommentTargetRow（store/comment.go ListCommentTargets）：只含 active 条目，墓碑同口径排除。 */
+interface CommentTargetRow {
+  targetId: string;
+  kind: string;
+  title: string;
+  count: number;
+  lastAt: number;
+}
+
+function listCommentTargets(db: Db): CommentTargetRow[] {
+  const rows = db.select(
+    `SELECT e.target_id, i.type AS kind, i.title, COUNT(*) AS cnt, MAX(e.created_at) AS last_at
+      FROM events e
+      JOIN items i ON i.item_id = e.target_id AND i.state='active'
+      WHERE e.type='comment.v1'
+        AND NOT EXISTS (SELECT 1 FROM comment_tombstone t WHERE t.event_id=e.event_id)
+      GROUP BY e.target_id
+      ORDER BY last_at DESC, e.target_id DESC`,
+    [],
+  );
+  return rows.map((r) => ({
+    targetId: toStr(r.target_id),
+    kind: toStr(r.kind),
+    title: toStr(r.title),
+    count: Number(r.cnt ?? 0),
+    lastAt: Number(r.last_at ?? 0),
+  }));
+}
+
+/** 匿名聚合读（改版册子 §2.1）；JSON 键序与 Go commentTargetDTO 一致。 */
+export function commentTargetsHandler(db: Db): ServerHandler {
+  return async () => {
+    try {
+      const targets = listCommentTargets(db).map((t) => ({
+        target_id: t.targetId,
+        kind: t.kind,
+        title: t.title,
+        count: t.count,
+        last_at: t.lastAt,
+      }));
+      return jsonResponse(200, { targets });
     } catch (err) {
       return jsonResponse(500, { error: err instanceof Error ? err.message : String(err) });
     }
