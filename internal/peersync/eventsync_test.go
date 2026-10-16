@@ -54,7 +54,7 @@ func TestSyncEventsPropagatesCommentBodyInOneRound(t *testing.T) {
 	cfg := Config{TransportFor: tr, IssuerPubKeys: map[string]string{srcIssuer: pub}}
 	cfg.RunOnce(context.Background(), dst, []Peer{{URL: url}}, func(string, ...any) {})
 
-	rows, err := dst.ListComments("article/a", 0, "", 10)
+	rows, err := dst.ListComments("", "article/a", 0, "", 10)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("缓存节点应可见该条评论 err=%v rows=%+v", err, rows)
 	}
@@ -194,7 +194,7 @@ func TestSyncEventsTombstoneDeletesBodyAndNeverResurrects(t *testing.T) {
 	}
 
 	cfg.RunOnce(context.Background(), dst, []Peer{{URL: url}}, func(string, ...any) {})
-	if rows, err := dst.ListComments("", 0, "", 10); err != nil || len(rows) != 0 {
+	if rows, err := dst.ListComments("", "", 0, "", 10); err != nil || len(rows) != 0 {
 		t.Fatalf("墓碑到达后列表不应返回该条 err=%v rows=%+v", err, rows)
 	}
 	if ok, _, _ := dst.HasBlob(cid); ok {
@@ -211,7 +211,7 @@ func TestSyncEventsTombstoneDeletesBodyAndNeverResurrects(t *testing.T) {
 			t.Fatalf("第 %d 轮后已撤回的块被拉回", i+1)
 		}
 	}
-	if rows, _ := dst.ListComments("", 0, "", 10); len(rows) != 0 {
+	if rows, _ := dst.ListComments("", "", 0, "", 10); len(rows) != 0 {
 		t.Fatalf("墓碑后列表仍返回该条: %+v", rows)
 	}
 }
