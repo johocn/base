@@ -120,3 +120,52 @@ describe('SIZE_OPTIONS 字号档位（册子 #83 §4.3）', () => {
     expect(r.end).toBe(2);
   });
 });
+
+describe('属性组合并（真机反馈 0.21.5：字号套色不得嵌套）', () => {
+  it('字号后整组选中再套色：类并集合并，渲染出双类 span', () => {
+    const r1 = applyToolbar('hello', 0, 5, SIZE_OPTIONS[1]!.action); // [hello]{.fs-lg}
+    const r2 = applyToolbar(r1.text, r1.start, r1.end, COLOR_BUTTONS[0]!.action);
+    expect(r2.text).toBe('[hello]{.fs-lg .c-red}');
+    expect(r2.start).toBe(0);
+    expect(r2.end).toBe(r2.text.length);
+    expect(renderMarkdown(r2.text)).toBe('<p><span class="fs-lg c-red">hello</span></p>');
+  });
+
+  it('先色后字号：同组合并，顺序跟随操作次序', () => {
+    const r1 = applyToolbar('hi', 0, 2, COLOR_BUTTONS[2]!.action); // [hi]{.c-green}
+    const r2 = applyToolbar(r1.text, r1.start, r1.end, SIZE_OPTIONS[2]!.action);
+    expect(r2.text).toBe('[hi]{.c-green .fs-xl}');
+    expect(renderMarkdown(r2.text)).toBe('<p><span class="c-green fs-xl">hi</span></p>');
+  });
+
+  it('只选中组内文本：合并进外层组，选区扩为整组', () => {
+    const r = applyToolbar('[笔记]{.fs-lg}', 1, 3, COLOR_BUTTONS[6]!.action);
+    expect(r.text).toBe('[笔记]{.fs-lg .c-mark}');
+    expect(r.start).toBe(0);
+    expect(r.end).toBe(r.text.length);
+  });
+
+  it('同类重复应用：去重幂等，文本不变', () => {
+    const r1 = applyToolbar('x', 0, 1, COLOR_BUTTONS[0]!.action); // [x]{.c-red}
+    const r2 = applyToolbar(r1.text, r1.start, r1.end, COLOR_BUTTONS[0]!.action);
+    expect(r2.text).toBe('[x]{.c-red}');
+    expect(r2.start).toBe(0);
+    expect(r2.end).toBe(r1.text.length);
+  });
+
+  it('跨组/无组选区不受影响：普通包裹（嵌套留给用户自决）', () => {
+    expect(wrapSelection('a[x]{.c-red}b', 0, 13, '[', ']{.fs-lg}')).toEqual({
+      text: '[a[x]{.c-red}b]{.fs-lg}',
+      start: 1,
+      end: 14,
+    });
+  });
+
+  it('链接按钮（before=[ 但非属性组）不受合并影响', () => {
+    expect(wrapSelection('x', 0, 1, '[', '](https://)')).toEqual({
+      text: '[x](https://)',
+      start: 1,
+      end: 2,
+    });
+  });
+});

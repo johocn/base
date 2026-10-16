@@ -32,7 +32,51 @@ function clamp(n: number, lo: number, hi: number): number {
   return n;
 }
 
-/** 行内 / 色块：有选区则包裹，无选区插入一对空标记并把光标夹在中间。 */
+/** 组后缀形态：`]{.cls}` 起始段（属性组感知合并用；`{.a .b}` 空格分段式，见 protocol-ts 渲染器）。 */
+const GROUP_SUFFIX = /^\]\{(\.[\w-]+)(?: \.[\w-]+)*\}/;
+
+/** 类并集去重（先旧后新），回吐 `{.a .b}` 分段式。 */
+function mergeClasses(existing: string[], add: string[]): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const c of [...existing, ...add]) {
+    if (seen.has(c)) continue;
+    seen.add(c);
+    out.push('.' + c);
+  }
+  return out.join(' ');
+}
+
+/** 属性组合并（真机反馈 0.21.5：字号后再套色会嵌套 `[[x]{.fs-lg}]{.c-red}`，渲染失效）。
+ *  情形 A：选区恰为完整属性组 → 类并集合并进该组；
+ *  情形 B：选区为外层组内文（前邻 `[` 且紧跟 `]{.cls…}`，内文不含括号）→ 合并进外层组。
+ *  两情形选区都保持覆盖整组，便于连续叠加属性；不匹配返回 null 走普通包裹。 */
+function wrapAttributeGroup(text: string, s: number, e: number, after: string): EditResult | null {
+  const add = after.slice(2, -1).split('.').filter(Boolean);
+  const selected = text.slice(s, e);
+  const whole = /^\[([^\[\]]*)\]\{(\.[\w-]+(?: \.[\w-]+)*)\}$/.exec(selected);
+  if (whole) {
+    const existing = whole[2].split(' ').map((x) => x.slice(1));
+    const repl = '[' + whole[1] + ']{' + mergeClasses(existing, add) + '}';
+    return { text: text.slice(0, s) + repl + text.slice(e), start: s, end: s + repl.length };
+  }
+  if (s > 0 && text[s - 1] === '[' && !/[\[\]]/.test(selected)) {
+    const m = GROUP_SUFFIX.exec(text.slice(e));
+    if (m) {
+      const existing = m[1].split(' ').map((x) => x.slice(1));
+      const suffix = ']{' + mergeClasses(existing, add) + '}';
+      return {
+        text: text.slice(0, e) + suffix + text.slice(e + m[0].length),
+        start: s - 1,
+        end: e + suffix.length,
+      };
+    }
+  }
+  return null;
+}
+
+/** 行内 / 色块：有选区则包裹，无选区插入一对空标记并把光标夹在中间。
+ *  `[`…`]{.cls}` 形态的工具先试属性组合并（字号/颜色叠加同一组，不嵌套）。 */
 export function wrapSelection(
   text: string,
   start: number,
@@ -42,6 +86,10 @@ export function wrapSelection(
 ): EditResult {
   const s = clamp(start, 0, text.length);
   const e = clamp(end, s, text.length);
+  if (before === '[' && /^\]\{(\.[\w-]+)+\}$/.test(after)) {
+    const merged = wrapAttributeGroup(text, s, e, after);
+    if (merged) return merged;
+  }
   const selected = text.slice(s, e);
   const next = text.slice(0, s) + before + selected + after + text.slice(e);
   if (s === e) {
