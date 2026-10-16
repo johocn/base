@@ -16,9 +16,49 @@ type CommentRow struct {
 	CreatedAt  int64
 }
 
+// CommentTargetRow 是 GET /v1/comment/targets 的聚合行（改版册子 §2.1）。
+type CommentTargetRow struct {
+	TargetID string
+	Kind     string
+	Title    string
+	Count    int64
+	LastAt   int64
+}
+
+// ListCommentTargets 按目标聚合全站评论：只含 items 里 state='active' 的条目
+// （已删条目不进二级 chips，点了也跳不过去；其评论仍走 ListComments 可见）。
+// 墓碑与 ListComments 同口径排除；按最近评论时间倒序，target_id 兜底稳定序。
+func (s *Store) ListCommentTargets() ([]CommentTargetRow, error) {
+	rows, err := s.db.Query(`SELECT e.target_id, i.type, i.title, COUNT(*) AS cnt, MAX(e.created_at) AS last_at
+		FROM events e
+		JOIN items i ON i.item_id = e.target_id AND i.state='active'
+		WHERE e.type='comment.v1'
+		  AND NOT EXISTS (SELECT 1 FROM comment_tombstone t WHERE t.event_id=e.event_id)
+		GROUP BY e.target_id
+		ORDER BY last_at DESC, e.target_id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CommentTargetRow{}
+	for rows.Next() {
+		var (
+			r     CommentTargetRow
+			title sql.NullString
+		)
+		if err := rows.Scan(&r.TargetID, &r.Kind, &title, &r.Count, &r.LastAt); err != nil {
+			return nil, err
+		}
+		r.Title = title.String
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ListComments 按 (created_at, event_id) 倒序分页读评论投影，联表排除墓碑。
-// targetID 为空表示不过滤目标；cursorTS/cursorID 为上一页末条，返回严格更旧的行。
-func (s *Store) ListComments(targetID string, cursorTS int64, cursorID string, limit int) ([]CommentRow, error) {
+// kind/targetID 为空表示不过滤；kind 走 EXISTS items.type（不看 state：已删条目的评论仍可读，改版册子 §2.2）；
+// cursorTS/cursorID 为上一页末条，返回严格更旧的行。
+func (s *Store) ListComments(kind, targetID string, cursorTS int64, cursorID string, limit int) ([]CommentRow, error) {
 	if limit <= 0 {
 		limit = 30
 	}
@@ -27,6 +67,13 @@ func (s *Store) ListComments(targetID string, cursorTS int64, cursorID string, l
 		WHERE e.type='comment.v1'
 		  AND NOT EXISTS (SELECT 1 FROM comment_tombstone t WHERE t.event_id=e.event_id)`
 	args := []any{}
+	if kind != "" {
+		// 有 items 行按 items.type 匹配；无 items 行的 target 按 id 前缀兜底
+		//（评论数据独立于条目存亡，kind 过滤不得藏掉这类评论——改版册子 §2.2）。
+		q += ` AND (EXISTS (SELECT 1 FROM items i WHERE i.item_id=e.target_id AND i.type=?)
+		  OR (NOT EXISTS (SELECT 1 FROM items i WHERE i.item_id=e.target_id) AND e.target_id LIKE ? || '/%'))`
+		args = append(args, kind, kind)
+	}
 	if targetID != "" {
 		q += ` AND e.target_id=?`
 		args = append(args, targetID)
