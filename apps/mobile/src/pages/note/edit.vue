@@ -91,7 +91,7 @@
           <view class="modal-tabs">
             <text class="modal-tab modal-tab-on">选择颜色</text>
           </view>
-          <view class="size-row">
+          <view class="size-row color-row">
             <view v-for="c in COLOR_BUTTONS" :key="c.key" class="tool size-opt" :class="c.key" @click="applyColor(c)">
               <text :class="c.key">{{ c.label }}</text>
               <text class="hint">{{ c.hint }}</text>
@@ -552,6 +552,9 @@ async function submit() {
 /* 预览内图片等比缩放 */
 .preview img { max-width: 100%; height: auto; }
 .size-row { display: flex; gap: 10px; margin-top: 10px; }
+/* 颜色弹层 7 档：3 列换行（单行 flex:1 挤压截断标签，真机反馈 0.21.5） */
+.color-row { flex-wrap: wrap; }
+.color-row .size-opt { flex: 0 0 30%; }
 .size-opt { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .add { display: block; color: #2b6cb0; font-size: var(--fs-body); padding: 6px 0; min-height: 48px; }
 .error { display: block; color: #c53030; font-size: var(--fs-annotate); margin: 8px 0; }
