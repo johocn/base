@@ -43,7 +43,7 @@ func (s *Server) handleCommentList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	curTS, curID := parseCommentCursor(q.Get("cursor"))
-	rows, err := s.st.ListComments(q.Get("target_id"), curTS, curID, limit)
+	rows, err := s.st.ListComments(q.Get("kind"), q.Get("target_id"), curTS, curID, limit)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -94,6 +94,34 @@ func parseCommentCursor(raw string) (int64, string) {
 		return 0, ""
 	}
 	return ts, id
+}
+
+type commentTargetDTO struct {
+	TargetID string `json:"target_id"`
+	Kind     string `json:"kind"`
+	Title    string `json:"title"`
+	Count    int64  `json:"count"`
+	LastAt   int64  `json:"last_at"`
+}
+
+type commentTargetsResponse struct {
+	Targets []commentTargetDTO `json:"targets"`
+}
+
+// handleCommentTargets 评论目标聚合（改版册子 §2.1）：二级条目 chips 数据源，一次到位。
+func (s *Server) handleCommentTargets(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.st.ListCommentTargets()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := commentTargetsResponse{Targets: []commentTargetDTO{}}
+	for _, t := range rows {
+		resp.Targets = append(resp.Targets, commentTargetDTO{
+			TargetID: t.TargetID, Kind: t.Kind, Title: t.Title, Count: t.Count, LastAt: t.LastAt,
+		})
+	}
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // requireReviewKey 校验运营审核密钥。

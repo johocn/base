@@ -127,6 +127,7 @@ func (s *Server) publicMux() *http.ServeMux {
 
 	// 评论公开读（匿名，册子 §4.2）。
 	mux.HandleFunc("GET /v1/comment", s.handleCommentList)
+	mux.HandleFunc("GET /v1/comment/targets", s.handleCommentTargets)
 
 	// 小组读（册子 §3.7）：**开放圈匿名可读**；封闭圈需成员签名读权（optionalAuth 允许匿名进入，
 	// 由 handler 按形态分支决定放行 / 404）。非成员一律 404，不泄露存在性。

@@ -550,3 +550,56 @@ func TestFetchSkipsRevokedPayload(t *testing.T) {
 		t.Fatalf("未撤块应照常返回 status=%d len=%d", status, len(raw))
 	}
 }
+
+// #80：目标聚合路由 + kind 过滤透传。
+func TestCommentTargetsAndKind(t *testing.T) {
+	n := newCommentNode(t, "")
+	// items：两个 active、一个 removed（store.db 未导出，按 circle_test.go 既有模式走 execStoreSQL）
+	for _, it := range []struct{ id, typ, state string }{
+		{"article/a", "article", "active"},
+		{"course/c1", "course", "active"},
+		{"article/gone", "article", "removed"},
+	} {
+		if _, err := execStoreSQL(t, n.st, `INSERT INTO items(item_id,source,type,title,source_rev,content_hash,sqlite_table,dist_class,state,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?)`, it.id, it.typ, it.typ, "标题-"+it.id, "r", "h", "articles", "public", it.state, "2026-01-01T00:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	postComment(t, n, eventIDOf(1), "article/a", "甲", "")
+	postComment(t, n, eventIDOf(2), "course/c1", "乙", "")
+	postComment(t, n, eventIDOf(3), "article/gone", "已删", "")
+
+	// 聚合：只有 active 条目，按 last_at 倒序
+	code, out := doJSONMap(t, http.MethodGet, n.public+"/v1/comment/targets", "", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /v1/comment/targets status=%d out=%v", code, out)
+	}
+	targets, _ := out["targets"].([]any)
+	if len(targets) != 2 {
+		t.Fatalf("应 2 个目标: %v", out)
+	}
+	first, _ := targets[0].(map[string]any)
+	second, _ := targets[1].(map[string]any)
+	if first["target_id"] != "course/c1" || first["kind"] != "course" || first["count"] != float64(1) {
+		t.Fatalf("首行错误: %v", first)
+	}
+	if second["target_id"] != "article/a" || second["count"] != float64(1) || second["title"] != "标题-article/a" {
+		t.Fatalf("次行错误: %v", second)
+	}
+
+	// kind 透传：列表只剩该类型
+	code, out = doJSONMap(t, http.MethodGet, n.public+"/v1/comment?kind=course", "", nil)
+	if code != http.StatusOK {
+		t.Fatalf("kind=course status=%d", code)
+	}
+	rows, _ := out["comments"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("kind=course 应 1 行: %v", out)
+	}
+
+	// 匿名路由：无须签名头（postComment 内部已带签名头，这里不带也须 200）
+	code, _ = doRaw(t, http.MethodGet, n.public+"/v1/comment/targets", "", nil)
+	if code != http.StatusOK {
+		t.Fatalf("匿名读应 200，got %d", code)
+	}
+}
