@@ -18,6 +18,8 @@ import {
   ensureRegistered,
   fetchCommentText,
   flushPending,
+  lessonParentCourseId,
+  listCommentTargets,
   listComments,
   postComment,
   sendComment,
@@ -429,5 +431,56 @@ describe('flushPending', () => {
     expect((await repo.listCommentOut()).map((r) => r.eventId)).toEqual(['e1', 'e2']);
     await repo.removeCommentOut('e1');
     expect((await repo.listCommentOut()).map((r) => r.eventId)).toEqual(['e2']);
+  });
+});
+
+describe('listCommentTargets：评论目标聚合', () => {
+  it('解析 targets 行；非 200 抛 server 错', async () => {
+    const { http, o } = fixture();
+    http.routes.set(`${BASE}/v1/comment/targets`, json({
+      targets: [
+        { target_id: 'course/c1', kind: 'course', title: '课程乙', count: 2, last_at: 300 },
+        { target_id: 'article/a', kind: 'article', title: '', count: 1, last_at: 100 },
+      ],
+    }));
+    const rows = await listCommentTargets(o);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual({ targetId: 'course/c1', kind: 'course', title: '课程乙', count: 2, lastAt: 300 });
+    expect(rows[1]!.title).toBe('');
+
+    http.routes.set(`${BASE}/v1/comment/targets`, { status: 500, body: utf8('{}') });
+    await expect(listCommentTargets(o)).rejects.toMatchObject({ code: 'server' });
+  });
+
+  it('网络不可达抛 network 错', async () => {
+    const { http, o } = fixture();
+    http.get = async () => {
+      throw new Error('断网');
+    };
+    await expect(listCommentTargets(o)).rejects.toMatchObject({ code: 'network' });
+  });
+});
+
+describe('listComments kind 参数', () => {
+  it('kind 拼进查询串', async () => {
+    const { http, o } = fixture();
+    let seen = '';
+    const real = http.get.bind(http);
+    http.get = async (url) => {
+      seen = url;
+      return real(url);
+    };
+    http.routes.set(`${BASE}/v1/comment?kind=course`, json({ comments: [], next_cursor: null }));
+    await listComments(o, { kind: 'course' });
+    expect(seen).toBe(`${BASE}/v1/comment?kind=course`);
+  });
+});
+
+describe('lessonParentCourseId：课时 id 解析父课程', () => {
+  it('4 段容器 id 解出 course/<cid>；扁平 id / 坏编码返回 null', () => {
+    expect(lessonParentCourseId('course%2Fc1%2Flesson%2Fl1')).toBe('course/c1');
+    expect(lessonParentCourseId('course/c1/lesson/l1')).toBe('course/c1');
+    expect(lessonParentCourseId('article/a1')).toBeNull();
+    expect(lessonParentCourseId('course/c1')).toBeNull();
   });
 });

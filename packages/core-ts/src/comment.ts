@@ -16,6 +16,7 @@ import {
   signRequestHeaders,
   type Identity,
 } from './identity';
+import { decodeSafe } from './course-edit';
 import { decodeUtf8 } from './sync';
 
 /** 节点侧已登记公钥的本地标记（册子 §6.1）。 */
@@ -41,6 +42,44 @@ export interface CommentItem {
 export interface CommentList {
   items: CommentItem[];
   nextCursor: string | null;
+}
+
+/** 评论目标聚合行（改版册子 §2.1）：二级条目 chips 数据源，一次到位。 */
+export interface CommentTargetRow {
+  targetId: string;
+  kind: string;
+  title: string;
+  count: number;
+  lastAt: number;
+}
+
+/** 读评论目标聚合（只含未删条目）；失败抛 `CommentError`，调用方局部降级。 */
+export async function listCommentTargets(o: CommentOptions): Promise<CommentTargetRow[]> {
+  let res;
+  try {
+    res = await o.adapters.http.get(`${o.nodeBaseUrl}/v1/comment/targets`);
+  } catch {
+    throw new CommentError('network', '无法连接节点，请稍后重试');
+  }
+  if (res.status !== 200) throw new CommentError('server', `读取评论条目失败（HTTP ${res.status}）`);
+  const page = JSON.parse(decodeUtf8(res.body)) as { targets?: Array<Record<string, unknown>> };
+  return (page.targets ?? []).map((t) => ({
+    targetId: String(t.target_id ?? ''),
+    kind: String(t.kind ?? ''),
+    title: String(t.title ?? ''),
+    count: Number(t.count ?? 0),
+    lastAt: Number(t.last_at ?? 0),
+  }));
+}
+
+/** 课时 id → 父课程 id（改版册子 §3）：容器 id 形态 `course/<cid>/lesson/<lid>`（幂等解码后）；
+ *  其余形态（扁平 id、坏编码）返回 null，由调用方按「该内容不可用」降级。 */
+export function lessonParentCourseId(targetId: string): string | null {
+  const segs = decodeSafe(targetId).split('/');
+  if (segs.length === 4 && segs[0] === 'course' && segs[2] === 'lesson') {
+    return `course/${segs[1]}`;
+  }
+  return null;
 }
 
 export type CommentErrorCode = 'unregistered' | 'rate_limited' | 'revoked' | 'rejected' | 'network' | 'server' | 'client';
@@ -134,11 +173,12 @@ export async function ensureRegistered(o: CommentOptions): Promise<Identity> {
 /** 分页读评论索引（`targetId` 为空 = 全站最新）。 */
 export async function listComments(
   o: CommentOptions,
-  opts: { targetId?: string; cursor?: string | null } = {},
+  opts: { targetId?: string; kind?: string; cursor?: string | null } = {},
 ): Promise<CommentList> {
   // 手拼查询串：老 WebView 没有 URLSearchParams（与 core/sync.ts 同一原因）
   const q: string[] = [];
   if (opts.targetId) q.push(`target_id=${encodeURIComponent(opts.targetId)}`);
+  if (opts.kind) q.push(`kind=${encodeURIComponent(opts.kind)}`);
   if (opts.cursor) q.push(`cursor=${encodeURIComponent(opts.cursor)}`);
   const qs = q.join('&');
   let res;
