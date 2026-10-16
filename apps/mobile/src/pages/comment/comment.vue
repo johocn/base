@@ -5,16 +5,30 @@
       <text class="act" @click="reload">刷新</text>
     </view>
 
+    <!-- 两级过滤（#80 §4.1）：第一排类型，第二排「有评论的条目」+ 搜索 -->
     <scroll-view class="picker" scroll-x>
-      <text class="chip" :class="target === '' ? 'chip-on' : ''" @click="pick('')">全部最新</text>
+      <text class="chip" :class="kindFilter === '' && target === '' ? 'chip-on' : ''" @click="pickKind('')">全部</text>
       <text
-        v-for="it in items"
-        :key="it.itemId"
+        v-for="k in KIND_CHIPS"
+        :key="k.key"
         class="chip"
-        :class="target === it.itemId ? 'chip-on' : ''"
-        @click="pick(it.itemId)"
-      >{{ it.title || it.itemId }}</text>
+        :class="kindFilter === k.key && target === '' ? 'chip-on' : ''"
+        @click="pickKind(k.key)"
+      >{{ k.label }}</text>
     </scroll-view>
+    <input v-model="itemQuery" class="item-search" placeholder="搜索条目标题" />
+    <scroll-view class="picker" scroll-x>
+      <text
+        v-for="t in visibleTargetChips"
+        :key="t.targetId"
+        class="chip"
+        :class="target === t.targetId ? 'chip-on' : ''"
+        @click="pick(t.targetId)"
+      >{{ t.title || t.targetId }} · {{ t.count }}</text>
+      <text v-if="!targetLoading && !targetError && visibleTargetChips.length === 0" class="hint">该类型下还没有评论</text>
+    </scroll-view>
+    <text v-if="targetError" class="error">条目列表加载失败</text>
+    <text v-if="targetError" class="act" @click="loadTargets">重试</text>
 
     <view v-if="pending.length > 0" class="pending">
       <view class="pending-bar">
@@ -45,7 +59,8 @@
           <text class="cmt-author-name">{{ authorName(floor.item.actor) }}</text>
           <text class="cmt-meta">· {{ rel(floor.item.createdAt) }}</text>
         </view>
-        <text class="cmt-text">{{ floor.item.text }}</text>
+        <text class="cmt-text" @click="openTarget(floor.item.targetId)">{{ floor.item.text }}</text>
+        <text class="cmt-own" @click="openTarget(floor.item.targetId)">→《{{ ownTitle(floor.item.targetId) }}》</text>
         <view v-if="(tagsByEvent[floor.item.eventId] ?? []).length > 0" class="cmt-tags">
           <text v-for="(t, i) in tagsByEvent[floor.item.eventId] ?? []" :key="i" class="cmt-tag">{{ t }}</text>
         </view>
@@ -61,7 +76,8 @@
             <text v-if="sub.item.replyTo" class="cmt-sub-reply">回复 {{ floorName(sub.item.replyTo, sub.item.actor) }}</text>
             <text class="cmt-meta">· {{ rel(sub.item.createdAt) }}</text>
           </view>
-          <text class="cmt-text">{{ sub.item.text }}</text>
+          <text class="cmt-text" @click="openTarget(sub.item.targetId)">{{ sub.item.text }}</text>
+          <text class="cmt-own" @click="openTarget(sub.item.targetId)">→《{{ ownTitle(sub.item.targetId) }}》</text>
           <view class="row-acts">
             <text class="like-btn" :class="{ liked: likedSet.has(sub.item.eventId) }" @click="toggleLike(sub.item)">♥ {{ sub.item.likeCount > 0 ? sub.item.likeCount : '' }}</text>
             <text class="report-btn" @click="openReport(sub.item.eventId)">举报</text>
@@ -114,11 +130,14 @@ import {
   fetchCommentText,
   flushPending,
   listComments,
+  listCommentTargets,
+  lessonParentCourseId,
   postComment,
   takePendingTarget,
   CommentError,
   type CommentItem,
   type CommentOptions,
+  type CommentTargetRow,
 } from '../../core/comment';
 import type { CommentOutRow, ItemRow } from '../../core/types';
 import { bootstrap } from '../../platform';
@@ -140,6 +159,30 @@ const opts = ref<CommentOptions | null>(null);
 const unconfigured = ref(false);
 const items = ref<ItemRow[]>([]);
 const target = ref('');
+/** 两级过滤（#80 §4.1）：类型 chips + 有评论条目搜索 chips */
+const KIND_CHIPS = [
+  { key: 'course', label: '课程' },
+  { key: 'lesson', label: '课时' },
+  { key: 'article', label: '文章' },
+] as const;
+const kindFilter = ref('');
+const itemQuery = ref('');
+const targetRows = ref<CommentTargetRow[]>([]);
+const targetError = ref(false);
+const targetLoading = ref(false);
+
+const targetMap = computed<Record<string, CommentTargetRow>>(() => {
+  const m: Record<string, CommentTargetRow> = {};
+  for (const t of targetRows.value) m[t.targetId] = t;
+  return m;
+});
+/** 类型 + 标题关键字过滤后的条目 chips（只列有评论的条目，聚合接口一次到位） */
+const visibleTargetChips = computed(() => {
+  const kw = itemQuery.value.trim();
+  return targetRows.value
+    .filter((t) => kindFilter.value === '' || t.kind === kindFilter.value)
+    .filter((t) => kw === '' || (t.title || t.targetId).includes(kw));
+});
 const list = ref<Row[]>([]);
 const nextCursor = ref<string | null>(null);
 const error = ref('');
@@ -221,12 +264,68 @@ async function dropPending(eventId: string) {
   await loadPending();
 }
 
+async function loadTargets() {
+  if (!opts.value || unconfigured.value) return;
+  targetLoading.value = true;
+  targetError.value = false;
+  try {
+    targetRows.value = await listCommentTargets(opts.value);
+  } catch {
+    // 聚合失败不影响评论列表：第二排局部错误 + 重试（#80 §5）
+    targetError.value = true;
+  } finally {
+    targetLoading.value = false;
+  }
+}
+
+/** 选类型：清条目筛选，按 kind 拉列表；发评论仍须选具体条目（#80 定案 6）。 */
+function pickKind(kind: string) {
+  kindFilter.value = kind;
+  target.value = '';
+  nextCursor.value = null;
+  void refresh();
+}
+
+/** 所属行标题三级降级：聚合 → 本地 catalog → target_id（#80 §4.2）。 */
+function ownTitle(targetId: string): string {
+  const agg = targetMap.value[targetId];
+  if (agg && agg.title !== '') return agg.title;
+  return targetTitle(targetId);
+}
+
+/** 点评论进关联内容（#80 §4.2）：本地 catalog 查不到一律 toast 不跳。 */
+function openTarget(targetId: string): void {
+  const item = items.value.find((i) => i.itemId === targetId);
+  const kind = targetMap.value[targetId]?.kind || item?.type || '';
+  if (!item || (kind !== 'course' && kind !== 'lesson' && kind !== 'article')) {
+    uni.showToast({ title: '该内容不可用', icon: 'none' });
+    return;
+  }
+  if (kind === 'course') {
+    uni.navigateTo({ url: `/pages/course/detail?courseId=${encodeURIComponent(targetId)}` });
+    return;
+  }
+  if (kind === 'lesson') {
+    const cid = lessonParentCourseId(targetId);
+    if (cid === null) {
+      uni.showToast({ title: '该内容不可用', icon: 'none' });
+      return;
+    }
+    uni.navigateTo({ url: `/pages/lesson/detail?lessonId=${encodeURIComponent(targetId)}&courseId=${encodeURIComponent(cid)}` });
+    return;
+  }
+  uni.navigateTo({ url: `/pages/article/article?itemId=${encodeURIComponent(targetId)}` });
+}
+
 async function refresh() {
   if (unconfigured.value || !opts.value) return;
   loading.value = true;
   error.value = '';
   try {
-    const page = await listComments(opts.value, { targetId: target.value });
+    const page = await listComments(opts.value, {
+      targetId: target.value || undefined,
+      kind: target.value === '' ? (kindFilter.value || undefined) : undefined,
+    });
     nextCursor.value = page.nextCursor;
     list.value = await withText(visible(page.items), opts.value);
     await initLikes();
@@ -245,7 +344,11 @@ async function loadMore() {
   if (unconfigured.value || !opts.value || nextCursor.value === null || loading.value) return;
   loading.value = true;
   try {
-    const page = await listComments(opts.value, { targetId: target.value, cursor: nextCursor.value });
+    const page = await listComments(opts.value, {
+      targetId: target.value || undefined,
+      kind: target.value === '' ? (kindFilter.value || undefined) : undefined,
+      cursor: nextCursor.value,
+    });
     nextCursor.value = page.nextCursor;
     list.value = [...list.value, ...(await withText(visible(page.items), opts.value))];
     await initLikes();
@@ -390,6 +493,7 @@ onShow(async () => {
   const anchor = takePendingTarget();
   await load();
   if (anchor) target.value = anchor;
+  await loadTargets();
   await loadPending();
   await refresh();
   void flush(); // 不 await：补发不阻塞首屏（本册 §6）
@@ -449,4 +553,6 @@ onReachBottom(() => {
 .modal-btn { flex: 1; padding: 10px; text-align: center; background: #f0f0f0; border-radius: 6px; font-size: var(--fs-body); color: #555555; min-height: 52px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; }
 .modal-btn.primary { margin-left: 12px; background: #2b6cb0; color: #ffffff; }
 .btn { min-height: 48px; padding: 12px 16px; }
+.item-search { height: 48px; margin-bottom: 8px; padding: 0 10px; background: #f5f5f5; border-radius: 6px; font-size: var(--fs-annotate); }
+.cmt-own { display: block; margin-top: 4px; color: #2b6cb0; font-size: var(--fs-annotate); }
 </style>
