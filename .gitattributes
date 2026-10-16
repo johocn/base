@@ -1,0 +1,6 @@
+# 门户黄金字节对拍的真值文件：换行必须跨平台钉死为 LF。
+# autocrlf 检出会把工作副本转成 CRLF：模板侧会改变 Node 渲染输出的字节，
+# fixture 侧连 pagedata 数据内嵌的换行都会被转写，对拍即假红。
+web/templates/*.html text eol=lf
+apps/node/src/routes/__fixtures__/portal/*.html text eol=lf
+apps/node/src/routes/__fixtures__/portal/pagedata.json text eol=lf
