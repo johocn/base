@@ -517,7 +517,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 |---|---|
 | `POST /v1/identity/register` | 登记公钥（首次出现即登记，节点回执 id） |
 | `GET /v1/identity/:id` | 取公钥（用于验签他人事件与私信） |
-| `POST /v1/event` | 提交评论/进度/小组/私信事件；签名头管**准入**，事件体另带**内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`）管**归属**；节点验签后落库（2026-09-27 补）。已登记类型（`eventTypeRegistry`）：`comment.v1`、`group.v1`（2026-09-29 补——`action=msg` 密文发言落密文块、`action=roster` 名单落投影并携带 `sigs[]` / `envelopes[]`；圈内 roster 多签签名域 **`base/group-roster-v2`**，**旧单签仍按旧域接受**；② 类**不新开 blob 上传面**）、`govern.v1`（2026-09-29 §0.7 补——`action=proposal` / `action=vote`，**沿用通用事件内容签名，不新增签名域常量**，随反熵跨节点传播）、`like.v1` / `report.v1`（2026-10-06 册子 #79 补——点赞含 unlike 走 LWW 计数、举报四值 reason 去重计数；**无 payload 不落块**，target_id 投影列必填；沿用通用事件内容签名，不新增签名域；计数读时聚合见 #79 §4） |
+| `POST /v1/event` | 提交评论/进度/小组/私信事件；签名头管**准入**，事件体另带**内容签名** `sig`（覆盖 `canonical({event_id,type,created_at,body})`）管**归属**；节点验签后落库（2026-09-27 补）。已登记类型（`eventTypeRegistry`）：`comment.v1`、`group.v1`（2026-09-29 补——`action=msg` 密文发言落密文块、`action=roster` 名单落投影并携带 `sigs[]` / `envelopes[]`；圈内 roster 多签签名域 **`base/group-roster-v2`**，**旧单签仍按旧域接受**；② 类**不新开 blob 上传面**）、`govern.v1`（2026-09-29 §0.7 补——`action=proposal` / `action=vote`，**沿用通用事件内容签名，不新增签名域常量**，随反熵跨节点传播）、`like.v1` / `report.v1`（2026-10-06 册子 #79 补——点赞含 unlike 走 LWW 计数、举报四值 reason 去重计数；**无 payload 不落块**，target_id 投影列必填；沿用通用事件内容签名，不新增签名域；计数读时聚合见 #79 §4）。**mesh 代报（2026-10-17 #81/#82 补）**：请求可带代报审计头 `X-Base-Relay-For`（原签名者 id）/ `X-Base-Relay-Device`（代报设备 id），仅 `comment.v1` 放行；events 表补 `relay_channel` / `relay_device_id` 两列（M3，留存 ≥6 个月）。 |
 | `POST /v1/blob` | **① 类二进制上传**（2026-09-30 §0.9 补）：`multipart/form-data` 单块（字段名 `file`），服务端算 `blob_id` 落块并返回 `{"blob_id"}`；同字节幂等去重；上限 8 MiB（超限 `413 blob_too_large`）；资格 = 有效签名头。**② 类仍禁用此面** |
 | `GET /v1/identity/escrow/:username` | 取密码托管的加密私钥密文（换设备取回） |
 | `PUT /v1/identity/escrow/:username` | 写入/更新托管密文 |
@@ -587,7 +587,8 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 | `groups(group_id, name, creator_id, epoch, member_ids_json, joined_at)` | 参与的小组与当前名单（2026-09-29 #9 定案：**替换**原 `(group_id, member_ids_json, group_key_cipher)` 的单密钥形态） |
 | `group_keys(group_id, epoch, key_cipher, created_at)` | 历次 epoch 的组密钥，**密文列**（`nonce:ct`，由 `deviceKek()` 封装）（2026-09-29 #9 新增） |
 | `messages(msg_id, peer_id, blob_id, direction, sent_at)` | 私信索引（正文为 ② 类密文块）。**2026-09-29 §0.6：本册不落地**——私信册子不缓存他人正文，本表**延期不取消** |
-| `nodes(node_id, url, tls_fingerprint, last_seen_at)` | 已知节点与固定指纹 |
+| `nodes(node_id, url, tls_fingerprint, sign_pubkey, authority_order, last_seen_at)` | 已知节点与固定指纹（2026-10-17 #81/#82 补 `sign_pubkey` / `authority_order`：mesh TOFU 双锚与权威序） |
+| `gossip_events(event_id, type, target_id, actor, created_at, received_at, payload_cid, payload_path, sig, relayed)` | gossip 收件缓存（2026-10-17 #81/#82 新增：只存收到的他人事件，500 条 / 7 天 LRU；执行期定案 7 补 `body_json` 列——payload 文件只存正文，代报重建 body 需全文保真） |
 
 无 `license` 表：① 类内容不做授权与时效。
 
@@ -626,7 +627,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 
 ### 8.4 近场互传（C 阶段）
 
-热点或局域网内一方起本地 HTTP 服务，双方交换块清单：命中即秒传（只比哈希），缺失才拉块。不做 DHT、不做蓝牙。② 类密文同样可互传——传的是密文，无密钥方拿不到明文。
+热点或局域网内一方起本地 HTTP 服务，双方交换块清单：命中即秒传（只比哈希），缺失才拉块。不做 DHT、不做蓝牙。② 类密文同样可互传——传的是密文，无密钥方拿不到明文。近场互传定案见 `2026-10-17-base-mesh-community-design.md`；一期范围 = 其实时面（C1）。
 
 ## 9. 学习交流 / 学习互动 / 学习进度
 
@@ -663,7 +664,7 @@ data.key                # L4a′ 节点静态加密密钥（0600）——data �
 | **S1（第一条纵切）身份 + TLS + 节点静态加密** | 客户端自持 Ed25519 身份（生成 / id 派生 / 签名）· 节点公钥登记与事件验签 · 密码托管加密私钥 · **TLS 只用于节点↔节点**（双向 mTLS + 指纹固定）；**客户端↔节点明文 HTTP**（F1，§12.2）· **节点静态加密 L4a′**（store 层透明 AEAD，§12.1.1）· 手机端私钥密文存储 + 本地库加密 spike | 同一客户端密钥在 A 节点生成、到 B 节点仍能验签通过；篡改 1 bit 签名被拒；未固定指纹的**对端**连接被拒；**`data/` 原始字节无 ① 类明文、且公开读接口仍返回明文**；本地库加密 spike 出结论（支持 / 退路定案） |
 | A 内容与分发主线 | 视频分块 · 多节点反熵 + 邻居补齐 + scrub · 墓碑同步 · 课程体系内容模型落地 · 发行包与一键安装脚本 | 3 节点杀 1 个 → 剩余节点补齐缺失块、哈希校验通过、副本登记恢复为 2；篡改 1 bit → 客户端拒绝加载 |
 | B 交流互动主线 | 内容锚定讨论 + 审核通道 · 学习进度与打卡 · 学习小组（② 加密）· 私信（② 加密） | 离线写讨论 → 联网补 `event_id`；`rejected` → 设备删除；**进度离线写 → 联网补发 → 跨节点收敛到同一份**（#8，LWW 后两侧 `progress` / `checkin_days` 逐字一致）；② 类密文节点侧断言无明文（小组侧口径见 #9 册子 §6：发言后直接读 `data/base.db` 与 `data/blobs/*` 原始字节，断言不出现消息明文） |
-| C 客户端可靠性 | 近场互传 · 可视化内容后台（登记侧） | 热点内命中即秒传；后台可导入 / 编辑 / 导出 |
+| C 客户端可靠性 | **C1** mesh 一期实时面（`2026-10-17-base-mesh-community-design.md`）· **C2** mesh 二期降级面（快照）· 可视化内容后台（登记侧） | 热点内命中即秒传；后台可导入 / 编辑 / 导出 |
 
 范围约束：**当前实施计划只覆盖 S1**。P0 已实现不再重写；A / B / C 各自另出 spec 与计划。
 

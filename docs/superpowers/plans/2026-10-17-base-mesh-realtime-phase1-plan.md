@@ -1315,3 +1315,25 @@ git commit -m "feat(mesh): go oracle for mesh vectors + master-plan backfill + r
 3. `go run ./tools/meshoracle` exit 0。
 4. `git diff --stat -- internal/` 无输出；不 bump `schema_version`；不改内容包规范 v1。
 5. 真机验收（Task 8 登记为待办，云打包 versionCode 48）：热点 + 同 Wi-Fi 两场景全流程（分发 / 断网读 / 互发评论 / 回连代上报 / 第三端经节点可见）；篡改 1 bit 块拒收；token 过期 403；Range 断点续传（杀进程重连）；吞吐 R7 并发 2 vs 4 实测回写 spec §3.2。
+
+---
+
+## 执行实况（2026-10-17 收口，subagent-driven 逐 Task 提交）
+
+| Task | commit | 关键产出 | 偏差 |
+|---|---|---|---|
+| 1 | `54f06f7` | protocol-ts 三签名对象（node-key-rotation / base-node-enroll / mesh-catalog）+ `vectors/v1/mesh.json`，protocol-ts 180 用例 | 签名/公钥按 RFC 8032 输出 128 位 hex（HEX128）；node_id = deriveIdentityId(working_pub)（32 hex），非草稿「node_id=pubHex」形态；「非整数 rev」用例随定案 2 调整为整数化口径 |
+| 2 | `e7b422d` | node relay 审计两列（relay_channel/relay_device_id）+ `X-Base-Relay-For/Device` 头校验，node 包 633 用例 | 测试建表 DDL 同步扩两列；getEventById 读面对旧库缺列静态回填缺省值（`direct`/空） |
+| 3 | `7724748` | nodes / gossip_events 表 + items.conflicted，core-ts 545 用例 | evictGossip 落为两条静态 SQL；insertGossipEvent 以「SELECT 后 INSERT」实现先到先得幂等 |
+| 4 | `7cecdb2` | catalog 构建/合并 + gossip 消息验证 + 六接口客户端，core-ts 561 用例 | 行映射提为 `meshCatalogRows()`；blobId 引用修正（自 protocol-ts 引入，不自算） |
+| 5 | `08d3803` | NIO server + share/receive 页 + 删 R2 spike + manifest v48/cleartext | catalog HTTP 响应加非签名 `item_blobs` 侧车（**定案 8**）；二进制块路径走 ISO-8859-1 编码；接收端 pending 续读队列 |
+| 6 | `70b5e83` | gossip-flow 纯逻辑 18 用例 + relay 接线 | **定案 7**：gossip_events 增 `body_json` 列（payload 文件只存正文、reply_to 只在原签名 body 里，代报重建 body 需全文保真；迁移搭车 ensureItemsColumns）；outgoing 只发 pending 行；gossip 拉取单页；share 页无定时器 |
+| 7 | `e17e5aa` | 权威序 failover + 断网区仲裁，core-ts 597 用例 | arbitrateCatalogEntry 增 `localOrder` 参数（本地序位由调用方传入，不在函数内查库） |
+| 8 | 本提交 | `tools/meshoracle` Go 对拍 + 总纲 §7.3/§8.1/§8.4/§10 回写 + README #82 登记 | oracle 侧 doc 解码即用 `json.Decoder.UseNumber()` 保整数字面量（不经 float64），一次通过 |
+
+**执行期定案 7/8 补记（1–6 见本册头部「执行期定案」）：**
+
+7. gossip_events 增 `body_json` 列：payload 文件只存正文，`reply_to` 只在原签名 body 里，代报重建 body 需全文保真；迁移搭车 `ensureItemsColumns`。
+8. mesh catalog HTTP 响应加**非签名 `item_blobs` 侧车**：签名体保持向量锁定形状，块 id 靠 sha256 自证。
+
+**真机验收待办（云打包 versionCode 48）：** 热点 + 同 Wi-Fi 两场景全流程（分发 / 断网读 / 互发评论 / 回连代报 / 第三端经节点可见）；篡改 1 bit 块拒收；token 过期 403；Range 断点续传；R7 吞吐实测回写 spec §3.2；发版。
