@@ -380,6 +380,8 @@ function putGroupMessage(
       targetId: "group/" + g.groupId,
       payloadCid,
       replyTo: g.replyTo,
+      relayChannel: "direct",
+      relayDeviceId: "",
     });
   } catch (err) {
     return errResponse(err);
@@ -448,6 +450,8 @@ function putGroupRoster(
       targetId: "group/" + r.groupId,
       payloadCid: "",
       replyTo: "",
+      relayChannel: "direct",
+      relayDeviceId: "",
     });
   } catch (err) {
     return errResponse(err);
@@ -580,6 +584,8 @@ function handleGroupRosterV2(
       targetId: "group/" + r.groupId,
       payloadCid: "",
       replyTo: "",
+      relayChannel: "direct",
+      relayDeviceId: "",
     });
   } catch (err) {
     return errResponse(err);

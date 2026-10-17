@@ -87,6 +87,10 @@ export const authErrText: Record<string, string> = {
   tag_target_tagged: "该内容已有标签，改动请走治理提案",
   tag_links_invalid: "links 不合法：kind 必须与 target_id 形态一致，且同一 target_id 不得重复",
   tag_target_not_found: "打标目标不存在或已下架",
+
+  // #82 mesh 一期（spec §4.3）：代报审计。
+  relay_header_invalid: "代报头不合法（X-Base-Relay-For/Device 须为 32 位 hex 且成对出现）",
+  relay_type_unsupported: "该事件类型不支持代报",
 };
 
 /**

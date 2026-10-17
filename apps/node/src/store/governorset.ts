@@ -30,6 +30,9 @@ function listGroupMsgEvents(db: Db, groupId: string): EventRow[] {
     targetId: toStr(r.target_id),
     payloadCid: toStr(r.payload_cid),
     replyTo: toStr(r.reply_to),
+    // #82 审计列不参与席位派生读面：按直连缺省回填。
+    relayChannel: "direct",
+    relayDeviceId: "",
   }));
 }
 

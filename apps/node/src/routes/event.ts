@@ -3,7 +3,7 @@
 // parseCommentBody（:207-243）/ validTargetID（:246-256）。
 // group.v1 分支见 routes/groupEvent.ts（内部 httpapi/group.go 的写面）。
 import type { ServerResponse } from "@base/core-ts";
-import { blobId, canonicalize, utf8, verify, type Json } from "@base/protocol-ts";
+import { blobId, canonicalize, isIdentityId, utf8, verify, type Json } from "@base/protocol-ts";
 import type { Db } from "../db";
 import { hasBlob, isRevokedEvent, putBlob, putEvent, getEventById } from "../store/events";
 import { type AuthedHandler, writeAuthErr } from "./authmw";
@@ -57,6 +57,19 @@ export interface EventDeps {
   byID: IpLimiter;
   byIP: IpLimiter;
 }
+
+/**
+ * #82 mesh 一期（spec §4.3）代报审计信息：
+ * channel/deviceId 落 events.relay_channel / relay_device_id；
+ * forId = 原签名者 id（X-Base-Relay-For），事件归属验签与归属 id 均以它为准；direct 时为 ""。
+ */
+export interface RelayAudit {
+  channel: "direct" | "mesh";
+  deviceId: string;
+  forId: string;
+}
+
+const RELAY_DIRECT: RelayAudit = { channel: "direct", deviceId: "", forId: "" };
 
 function errResponse(err: unknown): ServerResponse {
   return jsonResponse(500, { error: err instanceof Error ? err.message : String(err) });
@@ -152,10 +165,13 @@ async function handleCommentEvent(
   actor: string,
   env: EventEnvelope,
   createdAt: number,
+  relay: RelayAudit,
 ): Promise<ServerResponse> {
   const parsed = parseCommentBody(env.bodyRaw);
   if (parsed === null) return jsonResponse(400, { error: "event_param_invalid" });
-  const verr = verifyEventSig(deps, actor, env, parsed.map, createdAt);
+  // #82 spec §4.3：代报时事件归属 = Relay-For（原签名者），验签查其公钥；直连归属 = actor。
+  const owner = relay.forId !== "" ? relay.forId : actor;
+  const verr = verifyEventSig(deps, owner, env, parsed.map, createdAt);
   if (verr !== null) return verr;
   // 已审核删除的评论不允许再落（否则删块会被同一条重发复活）。
   let revoked: boolean;
@@ -190,7 +206,7 @@ async function handleCommentEvent(
   try {
     putEvent(deps.db, {
       eventId: env.eventId,
-      id: actor,
+      id: owner,
       type: env.type,
       bodyJson: bodyJSON,
       createdAt,
@@ -198,6 +214,8 @@ async function handleCommentEvent(
       targetId: parsed.cb.targetId,
       payloadCid,
       replyTo: parsed.cb.replyTo,
+      relayChannel: relay.channel,
+      relayDeviceId: relay.deviceId,
     });
   } catch (err) {
     return errResponse(err);
@@ -225,6 +243,7 @@ function putBareEvent(
   actor: string,
   env: EventEnvelope,
   createdAt: number,
+  relay: RelayAudit,
 ): ServerResponse {
   const body = env.bodyRaw === "" ? "{}" : env.bodyRaw;
   const now = Date.now();
@@ -239,6 +258,8 @@ function putBareEvent(
       targetId: "",
       payloadCid: "",
       replyTo: "",
+      relayChannel: relay.channel,
+      relayDeviceId: relay.deviceId,
     });
   } catch (err) {
     return errResponse(err);
@@ -277,9 +298,25 @@ export function eventPostHandler(deps: EventDeps): AuthedHandler {
     if (!deps.byID.allow(actor) || !deps.byIP.allow(CLIENT_BUCKET_KEY)) {
       return writeAuthErr(429, "event_rate_limited");
     }
+    // #82 mesh 代报（spec §4.3）：X-Base-Relay-For = 原签名者 id，X-Base-Relay-Device = 代报设备 id。
+    // 事件归属验签查 Relay-For 的公钥；请求签名头仍以代报设备身份（requireAuth 的 actor）。
+    const relayFor = (req.headers["x-base-relay-for"] ?? "").toLowerCase();
+    const relayDevice = (req.headers["x-base-relay-device"] ?? "").toLowerCase();
+    if (relayDevice !== "" && relayFor === "") {
+      return jsonResponse(400, { error: "relay_header_invalid" });
+    }
+    if (relayFor !== "" && (!isIdentityId(relayFor) || relayDevice === "" || !isIdentityId(relayDevice))) {
+      return jsonResponse(400, { error: "relay_header_invalid" });
+    }
+    // mesh 一期仅 comment.v1 可代报，其余类型带 Relay 头直接拒绝。
+    if (relayFor !== "" && env.type !== "comment.v1") {
+      return jsonResponse(400, { error: "relay_type_unsupported" });
+    }
+    const relay: RelayAudit =
+      relayFor === "" ? RELAY_DIRECT : { channel: "mesh", deviceId: actor, forId: relayFor };
     switch (env.type) {
       case "comment.v1":
-        return handleCommentEvent(deps, actor, env, createdAt);
+        return handleCommentEvent(deps, actor, env, createdAt, relay);
       case "group.v1":
         return groupEventHandler(deps, actor, env, createdAt);
       case "dm.v1":
@@ -295,6 +332,6 @@ export function eventPostHandler(deps: EventDeps): AuthedHandler {
       case "report.v1":
         return reportEventHandler(deps, actor, env, createdAt);
     }
-    return putBareEvent(deps, actor, env, createdAt);
+    return putBareEvent(deps, actor, env, createdAt, relay);
   };
 }

@@ -386,6 +386,9 @@ export function listEventsAfter(
     targetId: toStr(r.target_id),
     payloadCid: toStr(r.payload_cid),
     replyTo: toStr(r.reply_to),
+    // #82 审计列不进 peer-sync 线格式（SELECT 不取）：按直连缺省回填。
+    relayChannel: "direct",
+    relayDeviceId: "",
   }));
 }
 

@@ -39,7 +39,9 @@ const DDL: string[] = [
     received_at INTEGER NOT NULL,
     target_id   TEXT,
     payload_cid TEXT,
-    reply_to    TEXT
+    reply_to    TEXT,
+    relay_channel TEXT NOT NULL DEFAULT 'direct',
+    relay_device_id TEXT
   )`,
   `CREATE TABLE govern_proposals(
     proposal_id       INTEGER PRIMARY KEY,

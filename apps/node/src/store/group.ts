@@ -153,6 +153,9 @@ function scanEvents(rows: Record<string, unknown>[]): EventRow[] {
     targetId: toStr(r.target_id),
     payloadCid: toStr(r.payload_cid),
     replyTo: toStr(r.reply_to),
+    // #82 审计列不参与组读面（列序对齐 event.go:39，SELECT 不取）：按直连缺省回填。
+    relayChannel: "direct",
+    relayDeviceId: "",
   }));
 }
 

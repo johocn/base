@@ -196,6 +196,8 @@ export function governEventHandler(
       targetId: "",
       payloadCid: "",
       replyTo: "",
+      relayChannel: "direct",
+      relayDeviceId: "",
     });
   } catch (err) {
     return jsonResponse(500, { error: err instanceof Error ? err.message : String(err) });

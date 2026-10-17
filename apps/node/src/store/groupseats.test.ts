@@ -91,6 +91,8 @@ describe("seats.json → derive_seats", () => {
         targetId: "",
         payloadCid: "",
         replyTo: "",
+        relayChannel: "direct",
+        relayDeviceId: "",
       }));
       const snap = deriveSeats(c.members, c.creator, c.roster_rev, c.epoch, events);
       const want: SeatSnapshot = {

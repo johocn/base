@@ -125,6 +125,8 @@ function putLikeReportEvent(
       targetId,
       payloadCid: "",
       replyTo: "",
+      relayChannel: "direct",
+      relayDeviceId: "",
     });
   } catch (err) {
     return errResponse(err);

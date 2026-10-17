@@ -205,6 +205,8 @@ async function pullEvents(
         targetId: proj.targetId,
         payloadCid: proj.payloadCid,
         replyTo: proj.replyTo,
+        relayChannel: "direct",
+        relayDeviceId: "",
       });
       // group / progress：投影失败**阻断整页**，直接向外抛。
       applySyncedGroupEvent(st, it);

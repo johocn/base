@@ -370,6 +370,8 @@ describe("listEventsAfter", () => {
       targetId: "t1",
       payloadCid: "",
       replyTo: "",
+      relayChannel: "direct",
+      relayDeviceId: "",
     });
   });
 });

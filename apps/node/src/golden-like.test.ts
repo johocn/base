@@ -110,6 +110,8 @@ function seedEvent(
     targetId: target,
     payloadCid,
     replyTo,
+    relayChannel: "direct",
+    relayDeviceId: "",
   });
 }
 

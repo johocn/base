@@ -91,6 +91,8 @@ export async function progressEventHandler(
       targetId: parsed.pb.itemId,
       payloadCid: "",
       replyTo: "",
+      relayChannel: "direct",
+      relayDeviceId: "",
     });
   } catch (err) {
     return errResponse(err);

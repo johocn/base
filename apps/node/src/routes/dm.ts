@@ -166,6 +166,8 @@ export async function dmEventHandler(
       targetId: "dm/" + parsed.msg.to,
       payloadCid,
       replyTo: "",
+      relayChannel: "direct",
+      relayDeviceId: "",
     });
   } catch (err) {
     return jsonResponse(500, { error: err instanceof Error ? err.message : String(err) });

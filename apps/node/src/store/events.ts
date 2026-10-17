@@ -16,6 +16,10 @@ export interface EventRow {
   targetId: string;
   payloadCid: string;
   replyTo: string;
+  /** #82 spec §4.3：代报审计——'direct' | 'mesh'。 */
+  relayChannel: string;
+  /** #82 spec §4.3：代报设备 id；直连为 ""。 */
+  relayDeviceId: string;
 }
 
 /** `time.Now().UTC().Format(time.RFC3339)`：无毫秒。 */
@@ -30,13 +34,15 @@ function toStr(value: unknown): string {
 /**
  * PutEvent（event.go:25-37）：同 event_id 覆盖，**received_at 保留首次值**。
  * 空串字段照传 ""（不是 NULL），供 GET 侧「空串 → null」口径复用。
+ * #82 spec §4.3：relay_channel / relay_device_id 审计列**不在 ON CONFLICT 更新集**——
+ * 同 event_id 重放（直连先到、mesh 代报重放）保留首次落库的审计值。
  */
 export function putEvent(db: Db, e: EventRow): void {
   let receivedAt = e.receivedAt;
   if (receivedAt === 0) receivedAt = Date.now();
   db.execute(
-    `INSERT INTO events(event_id,id,type,body_json,created_at,received_at,target_id,payload_cid,reply_to)
-		VALUES(?,?,?,?,?,?,?,?,?)
+    `INSERT INTO events(event_id,id,type,body_json,created_at,received_at,target_id,payload_cid,reply_to,relay_channel,relay_device_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(event_id) DO UPDATE SET
 			id=excluded.id, type=excluded.type, body_json=excluded.body_json, created_at=excluded.created_at,
 			target_id=excluded.target_id, payload_cid=excluded.payload_cid, reply_to=excluded.reply_to`,
@@ -50,17 +56,29 @@ export function putEvent(db: Db, e: EventRow): void {
       e.targetId,
       e.payloadCid,
       e.replyTo,
+      e.relayChannel,
+      e.relayDeviceId,
     ],
   );
 }
 
 /** GetEventByID（event.go:80-90）：读单条事件；无行返回 null。 */
 export function getEventById(db: Db, eventId: string): EventRow | null {
-  const rows = db.select(
-    `SELECT event_id,id,type,body_json,created_at,received_at,target_id,payload_cid,reply_to
+  let rows: Record<string, unknown>[];
+  try {
+    rows = db.select(
+      `SELECT event_id,id,type,body_json,created_at,received_at,target_id,payload_cid,reply_to,relay_channel,relay_device_id
 		FROM events WHERE event_id=?`,
-    [eventId],
-  );
+      [eventId],
+    );
+  } catch {
+    // #82 spec §4.3 老库补列前时序：回退旧列集，审计列按缺省值回填。
+    rows = db.select(
+      `SELECT event_id,id,type,body_json,created_at,received_at,target_id,payload_cid,reply_to
+		FROM events WHERE event_id=?`,
+      [eventId],
+    );
+  }
   if (rows.length === 0) return null;
   const r = rows[0];
   return {
@@ -73,6 +91,8 @@ export function getEventById(db: Db, eventId: string): EventRow | null {
     targetId: toStr(r.target_id),
     payloadCid: toStr(r.payload_cid),
     replyTo: toStr(r.reply_to),
+    relayChannel: "relay_channel" in r ? toStr(r.relay_channel) : "direct",
+    relayDeviceId: "relay_device_id" in r ? toStr(r.relay_device_id) : "",
   };
 }
 

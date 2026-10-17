@@ -277,6 +277,9 @@ export const eventColumnMigrations: { column: string; ddl: string }[] = [
   { column: "target_id", ddl: `ALTER TABLE events ADD COLUMN target_id TEXT` },
   { column: "payload_cid", ddl: `ALTER TABLE events ADD COLUMN payload_cid TEXT` },
   { column: "reply_to", ddl: `ALTER TABLE events ADD COLUMN reply_to TEXT` },
+  // #82 mesh 一期（spec §4.3）：代上报审计列。列不删、不 bump schema_version。
+  { column: "relay_channel", ddl: `ALTER TABLE events ADD COLUMN relay_channel TEXT NOT NULL DEFAULT 'direct'` },
+  { column: "relay_device_id", ddl: `ALTER TABLE events ADD COLUMN relay_device_id TEXT` },
 ];
 
 // items 表的后加列（治理册 §3.1 的归属缓存）。
