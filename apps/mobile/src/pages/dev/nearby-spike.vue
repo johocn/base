@@ -1,6 +1,6 @@
 <template>
   <view class="wrap">
-    <text class="h">R2 源端保活验证 · build 46 NIO（spike，验证后删除）</text>
+    <text class="h">R2 源端保活验证 · build 47 NIO（spike，验证后删除）</text>
 
     <view class="row">
       <text class="label">屏幕常亮（plus.device.setWakelock）</text>
