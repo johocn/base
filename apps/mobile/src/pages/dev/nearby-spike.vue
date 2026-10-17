@@ -139,14 +139,17 @@ function requestBatteryWhitelist() {
   }
 }
 
-/** 最小 serve：不读请求，直接回固定 HTTP 响应后关闭（非阻塞 write 一次尝试） */
+/** 最小 serve：读空请求 → 回固定 HTTP 响应 → close。
+ *  close 前必须排空入站（否则未读数据触发 RST 毁掉已写响应，curl 报 56）。 */
 function serveChannel(ch: any) {
   try {
+    const BB = plusAny().android.importClass('java.nio.ByteBuffer');
+    const rxBuf = BB.allocate(4096);
+    ch.read(rxBuf); // 非阻塞读：消费 GET 请求包（<4KB 一次排空），0/-1 均忽略
     const body = `pong@${new Date().toISOString()}`;
     const resp = `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`;
     const JString = plusAny().android.importClass('java.lang.String');
     const bytes = new JString(resp).getBytes('UTF-8');
-    const BB = plusAny().android.importClass('java.nio.ByteBuffer');
     const bb = BB.wrap(bytes);
     ch.write(bb);
     ch.close();
