@@ -33,12 +33,15 @@
 
 <script setup lang="ts">
 /**
- * R2 spike：验证 Android 源端（ServerSocket）在息屏/后台/电池优化下的存活能力。
- * 三种保活手段独立开关，配合场景矩阵使用（见评审 R2）：
- *   S1 亮屏 + 屏幕常亮        → baseline，预期稳定
- *   S2 息屏 + 无保活          → 预期失败（JS 节流）
- *   S3 息屏 + CPU 锁 + 白名单 → 关键判定场景
- *   S4 亮屏 + 切后台（home）  → 模拟源端切走
+ * R2 spike：验证 Android 源端在息屏/后台/电池优化下的存活能力（NIO 非阻塞版）。
+ *
+ * 历史：java.net.ServerSocket 的阻塞 accept() 被 plus bridge 直接吐 null
+ *（bridge 不允许阻塞调用；StrictMode permitNetwork 后仍 null，已证伪线程异常论）。
+ * 现改用 java.nio.channels.ServerSocketChannel 非阻塞模式：accept() 无连接
+ * 立即返回 null、有连接返回 SocketChannel，全程零阻塞，bridge 必然放行。
+ * serve 为最小实现：不读请求，连接进来直接回固定 HTTP 响应后关闭。
+ *
+ * 场景矩阵：S1 亮屏+常亮 / S2 息屏无保活 / S3 息屏+CPU锁+白名单 / S4 切后台。
  * 判定：客户端每 30s GET /ping 连续 5 分钟成功率 ≥95% = PASS。
  */
 import { onUnmounted, ref } from 'vue';
@@ -55,12 +58,11 @@ const lastActivity = ref('—');
 const now = ref('—');
 const logs = ref<string[]>([]);
 
-let server: any = null;
+let ssc: any = null; // java.nio.channels.ServerSocketChannel
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let clockTimer: ReturnType<typeof setInterval> | null = null;
 let cpuLockRef: any = null;
 let pollBusy = false;
-let nullLogged = false;
 
 function log(msg: string) {
   const ts = new Date().toLocaleTimeString();
@@ -128,7 +130,6 @@ function requestBatteryWhitelist() {
       log('已在电池优化白名单');
       return;
     }
-    // 跳系统设置面板（免 manifest 权限的路径）
     const Intent = plus.android.importClass('android.content.Intent');
     const intent = new Intent('android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS');
     main.startActivity(intent);
@@ -138,53 +139,28 @@ function requestBatteryWhitelist() {
   }
 }
 
-/** 读取请求头（粗读到 \r\n\r\n 即可，spike 只需区分 GET 路径）并回一个最小 HTTP 响应 */
-function serveSocket(sock: any) {
+/** 最小 serve：不读请求，直接回固定 HTTP 响应后关闭（非阻塞 write 一次尝试） */
+function serveChannel(ch: any) {
   try {
-    plusAny().android.importClass('java.io.InputStream');
-    const input = sock.getInputStream();
-    const buf = javaByteArray(4096);
-    let head = '';
-    const t0 = Date.now();
-    while (Date.now() - t0 < 1000 && head.indexOf('\r\n\r\n') < 0) {
-      const n = input.read(buf);
-      if (n < 0) break;
-      head += javaString(buf, n);
-    }
-    const path = head.split(' ')[1] ?? '/';
-    const body = path.startsWith('/ping') ? `pong@${new Date().toISOString()}` : `blob@${'x'.repeat(1024)}`;
+    const body = `pong@${new Date().toISOString()}`;
     const resp = `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`;
-    const out = sock.getOutputStream();
-    out.write(javaByteArray2(resp));
-    out.flush();
-    sock.close();
+    const JString = plusAny().android.importClass('java.lang.String');
+    const bytes = new JString(resp).getBytes('UTF-8');
+    const BB = plusAny().android.importClass('java.nio.ByteBuffer');
+    const bb = BB.wrap(bytes);
+    ch.write(bb);
+    ch.close();
     acceptCount.value += 1;
     lastActivity.value = new Date().toLocaleTimeString();
-    log(`served ${path}`);
+    log('served /ping');
   } catch (err) {
     log(`serve 异常: ${String(err)}`);
     try {
-      sock.close();
+      ch.close();
     } catch {
       /* ignore */
     }
   }
-}
-
-function javaByteArray(n: number): any {
-  const JByteArray = plusAny().android.importClass('java.lang.reflect.Array');
-  return JByteArray.newInstance(plusAny().android.importClass('java.lang.Byte').TYPE, n);
-}
-
-function javaByteArray2(s: string): any {
-  // 字符串 → byte[]（ASCII 域足够，spike 不做二进制块）
-  const JString = plusAny().android.importClass('java.lang.String');
-  return new JString(s).getBytes('UTF-8');
-}
-
-function javaString(buf: any, n: number): string {
-  const JString = plusAny().android.importClass('java.lang.String');
-  return new JString(buf, 0, n, 'UTF-8');
 }
 
 function toggleServer() {
@@ -198,47 +174,38 @@ function toggleServer() {
     return;
   }
   try {
-    // plus bridge 在同一 JS bridge 线程执行 Java 调用：accept/read 属网络 I/O，
-    // 系统 StrictMode 抛 NetworkOnMainThreadException 被 bridge 吞掉返回 null。
-    // setThreadPolicy 作用于当前线程 = bridge 调用线程，后续 accept 同线程被放行。
+    // bridge 线程网络 I/O 放行（NIO 调用非阻塞，本行是保险，留置无害）
     const Builder = plus.android.importClass('android.os.StrictMode$ThreadPolicy$Builder');
     const policy = new Builder().permitNetwork().build();
     const SM = plus.android.importClass('android.os.StrictMode');
     SM.setThreadPolicy(policy);
-    // plus bridge 规则：方法返回的 Java 对象须先 importClass 对应类，否则返回 null
-    plus.android.importClass('java.net.Socket');
-    plus.android.importClass('java.io.InputStream');
-    plus.android.importClass('java.io.OutputStream');
-    const ServerSocket = plus.android.importClass('java.net.ServerSocket');
-    server = new ServerSocket(PORT);
-    server.setSoTimeout(250); // accept 轮询间隔同量级，超时即 poll
+    // NIO 非阻塞通道：accept() 无连接立即返回 null，有连接返回 SocketChannel
+    plus.android.importClass('java.nio.channels.SocketChannel');
+    plus.android.importClass('java.nio.ByteBuffer');
+    const ISA = plus.android.importClass('java.net.InetSocketAddress');
+    const SCh = plus.android.importClass('java.nio.channels.ServerSocketChannel');
+    ssc = SCh.open();
+    ssc.configureBlocking(false);
+    ssc.bind(new ISA(PORT));
     serverOn.value = true;
-    log(`ServerSocket :${PORT} 已监听（permitNetwork 已放行主线程网络）`);
-    pollTimer = setInterval(pollAccept, 300);
+    log(`ServerSocketChannel :${PORT} 已监听（NIO 非阻塞）`);
+    pollTimer = setInterval(pollAccept, 200);
   } catch (err) {
     log(`启动失败: ${String(err)}`);
-    server = null;
+    ssc = null;
   }
 }
 
 function pollAccept() {
-  if (!server || pollBusy) return;
+  if (!ssc || pollBusy) return;
   pollBusy = true;
   try {
-    const sock = server.accept();
-    // plus bridge 对 soTimeout 空转返回 null（不抛超时异常），静默跳过；
-    // 首次 null 打一条日志用于区分「正常空转」与「依旧拿不到连接」
-    if (!sock) {
-      if (!nullLogged) {
-        nullLogged = true;
-        log('accept 返回 null（首条，后续静默）');
-      }
-      return;
-    }
+    const ch = ssc.accept();
+    if (!ch) return; // 非阻塞空转（Java 语义），静默
     log('accepted');
-    serveSocket(sock);
-  } catch {
-    // 真超时异常（部分内核行为）：正常轮询空转
+    serveChannel(ch);
+  } catch (err) {
+    log(`accept 异常: ${String(err)}`);
   } finally {
     pollBusy = false;
   }
@@ -250,11 +217,11 @@ function stopServer() {
     pollTimer = null;
   }
   try {
-    server?.close();
+    ssc?.close();
   } catch {
     /* ignore */
   }
-  server = null;
+  ssc = null;
   serverOn.value = false;
   log('Server 已停止');
 }
