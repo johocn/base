@@ -90,6 +90,92 @@ describe('mergeMeshCatalog', () => {
   });
 });
 
+describe('mergeMeshCatalog 接仲裁（spec §2.2 断网区铁律）', () => {
+  const remote = (itemId: string, rev: number, contentHash: string): MeshCatalogEntry => ({
+    item_id: itemId, rev, content_hash: contentHash, size: 0,
+  });
+
+  it('远端序位小 → fetch 覆盖写入（rev 只进不退、清 conflicted）', async () => {
+    const repo = await repoWithItems([item('item/diff', '3', 'cc'.repeat(32))]);
+    await repo.markItemConflicted('item/diff'); // 预置 conflicted：远端胜出须连带清除
+    const decisions = await mergeMeshCatalog(repo, [remote('item/diff', 3, 'ff'.repeat(32))], {
+      arbitrate: true, signerOrder: 1, localOrder: 5,
+    });
+    expect(decisions).toEqual([{ itemId: 'item/diff', action: 'fetch', remoteRev: 3 }]);
+    const row = await repo.getItem('item/diff');
+    expect(row?.contentHash).toBe('ff'.repeat(32)); // 覆盖写入生效
+    expect(row?.rev).toBe('3'); // 同 rev 仲裁：rev 不回退不前进
+    expect(repo.conflictedItems.has('item/diff')).toBe(false); // 清 conflicted
+  });
+
+  it('本地序位小 → conflicted（本地保留，不写库）', async () => {
+    const repo = await repoWithItems([item('item/diff', '3', 'cc'.repeat(32))]);
+    const decisions = await mergeMeshCatalog(repo, [remote('item/diff', 3, 'ff'.repeat(32))], {
+      arbitrate: true, signerOrder: 9, localOrder: 1,
+    });
+    expect(decisions).toEqual([{ itemId: 'item/diff', action: 'conflicted', remoteRev: 3 }]);
+    const row = await repo.getItem('item/diff');
+    expect(row?.contentHash).toBe('cc'.repeat(32));
+    expect(repo.conflictedItems.has('item/diff')).toBe(true);
+  });
+
+  it('同 rev 同序位（远端未知 ∞）→ hash 字典序大者胜：本地大 → conflicted', async () => {
+    const repo = await repoWithItems([item('item/diff', '3', 'ff'.repeat(32))]);
+    const decisions = await mergeMeshCatalog(repo, [remote('item/diff', 3, 'aa'.repeat(32))], {
+      arbitrate: true, signerOrder: 2147483647,
+    });
+    expect(decisions).toEqual([{ itemId: 'item/diff', action: 'conflicted', remoteRev: 3 }]);
+  });
+
+  it('arbitrate=true 但未传 signerOrder → 保持 Task 4 行为（本地保留 + conflicted）', async () => {
+    const repo = await repoWithItems([item('item/diff', '3', 'cc'.repeat(32))]);
+    const decisions = await mergeMeshCatalog(repo, [remote('item/diff', 3, 'ff'.repeat(32))], {
+      arbitrate: true,
+    });
+    expect(decisions).toEqual([{ itemId: 'item/diff', action: 'conflicted', remoteRev: 3 }]);
+    expect(repo.conflictedItems.has('item/diff')).toBe(true);
+  });
+
+  it('rev_regression 恒拒绝，不开仲裁口子', async () => {
+    const repo = await repoWithItems([item('item/old', '5', 'dd'.repeat(32))]);
+    const decisions = await mergeMeshCatalog(repo, [remote('item/old', 4, 'ee'.repeat(32))], {
+      arbitrate: true, signerOrder: 1, localOrder: 2147483647,
+    });
+    expect(decisions).toEqual([{ itemId: 'item/old', action: 'rev_regression', remoteRev: 4 }]);
+    expect((await repo.getItem('item/old'))?.contentHash).toBe('dd'.repeat(32));
+  });
+});
+
+describe('applyRemoteCatalogEntry（覆盖写入窄方法）', () => {
+  it('rev 相等/更高可写：更新 rev+content_hash 并清 conflicted', async () => {
+    const repo = await repoWithItems([item('item/a', '3', 'cc'.repeat(32))]);
+    await repo.markItemConflicted('item/a');
+    expect(await repo.applyRemoteCatalogEntry('item/a', 3, 'ff'.repeat(32))).toBe(true);
+    let row = await repo.getItem('item/a');
+    expect(row?.rev).toBe('3');
+    expect(row?.contentHash).toBe('ff'.repeat(32));
+    expect(repo.conflictedItems.has('item/a')).toBe(false);
+    expect(await repo.applyRemoteCatalogEntry('item/a', 4, 'ee'.repeat(32))).toBe(true);
+    row = await repo.getItem('item/a');
+    expect(row?.rev).toBe('4');
+  });
+
+  it('rev 回退拒写：行保持原样、conflicted 不清', async () => {
+    const repo = await repoWithItems([item('item/a', '5', 'dd'.repeat(32))]);
+    await repo.markItemConflicted('item/a');
+    expect(await repo.applyRemoteCatalogEntry('item/a', 3, 'ff'.repeat(32))).toBe(false);
+    const row = await repo.getItem('item/a');
+    expect(row?.rev).toBe('5');
+    expect(row?.contentHash).toBe('dd'.repeat(32));
+    expect(repo.conflictedItems.has('item/a')).toBe(true);
+  });
+
+  it('条目不存在返回 false（仲裁只覆盖既有行）', async () => {
+    const repo = await repoWithItems([]);
+    expect(await repo.applyRemoteCatalogEntry('item/none', 1, 'aa'.repeat(32))).toBe(false);
+  });
+});
+
 describe('verifyCatalogPubs', () => {
   const entries: MeshCatalogEntry[] = [
     { item_id: 'article/a', rev: 3, content_hash: 'cc'.repeat(32), size: 1234 },

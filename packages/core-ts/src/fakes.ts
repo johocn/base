@@ -459,6 +459,16 @@ export class MemoryRepo implements LocalRepo {
   async markItemConflicted(itemId: string): Promise<void> {
     this.conflictedItems.add(itemId);
   }
+  async applyRemoteCatalogEntry(itemId: string, rev: number, contentHash: string): Promise<boolean> {
+    // 与 SqlRepo 同一守卫：rev 只进不退；写入即翻 items 行并清 conflicted
+    const cur = this.items.get(itemId);
+    if (!cur) return false;
+    const n = Number.parseInt(cur.rev, 10);
+    if (Number.isSafeInteger(n) && n >= 0 && n > rev) return false;
+    this.items.set(itemId, { ...cur, rev: String(rev), contentHash });
+    this.conflictedItems.delete(itemId);
+    return true;
+  }
   async meshCatalogRows(): Promise<MeshCatalogRow[]> {
     // 与 SqlRepo 的 GROUP BY 同义：active 条目 × 本条目块大小求和（item_id 为空的块不挂任何条目）
     const sizes = new Map<string, number>();

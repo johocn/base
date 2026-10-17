@@ -198,6 +198,11 @@ export interface LocalRepo {
   markGossipRelayed(eventId: string): Promise<void>;
   /** catalog 合并同 rev 异 hash 时保留本地并置位（mesh 册 §3.4；终局仲裁在 core/mesh）。 */
   markItemConflicted(itemId: string): Promise<void>;
+  /**
+   * mesh 仲裁远端胜出的覆盖写入（mesh 册 §2.2）：rev 只进不退守卫 + 更新 rev/content_hash + 清 conflicted。
+   * 只翻 items 行（标题/正文由调用方按 'fetch' 拉块后刷新）；返回 false = 条目不存在或 rev 回退被拒。
+   */
+  applyRemoteCatalogEntry(itemId: string, rev: number, contentHash: string): Promise<boolean>;
   /** mesh 目录聚合（spec §2.2）：items(active) LEFT JOIN blob_index 单条 GROUP BY 聚合 size（禁 N+1）。 */
   meshCatalogRows(): Promise<MeshCatalogRow[]>;
 }
@@ -1033,6 +1038,20 @@ export class SqlRepo implements LocalRepo {
 
   async markItemConflicted(itemId: string): Promise<void> {
     await this.db.execute(`UPDATE items SET conflicted=1 WHERE item_id=?`, [itemId]);
+  }
+
+  async applyRemoteCatalogEntry(itemId: string, rev: number, contentHash: string): Promise<boolean> {
+    // rev 只进不退守卫（mesh 册 §2.2/§5.3）：本地 rev 更高一律拒写（执行期定案 2 的 rev 整数化同款解析）
+    const cur = await this.getItem(itemId);
+    if (cur === null) return false;
+    const n = Number.parseInt(cur.rev, 10);
+    if (Number.isSafeInteger(n) && n >= 0 && n > rev) return false;
+    await this.db.execute(`UPDATE items SET rev=?, content_hash=?, conflicted=0 WHERE item_id=?`, [
+      String(rev),
+      contentHash,
+      itemId,
+    ]);
+    return true;
   }
 
   async meshCatalogRows(): Promise<MeshCatalogRow[]> {

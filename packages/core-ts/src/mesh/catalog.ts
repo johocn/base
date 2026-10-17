@@ -1,8 +1,9 @@
-// mesh catalog 构建/合并（spec §2.2 断网区铁律 + §3.3/§3.4）。
-// 终局仲裁（authority 序位）在 Task 7 接入；本文件只做构建与「rev 只进不退」合并。
+// mesh catalog 构建/合并/仲裁（spec §2.2 断网区铁律 + §3.3/§3.4）。
+// 同 rev 异 hash 的终局仲裁走 authority.ts 的 arbitrateCatalogEntry；本文件只做构建与「rev 只进不退」合并。
 import { verifyMeshCatalog, type MeshCatalogDoc, type MeshCatalogEntry } from '@base/protocol-ts';
 
 import type { LocalRepo } from '../repo';
+import { arbitrateCatalogEntry } from './authority';
 
 /** 源端构建 entries：items(active) × blob_index 聚合 size（repo 单条 GROUP BY，禁 N+1）。 */
 export async function buildMeshCatalogEntries(repo: LocalRepo): Promise<MeshCatalogEntry[]> {
@@ -32,16 +33,32 @@ export interface MergeDecision {
   remoteRev: number;
 }
 
+/** 未知签名者序位 = +∞ 语义（spec §2.2：不在锚点表的节点视作序位最大）。 */
+const UNKNOWN_SIGNER_ORDER = 2147483647;
+
+/** mergeMeshCatalog 仲裁选项：arbitrate=true 且给出 signerOrder 才启用断网区仲裁，否则保持 Task 4 行为。 */
+export interface MergeArbitrateOptions {
+  /** 同 rev 异 hash 时启用仲裁（spec §2.2 铁律 1-3）。 */
+  arbitrate?: boolean;
+  /** 远端 catalog 签名者的 authority_order；查不到锚点传 2147483647。 */
+  signerOrder?: number;
+  /** 本地候选的签名者序位（本机为源端时取自身节点序位）；缺省 2147483647 = 本地副本无签名锚。 */
+  localOrder?: number;
+}
+
 /**
  * 目录合并（spec §3.4 步骤 3/5）：
  * - 远端 rev > 本地 rev → fetch；
  * - rev 相等且 content_hash 相等 → current；
- * - rev 相等、hash 异 → 本地保留 + conflicted=1（终局仲裁在 Task 7 arbitrateCatalogEntry）；
- * - 远端 rev < 本地 rev → rev_regression（拒绝，签名合法的回退只可能来自根密钥泄露 → 全屏告警）。
+ * - rev 相等、hash 异 → 默认本地保留 + conflicted=1；opts 传 arbitrate+signerOrder 时走
+ *   arbitrateCatalogEntry 铁律（rev 同 → 签名者序位小者 → hash 字典序）：远端胜 → 覆盖写入
+ *   （applyRemoteCatalogEntry：rev 只进不退守卫 + 清 conflicted）并报 fetch，本地胜 → 保留 + conflicted；
+ * - 远端 rev < 本地 rev → rev_regression（恒拒绝，不分仲裁；签名合法的回退只可能来自根密钥泄露 → 全屏告警）。
  */
 export async function mergeMeshCatalog(
   repo: LocalRepo,
   entries: MeshCatalogEntry[],
+  opts?: MergeArbitrateOptions,
 ): Promise<MergeDecision[]> {
   const out: MergeDecision[] = [];
   for (const e of entries) {
@@ -52,6 +69,19 @@ export async function mergeMeshCatalog(
     } else if (e.rev === localRev) {
       if (local.contentHash === e.content_hash) {
         out.push({ itemId: e.item_id, action: 'current', remoteRev: e.rev });
+      } else if (opts?.arbitrate === true && opts.signerOrder !== undefined) {
+        // 断网区仲裁（spec §2.2 铁律）：候选 [本地, 远端]，胜者索引 1 = 远端
+        const winner = arbitrateCatalogEntry([
+          { rev: localRev, contentHash: local.contentHash, signerAuthorityOrder: opts.localOrder ?? UNKNOWN_SIGNER_ORDER },
+          { rev: e.rev, contentHash: e.content_hash, signerAuthorityOrder: opts.signerOrder },
+        ]);
+        if (winner === 1) {
+          await repo.applyRemoteCatalogEntry(e.item_id, e.rev, e.content_hash);
+          out.push({ itemId: e.item_id, action: 'fetch', remoteRev: e.rev });
+        } else {
+          await repo.markItemConflicted(e.item_id);
+          out.push({ itemId: e.item_id, action: 'conflicted', remoteRev: e.rev });
+        }
       } else {
         await repo.markItemConflicted(e.item_id);
         out.push({ itemId: e.item_id, action: 'conflicted', remoteRev: e.rev });
