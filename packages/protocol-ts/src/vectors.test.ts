@@ -16,17 +16,25 @@ import {
   keyPairFromSeed,
   manifestBlobIds,
   merkleRoot,
+  meshCatalogSignBytes,
+  nodeKeyRotationCertId,
+  nodeKeyRotationSignBytes,
+  parseNodeEnroll,
   releaseDocSha256,
   releaseSignBytes,
   requestSignBytes,
   sha256Hex,
   sign,
   signBytes,
+  signMeshCatalog,
+  signNodeKeyRotation,
   signRelease,
   utf8,
   verify,
   verifyAuthorSig,
   verifyManifest,
+  verifyMeshCatalog,
+  verifyNodeKeyRotation,
   verifyRelease,
   type Manifest,
   type ReleaseDoc,
@@ -241,5 +249,39 @@ describe("authorsig.json", () => {
     const c = f.cases[0];
     expect(verifyAuthorSig(f.key.pub_hex, c.item_id, c.content_hash, c.author_id, "0" + c.signature_hex.slice(1))).toBe(false);
     expect(verifyAuthorSig(f.key.pub_hex, c.item_id, "0" + c.content_hash.slice(1), c.author_id, c.signature_hex)).toBe(false);
+  });
+});
+
+describe("mesh.json", () => {
+  const f = load("mesh.json");
+  it("version 与密钥", () => {
+    expect(f.version).toBe(1);
+    expect(keyPairFromSeed(f.key.root_seed_hex).pubHex).toBe(f.key.root_pub_hex);
+    expect(keyPairFromSeed(f.key.working_seed_hex).pubHex).toBe(f.key.working_pub_hex);
+  });
+  it("rotation：canonical 字节 / 签名 / cert_id 对拍", () => {
+    const doc = f.rotation.doc;
+    expect(nodeKeyRotationSignBytes(doc)).toBe(f.rotation.sign_bytes);
+    expect(verifyNodeKeyRotation(doc, f.key.root_pub_hex, f.key.working_pub_hex)).toBe(true);
+    expect(doc.signature).toBe(sign(f.key.root_seed_hex, utf8(f.rotation.sign_bytes)));
+    expect(nodeKeyRotationCertId(doc)).toBe(f.rotation.cert_id);
+  });
+  it("rotation：用工作密钥签发（违反单级）拒绝", () => {
+    const forged = signNodeKeyRotation({ ...f.rotation.doc, signature: undefined }, f.key.working_seed_hex);
+    expect(verifyNodeKeyRotation(forged, f.key.root_pub_hex, f.key.working_pub_hex)).toBe(false);
+  });
+  it("enroll：canonical 字节对拍 + 缺一不收", () => {
+    expect(canonicalize(f.enroll.doc)).toBe(f.enroll.canonical);
+    const parsed = parseNodeEnroll(f.enroll.canonical);
+    expect(parsed?.sign_pubkey).toBe(f.key.working_pub_hex);
+    expect(parseNodeEnroll(JSON.stringify({ ...f.enroll.doc, tls_fingerprint: undefined }))).toBeNull();
+  });
+  it("catalog：canonical 字节 / 签名对拍 + 篡改拒绝", () => {
+    const doc = f.catalog.doc;
+    expect(meshCatalogSignBytes(doc)).toBe(f.catalog.sign_bytes);
+    expect(verifyMeshCatalog(doc, f.key.working_pub_hex)).toBe(true);
+    expect(sign(f.key.working_seed_hex, utf8(f.catalog.sign_bytes))).toBe(doc.signature);
+    const bad = { ...doc, entries: [{ ...doc.entries[0], size: doc.entries[0].size + 1 }] };
+    expect(verifyMeshCatalog(bad, f.key.working_pub_hex)).toBe(false);
   });
 });

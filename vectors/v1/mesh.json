@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "key": {
+    "root_seed_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+    "root_pub_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "working_seed_hex": "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+    "working_pub_hex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+  },
+  "rotation": {
+    "doc": {
+      "type": "node-key-rotation",
+      "v": 1,
+      "node_id": "39f713d0a644253f04529421b9f51b9b",
+      "old_pubkey": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "new_pubkey": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "effective_at": "2026-10-17T00:00:00Z",
+      "issued_at": "2026-10-17T00:00:00Z",
+      "signature": "ce5eb86ff82c46a2784970f7163bef96d9eb4c17cdce70c84e823c0f83006d7701186819b47e4e91e9b430774bdcb79af1e0feed2139082846488df617ad6b01"
+    },
+    "cert_id": "ec844a6c8a066e51c23d3f243ecb19a9",
+    "sign_bytes": "{\"effective_at\":\"2026-10-17T00:00:00Z\",\"issued_at\":\"2026-10-17T00:00:00Z\",\"new_pubkey\":\"3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c\",\"node_id\":\"39f713d0a644253f04529421b9f51b9b\",\"old_pubkey\":\"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a\",\"type\":\"node-key-rotation\",\"v\":1}"
+  },
+  "enroll": {
+    "doc": {
+      "v": 1,
+      "kind": "base-node-enroll",
+      "node_id": "39f713d0a644253f04529421b9f51b9b",
+      "url": "https://node.example.com",
+      "sign_pubkey": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "tls_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expires_at": "2026-12-31T00:00:00Z",
+      "token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "canonical": "{\"expires_at\":\"2026-12-31T00:00:00Z\",\"kind\":\"base-node-enroll\",\"node_id\":\"39f713d0a644253f04529421b9f51b9b\",\"sign_pubkey\":\"3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c\",\"tls_fingerprint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"url\":\"https://node.example.com\",\"v\":1}"
+  },
+  "catalog": {
+    "doc": {
+      "type": "mesh-catalog",
+      "v": 1,
+      "node_id": "39f713d0a644253f04529421b9f51b9b",
+      "catalog_version": 7,
+      "entries": [
+        {
+          "item_id": "article/hello",
+          "rev": 3,
+          "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "size": 1234
+        },
+        {
+          "item_id": "course/c1",
+          "rev": 1,
+          "content_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "size": 0
+        }
+      ],
+      "signed_at": "2026-10-17T00:00:00Z",
+      "signature": "239d2b2f80244a67c08d3108b347069f542bd10a9327f2cd1d133e78b7090e05889f05056a9b6e7757f41ef398c3464f3fd75ddd66f6a17b2a8a59f6ffeedb09"
+    },
+    "sign_bytes": "{\"catalog_version\":7,\"entries\":[{\"content_hash\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"item_id\":\"article/hello\",\"rev\":3,\"size\":1234},{\"content_hash\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"item_id\":\"course/c1\",\"rev\":1,\"size\":0}],\"node_id\":\"39f713d0a644253f04529421b9f51b9b\",\"signed_at\":\"2026-10-17T00:00:00Z\",\"type\":\"mesh-catalog\",\"v\":1}"
+  }
+}

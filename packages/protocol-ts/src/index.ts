@@ -15,3 +15,4 @@ export * from "./attrs";
 export * from "./progress";
 export * from "./markdown";
 export * from "./tag";
+export * from "./mesh";
