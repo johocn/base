@@ -197,6 +197,10 @@ function toggleServer() {
     return;
   }
   try {
+    // plus bridge 规则：方法返回的 Java 对象须先 importClass 对应类，否则返回 null
+    plus.android.importClass('java.net.Socket');
+    plus.android.importClass('java.io.InputStream');
+    plus.android.importClass('java.io.OutputStream');
     const ServerSocket = plus.android.importClass('java.net.ServerSocket');
     server = new ServerSocket(PORT);
     server.setSoTimeout(250); // accept 轮询间隔同量级，超时即 poll
