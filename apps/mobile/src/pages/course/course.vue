@@ -47,7 +47,7 @@
     <!-- 课程列表区（#84 Task 4）：Discuz 平铺，角标置顶/加精/推荐按权重排序截 20；区头 id 即宫格滚动锚点 -->
     <text id="course-list" class="list-head">{{ listHeadText }}</text>
     <text v-if="filterActive" class="filter-clear" @click="clearFilter">✕ 取消筛选</text>
-    <text v-if="courseRows.length === 0" class="feed-hint">{{ filterActive ? '没有匹配的课程' : '下拉同步后可见' }}</text>
+    <text v-if="courseRows.length === 0" class="feed-hint">{{ filterActive || keyword.trim() !== '' ? '没有匹配的课程' : '下拉同步后可见' }}</text>
     <view v-for="row in courseRows" :key="row.itemId" class="flat-row" @click="openCourse(row.itemId)">
       <view class="flat-head">
         <text v-if="row.flagText !== ''" class="flag" :class="row.flagCls">{{ row.flagText }}</text>
@@ -57,7 +57,7 @@
     </view>
     <!-- 精选文章区（#84 Task 4）：本机文章 items，同一角标规则排序截 20 -->
     <text class="list-head">精选文章</text>
-    <text v-if="articleRows.length === 0" class="feed-hint">下拉同步后可见</text>
+    <text v-if="articleRows.length === 0" class="feed-hint">{{ keyword.trim() === '' ? '下拉同步后可见' : '没搜到' }}</text>
     <view v-for="row in articleRows" :key="row.itemId" class="flat-row" @click="openArticle(row.itemId)">
       <view class="flat-head">
         <text v-if="row.flagText !== ''" class="flag" :class="row.flagCls">{{ row.flagText }}</text>
@@ -67,7 +67,7 @@
     </view>
     <!-- 公开圈子区（#84 Task 4）：本机 groups 形态公开（encrypted=0）的圈子，截 20 -->
     <text class="list-head">公开圈子</text>
-    <text v-if="circleRows.length === 0" class="feed-hint">下拉同步后可见</text>
+    <text v-if="circleRows.length === 0" class="feed-hint">{{ keyword.trim() === '' ? '下拉同步后可见' : '没搜到' }}</text>
     <view v-for="row in circleRows" :key="row.groupId" class="flat-row" @click="openGroup(row.groupId)">
       <view class="flat-head">
         <text class="flat-title">{{ row.title }}</text>
@@ -165,6 +165,12 @@ function groupTitle(g: CategoryGroupVM): string {
 
 /** 首页搜索关键字：本地过滤「最近更新」大卡流（册子 §3.2 大搜索框） */
 const keyword = ref('');
+
+/** 关键词模糊匹配（标题/itemId，大小写不敏感）：首页所有列表区共用 */
+function matchKw(title: string, itemId: string): boolean {
+  const kw = keyword.value.trim().toLowerCase();
+  return kw === '' || title.toLowerCase().includes(kw) || itemId.toLowerCase().includes(kw);
+}
 
 /** 大卡流行视图：大字标题 + 标注字 meta（类型 · 更新日期） */
 interface FeedRow {
@@ -345,7 +351,7 @@ function byWeight(a: FlatRow, b: FlatRow): number {
   return a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0;
 }
 
-/** 课程列表 20 条：按宫格过滤态过滤后角标排序截 20。 */
+/** 课程列表 20 条：按宫格过滤态 + 搜索关键字过滤后角标排序截 20。 */
 const courseRows = computed<FlatRow[]>(() => {
   let list = courses.value;
   if (listFilter.value !== '') {
@@ -355,13 +361,20 @@ const courseRows = computed<FlatRow[]>(() => {
     const slug = categoryFilter.value;
     list = list.filter((it) => groupByCourse.value.get(it.itemId)?.slug === slug);
   }
+  list = list.filter((it) => matchKw(it.title || it.itemId, it.itemId));
   return list.map(toFlatRow).sort(byWeight).slice(0, 20);
 });
 
-/** 精选文章 20 条（#84 Task 4）：本机文章 items，同一角标规则排序截 20。 */
-const articleRows = computed<FlatRow[]>(() => articles.value.map(toFlatRow).sort(byWeight).slice(0, 20));
+/** 精选文章 20 条（#84 Task 4）：本机文章 items，同一角标规则 + 搜索关键字过滤排序截 20。 */
+const articleRows = computed<FlatRow[]>(() =>
+  articles.value
+    .filter((it) => matchKw(it.title || it.itemId, it.itemId))
+    .map(toFlatRow)
+    .sort(byWeight)
+    .slice(0, 20),
+);
 
-/** 公开圈子行（#84 Task 4）：圈名 + 形态标注 + 成员数，截 20。 */
+/** 公开圈子行（#84 Task 4）：圈名 + 形态标注 + 成员数，搜索关键字过滤后截 20。 */
 interface CircleRow {
   groupId: string;
   title: string;
@@ -369,11 +382,14 @@ interface CircleRow {
 }
 
 const circleRows = computed<CircleRow[]>(() =>
-  circles.value.slice(0, 20).map((g) => ({
-    groupId: g.groupId,
-    title: g.name || '未命名圈子',
-    meta: `公开 · 成员 ${groupMemberCount(g.memberIdsJson)}`,
-  })),
+  circles.value
+    .filter((g) => matchKw(g.name || '未命名圈子', g.groupId))
+    .slice(0, 20)
+    .map((g) => ({
+      groupId: g.groupId,
+      title: g.name || '未命名圈子',
+      meta: `公开 · 成员 ${groupMemberCount(g.memberIdsJson)}`,
+    })),
 );
 
 /** 成员数取自名单快照；投影损坏按 0，不让一行坏数据打断整页（与圈子页同口径）。 */
