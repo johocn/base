@@ -41,6 +41,14 @@ export interface GossipRow {
   createdAt: number; receivedAt: number; payloadCid: string; payloadPath: string; sig: string; relayed: number;
 }
 
+/** mesh 目录聚合行（#82 spec §2.2）：items(active) × blob_index 按条目聚合的块总字节数。 */
+export interface MeshCatalogRow {
+  itemId: string;
+  rev: string;
+  contentHash: string;
+  totalSize: number;
+}
+
 /** 本地仓储：同步核心只依赖这些语义方法，不直接写 SQL。 */
 export interface LocalRepo {
   getConfig(key: string): Promise<string | null>;
@@ -188,6 +196,8 @@ export interface LocalRepo {
   markGossipRelayed(eventId: string): Promise<void>;
   /** catalog 合并同 rev 异 hash 时保留本地并置位（mesh 册 §3.4；终局仲裁在 core/mesh）。 */
   markItemConflicted(itemId: string): Promise<void>;
+  /** mesh 目录聚合（spec §2.2）：items(active) LEFT JOIN blob_index 单条 GROUP BY 聚合 size（禁 N+1）。 */
+  meshCatalogRows(): Promise<MeshCatalogRow[]>;
 }
 
 /** 本地库建表语句（P0 只建用得到的 5 张表）。 */
@@ -1013,6 +1023,22 @@ export class SqlRepo implements LocalRepo {
 
   async markItemConflicted(itemId: string): Promise<void> {
     await this.db.execute(`UPDATE items SET conflicted=1 WHERE item_id=?`, [itemId]);
+  }
+
+  async meshCatalogRows(): Promise<MeshCatalogRow[]> {
+    const rows = await this.db.select(
+      `SELECT i.item_id AS item_id, i.rev AS source_rev, i.content_hash AS content_hash,
+              COALESCE(SUM(b.size), 0) AS total_size
+       FROM items i LEFT JOIN blob_index b ON b.item_id = i.item_id
+       WHERE i.state = 'active'
+       GROUP BY i.item_id ORDER BY i.item_id ASC`,
+    );
+    return rows.map((r) => ({
+      itemId: String(r.item_id),
+      rev: String(r.source_rev ?? ''),
+      contentHash: String(r.content_hash ?? ''),
+      totalSize: Number(r.total_size ?? 0),
+    }));
   }
 }
 

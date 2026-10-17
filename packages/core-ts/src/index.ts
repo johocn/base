@@ -12,3 +12,6 @@ export * from "./importer/container";
 export * from "./importer/video";
 export * from "./packexport";
 export * from "./like";
+export * from "./mesh/catalog";
+export * from "./mesh/gossip";
+export * from "./mesh/client";

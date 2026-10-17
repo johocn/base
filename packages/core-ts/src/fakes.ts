@@ -3,7 +3,7 @@ import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReade
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
 import type { ArticleRow, CheckinDayRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, ProgressRow, QuizRow, SegmentRow, TagLinkRow, TombstoneRow } from './types';
-import type { LocalContainerInput, LocalRepo, NodeRow, GossipRow, PackApply } from './repo';
+import type { LocalContainerInput, LocalRepo, MeshCatalogRow, NodeRow, GossipRow, PackApply } from './repo';
 import type { SubmitSegmentRow } from '@base/protocol-ts';
 import { progressWins } from '@base/protocol-ts';
 
@@ -458,6 +458,18 @@ export class MemoryRepo implements LocalRepo {
   }
   async markItemConflicted(itemId: string): Promise<void> {
     this.conflictedItems.add(itemId);
+  }
+  async meshCatalogRows(): Promise<MeshCatalogRow[]> {
+    // 与 SqlRepo 的 GROUP BY 同义：active 条目 × 本条目块大小求和（item_id 为空的块不挂任何条目）
+    const sizes = new Map<string, number>();
+    for (const b of this.blobs.values()) {
+      if (b.itemId === '') continue;
+      sizes.set(b.itemId, (sizes.get(b.itemId) ?? 0) + b.size);
+    }
+    return [...this.items.values()]
+      .filter((i) => i.state === 'active')
+      .sort((a, b) => (a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0))
+      .map((i) => ({ itemId: i.itemId, rev: i.rev, contentHash: i.contentHash, totalSize: sizes.get(i.itemId) ?? 0 }));
   }
 }
 
