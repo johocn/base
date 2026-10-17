@@ -60,6 +60,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let clockTimer: ReturnType<typeof setInterval> | null = null;
 let cpuLockRef: any = null;
 let pollBusy = false;
+let nullLogged = false;
 
 function log(msg: string) {
   const ts = new Date().toLocaleTimeString();
@@ -197,6 +198,13 @@ function toggleServer() {
     return;
   }
   try {
+    // plus bridge 在同一 JS bridge 线程执行 Java 调用：accept/read 属网络 I/O，
+    // 系统 StrictMode 抛 NetworkOnMainThreadException 被 bridge 吞掉返回 null。
+    // setThreadPolicy 作用于当前线程 = bridge 调用线程，后续 accept 同线程被放行。
+    const Builder = plus.android.importClass('android.os.StrictMode$ThreadPolicy$Builder');
+    const policy = new Builder().permitNetwork().build();
+    const SM = plus.android.importClass('android.os.StrictMode');
+    SM.setThreadPolicy(policy);
     // plus bridge 规则：方法返回的 Java 对象须先 importClass 对应类，否则返回 null
     plus.android.importClass('java.net.Socket');
     plus.android.importClass('java.io.InputStream');
@@ -205,7 +213,7 @@ function toggleServer() {
     server = new ServerSocket(PORT);
     server.setSoTimeout(250); // accept 轮询间隔同量级，超时即 poll
     serverOn.value = true;
-    log(`ServerSocket :${PORT} 已监听（soTimeout=250ms 轮询 accept）`);
+    log(`ServerSocket :${PORT} 已监听（permitNetwork 已放行主线程网络）`);
     pollTimer = setInterval(pollAccept, 300);
   } catch (err) {
     log(`启动失败: ${String(err)}`);
@@ -218,8 +226,15 @@ function pollAccept() {
   pollBusy = true;
   try {
     const sock = server.accept();
-    // plus bridge 对 soTimeout 空转返回 null（不抛超时异常），静默跳过
-    if (!sock) return;
+    // plus bridge 对 soTimeout 空转返回 null（不抛超时异常），静默跳过；
+    // 首次 null 打一条日志用于区分「正常空转」与「依旧拿不到连接」
+    if (!sock) {
+      if (!nullLogged) {
+        nullLogged = true;
+        log('accept 返回 null（首条，后续静默）');
+      }
+      return;
+    }
     log('accepted');
     serveSocket(sock);
   } catch {
