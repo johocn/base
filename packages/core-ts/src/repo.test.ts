@@ -8,15 +8,16 @@ import { MemoryRepo } from './fakes';
 import type { GossipRow, NodeRow } from './repo';
 import { SCHEMA_SQL, ensureItemsColumns } from './repo';
 
-/** 只实现 `ensureItemsColumns` 用到的两条语句：PRAGMA 读列名、ALTER 记账。 */
+/** 只实现 `ensureItemsColumns` 用到的两类语句：PRAGMA 读列名（按表）、ALTER 记账。 */
 class ColumnsDb implements LocalDb {
   readonly alters: string[] = [];
 
-  constructor(private readonly cols: string[]) {}
+  constructor(private readonly tables: Record<string, string[]>) {}
 
   async select(sql: string): Promise<Record<string, unknown>[]> {
-    if (sql !== `PRAGMA table_info(items)`) throw new Error(`未预期的 select: ${sql}`);
-    return this.cols.map((name) => ({ name }));
+    const m = /^PRAGMA table_info\((\w+)\)$/.exec(sql);
+    if (!m) throw new Error(`未预期的 select: ${sql}`);
+    return (this.tables[m[1]!] ?? []).map((name) => ({ name }));
   }
 
   async execute(sql: string): Promise<void> {
@@ -39,7 +40,9 @@ describe('items 表的后加列', () => {
   });
 
   it('存量库：缺列时幂等补齐五列', async () => {
-    const db = new ColumnsDb(['item_id', 'source', 'type', 'title', 'rev', 'content_hash', 'state', 'updated_at']);
+    const db = new ColumnsDb({
+      items: ['item_id', 'source', 'type', 'title', 'rev', 'content_hash', 'state', 'updated_at'],
+    });
     await ensureItemsColumns(db);
     expect(db.alters).toEqual([
       `ALTER TABLE items ADD COLUMN author_id TEXT NOT NULL DEFAULT ''`,
@@ -51,15 +54,27 @@ describe('items 表的后加列', () => {
   });
 
   it('已补过：不重复 ALTER', async () => {
-    const db = new ColumnsDb(['item_id', 'author_id', 'author_sig', 'tags_json', 'like_count', 'conflicted']);
+    const db = new ColumnsDb({
+      items: ['item_id', 'author_id', 'author_sig', 'tags_json', 'like_count', 'conflicted'],
+      gossip_events: ['event_id', 'body_json'],
+    });
     await ensureItemsColumns(db);
     expect(db.alters).toEqual([]);
   });
 
   it('表还不存在：跳过，等建表语句建全', async () => {
-    const db = new ColumnsDb([]);
+    const db = new ColumnsDb({});
     await ensureItemsColumns(db);
     expect(db.alters).toEqual([]);
+  });
+
+  it('gossip_events 存量库：缺 body_json 时补列（Task 6 代报重建 body 用）', async () => {
+    const db = new ColumnsDb({
+      items: ['item_id', 'author_id', 'author_sig', 'tags_json', 'like_count', 'conflicted'],
+      gossip_events: ['event_id', 'type', 'target_id', 'actor', 'created_at', 'received_at', 'payload_cid', 'payload_path', 'sig', 'relayed'],
+    });
+    await ensureItemsColumns(db);
+    expect(db.alters).toEqual([`ALTER TABLE gossip_events ADD COLUMN body_json TEXT NOT NULL DEFAULT ''`]);
   });
 });
 

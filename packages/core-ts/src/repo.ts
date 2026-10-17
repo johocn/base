@@ -39,6 +39,8 @@ export interface NodeRow {
 export interface GossipRow {
   eventId: string; type: string; targetId: string; actor: string;
   createdAt: number; receivedAt: number; payloadCid: string; payloadPath: string; sig: string; relayed: number;
+  /** 原签名事件 body 全文（JSON）。代报重建 body 用：payload 只存正文，reply_to 只在这里有（Task 6）。 */
+  bodyJson?: string;
 }
 
 /** mesh 目录聚合行（#82 spec §2.2）：items(active) × blob_index 按条目聚合的块总字节数。 */
@@ -270,11 +272,13 @@ export const SCHEMA_SQL: string[] = [
      sign_pubkey TEXT NOT NULL, authority_order INTEGER NOT NULL DEFAULT 2147483647,
      last_seen_at TEXT NOT NULL DEFAULT '')`,
   // gossip 收件表：只存收到的他人事件（本机所发走 comment_out）。
+  // body_json 是原签名 body 全文：payload 文件只存正文，reply_to 只在这里有（代报重建用，Task 6）。
   `CREATE TABLE IF NOT EXISTS gossip_events(
      event_id TEXT PRIMARY KEY, type TEXT NOT NULL, target_id TEXT NOT NULL,
      actor TEXT NOT NULL, created_at INTEGER NOT NULL, received_at INTEGER NOT NULL,
      payload_cid TEXT NOT NULL DEFAULT '', payload_path TEXT NOT NULL DEFAULT '',
-     sig TEXT NOT NULL, relayed INTEGER NOT NULL DEFAULT 0)`,
+     sig TEXT NOT NULL, relayed INTEGER NOT NULL DEFAULT 0,
+     body_json TEXT NOT NULL DEFAULT '')`,
   `CREATE INDEX IF NOT EXISTS idx_gossip_received ON gossip_events(received_at, event_id)`,
 ];
 
@@ -315,6 +319,12 @@ export async function ensureItemsColumns(db: LocalDb): Promise<void> {
   }
   if (!cols.has('conflicted')) {
     await db.execute(`ALTER TABLE items ADD COLUMN conflicted INTEGER NOT NULL DEFAULT 0`);
+  }
+  // gossip_events.body_json（#82 Task 6）：ensure*Columns 由 platform/index.ts 建表后统一调用，
+  // 本函数是唯一既有挂点，gossip 迁移搭车至此（platform/index.ts 不动）。表不存在即空库，跳过等 DDL。
+  const gossipCols = new Set((await db.select(`PRAGMA table_info(gossip_events)`)).map((r) => String(r.name)));
+  if (gossipCols.size > 0 && !gossipCols.has('body_json')) {
+    await db.execute(`ALTER TABLE gossip_events ADD COLUMN body_json TEXT NOT NULL DEFAULT ''`);
   }
 }
 
@@ -983,9 +993,9 @@ export class SqlRepo implements LocalRepo {
     const dup = await this.db.select(`SELECT event_id FROM gossip_events WHERE event_id=?`, [row.eventId]);
     if (dup.length > 0) return false;
     await this.db.execute(
-      `INSERT OR IGNORE INTO gossip_events(event_id,type,target_id,actor,created_at,received_at,payload_cid,payload_path,sig,relayed)
-       VALUES(?,?,?,?,?,?,?,?,?,?)`,
-      [row.eventId, row.type, row.targetId, row.actor, row.createdAt, row.receivedAt, row.payloadCid, row.payloadPath, row.sig, row.relayed],
+      `INSERT OR IGNORE INTO gossip_events(event_id,type,target_id,actor,created_at,received_at,payload_cid,payload_path,sig,relayed,body_json)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+      [row.eventId, row.type, row.targetId, row.actor, row.createdAt, row.receivedAt, row.payloadCid, row.payloadPath, row.sig, row.relayed, row.bodyJson ?? ''],
     );
     return true;
   }
@@ -993,7 +1003,7 @@ export class SqlRepo implements LocalRepo {
   async listGossipSince(cursorReceivedAt: number, cursorEventId: string, limit: number): Promise<GossipRow[]> {
     // 游标体例同 event-sync：(received_at, event_id) 双键序严格递增，翻页不重不漏
     const rows = await this.db.select(
-      `SELECT event_id,type,target_id,actor,created_at,received_at,payload_cid,payload_path,sig,relayed
+      `SELECT event_id,type,target_id,actor,created_at,received_at,payload_cid,payload_path,sig,relayed,body_json
        FROM gossip_events WHERE (received_at > ?) OR (received_at = ? AND event_id > ?)
        ORDER BY received_at ASC, event_id ASC LIMIT ?`,
       [cursorReceivedAt, cursorReceivedAt, cursorEventId, limit],
@@ -1201,5 +1211,6 @@ function toGossipRow(r: Record<string, unknown>): GossipRow {
     payloadPath: String(r.payload_path ?? ''),
     sig: String(r.sig ?? ''),
     relayed: Number(r.relayed ?? 0),
+    bodyJson: String(r.body_json ?? ''),
   };
 }

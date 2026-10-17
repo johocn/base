@@ -15,3 +15,4 @@ export * from "./like";
 export * from "./mesh/catalog";
 export * from "./mesh/gossip";
 export * from "./mesh/client";
+export * from "./mesh/gossip-flow";

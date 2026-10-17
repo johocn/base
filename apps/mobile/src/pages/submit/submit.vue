@@ -237,6 +237,7 @@ import { enqueueOrSend, loadItemDraft, newItemID, type SubmitDraft } from '../..
 import { bytesToBase64, pickLocalFile, type PickedFile } from '../../platform/uni';
 import { bootstrap, type AppContext } from '../../platform';
 import { syncOnce } from '../../core/sync';
+import { flushRelay } from '../../mesh/relay';
 
 const itemId = ref('');
 const type = ref<'article' | 'quiz'>('article');
@@ -390,6 +391,8 @@ async function openLinkDialog() {
       const count = Number((rows[0] as any)?.c ?? 0);
       if (count === 0 && editCtx.opts.nodeBaseUrl) {
         await syncOnce(editCtx.opts);
+        // 回连代报（spec §4.3）：sync 成功分支上追加，不阻塞 UI、失败静默
+        void flushRelay(editCtx.opts).catch(() => {});
       }
     } catch (e) {
       console.warn('自动同步失败（不阻断链接弹窗）', e);

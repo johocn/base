@@ -332,6 +332,7 @@ import { UNKNOWN_FLAGS, canPickFile, pickBlockedReason, type CapabilityFlags } f
 import { bootstrap, type AppContext } from '../../platform';
 import { bytesToBase64, pickLocalFile, type PickedFile } from '../../platform/uni';
 import { syncOnce } from '../../core/sync';
+import { flushRelay } from '../../mesh/relay';
 
 /** 课时可挂的载体类型（本册 §2.4；audio 登记在册但播放能力待后续版本） */
 const CARRIER_KINDS = ['article', 'quiz', 'video', 'audio'];
@@ -484,6 +485,8 @@ async function openLinkDialog() {
       const count = Number((rows[0] as any)?.c ?? 0);
       if (count === 0 && ctx.opts.nodeBaseUrl) {
         await syncOnce(ctx.opts);
+        // 回连代报（spec §4.3）：sync 成功分支上追加，不阻塞 UI、失败静默
+        void flushRelay(ctx.opts).catch(() => {});
       }
     } catch (e) {
       console.warn('自动同步失败（不阻断链接弹窗）', e);

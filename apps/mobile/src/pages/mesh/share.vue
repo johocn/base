@@ -35,15 +35,11 @@
 import { onUnmounted, ref } from 'vue';
 
 import { bootstrap } from '../../platform';
-import { bytesToBase64 } from '../../platform/uni';
-import {
-  GOSSIP_CACHE_MAX_AGE_MS,
-  GOSSIP_CACHE_MAX_ROWS,
-  buildMeshCatalogEntries,
-  verifyGossipMessage,
-} from '@base/core-ts';
+import { buildMeshCatalogEntries } from '@base/core-ts';
+import { ensureLocalIdentity } from '@base/core-ts/identity';
 import { decodeUtf8 } from '@base/core-ts/sync';
-import { deriveIdentityId, signMeshCatalog, utf8 } from '@base/protocol-ts';
+import { signMeshCatalog, utf8 } from '@base/protocol-ts';
+import { ingestGossip, outgoingGossip } from '../../mesh/gossip-engine';
 import { MESH_PORT, startMeshServer, type MeshRouteHandler, type MeshServerHandle } from '../../mesh/nio-server';
 import { loadMeshSignKey, saveMeshSignKey, type MeshSignKey } from '../../mesh/sign-key';
 import { buildShareCode, createShareTokenBox, shareExpiresAt } from '../../mesh/share';
@@ -53,6 +49,7 @@ function plusAny(): any {
 }
 
 const CATALOG_PAGE = 1000;
+const GOSSIP_PAGE = 200;
 const EMPTY: Uint8Array = new Uint8Array(0);
 
 const signKey = ref<MeshSignKey | null>(null);
@@ -337,7 +334,6 @@ const handlers: Record<string, MeshRouteHandler> = {
 
   'POST /mesh/v1/gossip': async (ctx) => {
     const { repo, opts } = await bootstrap();
-    const { adapters } = opts;
     let parsed: { messages?: unknown };
     try {
       parsed = JSON.parse(decodeUtf8(ctx.body)) as { messages?: unknown };
@@ -349,35 +345,9 @@ const handlers: Record<string, MeshRouteHandler> = {
     let rejected = 0;
     const now = Date.now();
     for (const m of messages) {
-      const v = verifyGossipMessage(m);
-      if (!v) {
-        rejected += 1;
-        continue;
-      }
-      const payloadPath = `_doc/gossip/${v.payloadCid}`;
-      try {
-        await adapters.fs.writeFile(payloadPath, utf8(v.payloadText));
-      } catch {
-        rejected += 1;
-        continue;
-      }
-      const body = (v.msg.event.body ?? {}) as Record<string, unknown>;
-      const ok = await repo.insertGossipEvent({
-        eventId: v.msg.event.event_id,
-        type: v.msg.event.type,
-        targetId: typeof body.target_id === 'string' ? body.target_id : '',
-        actor: deriveIdentityId(v.msg.actor_pubkey),
-        createdAt: v.msg.event.created_at,
-        receivedAt: now,
-        payloadCid: v.payloadCid,
-        payloadPath,
-        sig: v.msg.event.sig,
-        relayed: 0,
-      });
-      if (ok) {
-        stored += 1;
-        await repo.evictGossip(GOSSIP_CACHE_MAX_ROWS, GOSSIP_CACHE_MAX_AGE_MS, now);
-      }
+      const r = await ingestGossip({ adapters: opts.adapters, repo, workDir: opts.workDir, msg: m, now });
+      if (r === 'stored') stored += 1;
+      else rejected += 1; // duplicate 对推送方无害，不计入拒收
     }
     gossipStored.value += stored;
     gossipRejected.value += rejected;
@@ -385,37 +355,12 @@ const handlers: Record<string, MeshRouteHandler> = {
   },
 
   'GET /mesh/v1/gossip': async (ctx) => {
+    // 执行期定案 6：收件缓存转发后置二期（gossip_events 未存 actor_pubkey，转发必被对端丢弃）。
+    // 一期 GET 只服务本机所发（comment_out 未发送行）：接收端由此拉到源端离线评论，双向互通在此闭环。
     const { repo, opts } = await bootstrap();
-    const { adapters } = opts;
-    const since = ctx.query.since ?? '0_';
-    const sep = since.indexOf('_');
-    const cursorReceived = sep < 0 ? 0 : Number(since.slice(0, sep)) || 0;
-    const cursorEvent = sep < 0 ? '' : since.slice(sep + 1);
-    const rows = await repo.listGossipSince(cursorReceived, cursorEvent, 200);
-    const messages: unknown[] = [];
-    for (const row of rows) {
-      let text = '';
-      try {
-        text = decodeUtf8(await adapters.fs.readFile(row.payloadPath));
-      } catch {
-        continue; // payload 丢失：跳过该行，游标仍前进
-      }
-      // 执行期定案 6：gossip_events 不存 actor_pubkey，收件缓存转发后置二期——
-      // 此处置空，对端 verifyGossipMessage 静默丢弃，不产生错误路径
-      messages.push({
-        event: {
-          event_id: row.eventId,
-          type: row.type,
-          created_at: row.createdAt,
-          body: { target_id: row.targetId, text },
-          sig: row.sig,
-        },
-        actor_pubkey: '',
-        payload_b64: bytesToBase64(utf8(text)),
-      });
-    }
-    const last = rows.length > 0 ? rows[rows.length - 1]! : null;
-    return json({ messages, next_cursor: last ? `${last.receivedAt}_${last.eventId}` : since });
+    const ident = await ensureLocalIdentity(opts.adapters.storage);
+    const messages = (await outgoingGossip({ repo, myPubHex: ident.pubHex })).slice(0, GOSSIP_PAGE);
+    return json({ messages, next_cursor: ctx.query.since ?? '0_' });
   },
 };
 
