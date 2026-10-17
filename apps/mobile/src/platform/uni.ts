@@ -190,7 +190,15 @@ class PlusConn implements SqliteConnection {
         name: this.name,
         path,
         success: () => resolve(),
-        fail: (e) => reject(new Error(`openDatabase(${this.name}, ${path}) 失败: ${JSON.stringify(e)}`)),
+        fail: (e) => {
+          // -1402 = 同名库已在 plus 层打开（isOpenDatabase 的 path 精确匹配可能漏判）：视为已打开
+          const msg = JSON.stringify(e);
+          if (msg.includes('-1402') || msg.includes('Same Name Already Open')) {
+            resolve();
+            return;
+          }
+          reject(new Error(`openDatabase(${this.name}, ${path}) 失败: ${msg}`));
+        },
       });
     });
   }
@@ -535,16 +543,28 @@ export class PlusStorage implements StorageAdapter {
 
 /** 用 plus.sqlite 直接打开下载下来的 pack.sqlite（它是真 SQLite 文件）。 */
 export class PlusPackReader implements PackReader {
+  private conn: PlusConn | null = null;
+  private openedPath = '';
+
   constructor(private readonly p: PlusRuntime) {}
 
+  /** 同名库（'pack'）同时只能开一个：同路径复用连接，换路径先关旧连接，避免 -1402 与新旧包数据错乱 */
   async open(path: string): Promise<SqliteConnection> {
+    if (this.conn && this.openedPath === path) return this.conn;
+    if (this.conn) await this.conn.close();
     const conn = new PlusConn(this.p, PACK_DB);
     await conn.open(path);
+    this.conn = conn;
+    this.openedPath = path;
     return conn;
   }
 
   async close(conn: SqliteConnection): Promise<void> {
     await (conn as PlusConn).close();
+    if (this.conn === conn) {
+      this.conn = null;
+      this.openedPath = '';
+    }
   }
 }
 

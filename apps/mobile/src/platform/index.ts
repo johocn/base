@@ -20,6 +20,8 @@ export interface AppContext {
 }
 
 let cached: AppContext | null = null;
+/** 进行中的启动：并发调用共享同一次 bootstrap（同名库二次 openDatabase 会 -1402） */
+let booting: Promise<AppContext> | null = null;
 
 /** H5 bootstrap：sql.js（WASM SQLite）+ localStorage + fetch()。 */
 async function h5Bootstrap(): Promise<AppContext> {
@@ -89,17 +91,25 @@ async function appBootstrap(): Promise<AppContext> {
   return cached;
 }
 
-/** 建表 + 组装适配器；重复调用复用同一实例。 */
-export async function bootstrap(): Promise<AppContext> {
-  if (cached) return cached;
-  const ctx = plusRuntime() !== undefined ? await appBootstrap() : await h5Bootstrap();
-  // 一次性清理编码态孤儿容器行（#80 §3.3）：先于任何列表页读到脏行；失败不阻塞启动，下次启动重试
-  try {
-    await purgeIllegalContainers(ctx.repo);
-  } catch {
-    // 清理失败不阻塞启动
-  }
-  return ctx;
+/** 建表 + 组装适配器；重复调用复用同一实例，并发调用共享同一次启动。 */
+export function bootstrap(): Promise<AppContext> {
+  if (cached) return Promise.resolve(cached);
+  booting ??= (async () => {
+    try {
+      const ctx = plusRuntime() !== undefined ? await appBootstrap() : await h5Bootstrap();
+      // 一次性清理编码态孤儿容器行（#80 §3.3）：先于任何列表页读到脏行；失败不阻塞启动，下次启动重试
+      try {
+        await purgeIllegalContainers(ctx.repo);
+      } catch {
+        // 清理失败不阻塞启动
+      }
+      return ctx;
+    } catch (e) {
+      booting = null; // 启动失败允许下次调用重试，不留 rejected promise
+      throw e;
+    }
+  })();
+  return booting;
 }
 
 /** 节点地址保存后刷新缓存里的 baseUrl */
