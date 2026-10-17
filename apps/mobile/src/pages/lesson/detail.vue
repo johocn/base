@@ -64,6 +64,12 @@
         <block v-if="attachments.length > 0">
           <text class="group">附件（{{ attachments.length }}）</text>
           <view v-for="a in attachments" :key="a.blobId" class="attach" @click="openAttachment(a)">
+            <image
+              v-if="isImageAttachment(a.name)"
+              class="attach-img"
+              :src="attachmentUrl(a.blobId)"
+              mode="widthFix"
+            />
             <text class="carrier-title">{{ a.name }}</text>
           </view>
         </block>
@@ -136,6 +142,7 @@ import { childrenOf, lessonNo, lessonPosition, prevNextLesson, relatedLessons as
 import { displayOf, loadDirectory, normalizeTermKey, termState, type DirectorySnapshot } from '../../core/directory';
 import { renderMarkdown } from '../../core/markdown';
 import { resolveBlobRefsInMd } from '@base/core-ts/blob-refs';
+import { resolveBlobUrl } from '@base/core-ts/editor-links';
 import { canGovern, decodeTagPath, tagTitle, tagsOf, untaggedTargets } from '../../core/tags';
 import { containerFormFromLedger } from '../../core/my-created';
 import type { TagLinkRow } from '../../core/types';
@@ -169,6 +176,8 @@ const directory = ref<DirectorySnapshot>({ version: 0, approved: new Map(), pend
 const bodyHtml = ref('');
 const carriers = ref<CarrierVM[]>([]);
 const attachments = ref<AttachmentVM[]>([]);
+/** 附件图片渲染用的节点 baseUrl（onLoad 时从 bootstrap opts 取） */
+const nodeBaseUrl = ref('');
 const coverPath = ref('');
 const selfTags = ref<TagLinkRow[]>([]);
 const tagTitles = ref<Record<string, string>>({});
@@ -201,6 +210,7 @@ onLoad(async (query) => {
   try {
     const { opts, repo } = await bootstrap();
     likeOpts.value = { adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl };
+    nodeBaseUrl.value = opts.nodeBaseUrl || '';
     directory.value = await loadDirectory(repo);
     // from=ledger：从「我创建的」区进入 → 只用台账行集渲染，不读包表（册子 #51 §3.3）。
     if (q.from === 'ledger') {
@@ -447,9 +457,26 @@ function openDiscussion() {
   uni.navigateTo({ url: '/pages/comment/comment' });
 }
 
-/** 附件按需取回：下载字节 → 落本地文件 → 交给系统打开 */
+/** 图片附件按扩展名判定（附件条目只有 name，无 MIME 字段） */
+function isImageAttachment(name: string): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
+}
+
+/** 附件 blob 引用 → 节点绝对 URL（与正文 markdown 图片同一条解析路径） */
+function attachmentUrl(blobId: string): string {
+  return resolveBlobUrl(nodeBaseUrl.value, `blob:${blobId}`);
+}
+
+/** 附件按需取回：下载字节 → 落本地文件 → 交给系统打开；图片直接原生预览 */
 async function openAttachment(a: AttachmentVM) {
   error.value = '';
+  if (isImageAttachment(a.name)) {
+    uni.previewImage({
+      urls: [attachmentUrl(a.blobId)],
+      fail: () => uni.showToast({ title: '图片加载失败', icon: 'none' }),
+    });
+    return;
+  }
   try {
     const { opts, repo } = await bootstrap();
     const bytes = await fetchBlob({ adapters: opts.adapters, repo, nodeBaseUrl: opts.nodeBaseUrl }, a.blobId);
@@ -491,6 +518,7 @@ async function openAttachment(a: AttachmentVM) {
 .carrier { padding: 10px 0; border-bottom: 1px solid #f2f2f2; min-height: 48px; }
 .carrier-title { color: #2b6cb0; font-size: var(--fs-body); }
 .attach { padding: 8px 0; min-height: 48px; }
+.attach-img { width: 100%; border-radius: 8px; margin-bottom: 6px; }
 .hint { color: #888888; }
 .error { color: #c53030; font-size: var(--fs-annotate); }
 .group { display: block; margin: 18px 0 6px; color: #888888; font-size: var(--fs-annotate); }
