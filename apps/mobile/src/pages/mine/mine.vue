@@ -41,6 +41,8 @@
     <navigator url="/pages/favorite/favorite" class="link">我的收藏</navigator>
     <navigator url="/pages/help/help" class="link">使用帮助</navigator>
     <navigator url="/pages/setting/setting" class="link">设置</navigator>
+    <!-- R2 spike 临时入口：保活验证完成后随 pages/dev/nearby-spike 一并删除 -->
+    <navigator url="/pages/dev/nearby-spike" class="link">R2保活验证（临时）</navigator>
   </view>
 </template>
 
