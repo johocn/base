@@ -25,6 +25,22 @@ export interface LocalContainerInput {
   updatedAt: string;
 }
 
+/** mesh 节点锚点行（#82 spec §1.2 双锚 + §2.2 权威序）；authority_order 缺省 2147483647 = +∞ 语义。 */
+export interface NodeRow {
+  nodeId: string;
+  url: string;
+  tlsFingerprint: string;
+  signPubkey: string;
+  authorityOrder: number;
+  lastSeenAt: string;
+}
+
+/** gossip 收件行（#82 spec §4.2）：只存收到的他人事件；received_at 是收件游标排序键。 */
+export interface GossipRow {
+  eventId: string; type: string; targetId: string; actor: string;
+  createdAt: number; receivedAt: number; payloadCid: string; payloadPath: string; sig: string; relayed: number;
+}
+
 /** 本地仓储：同步核心只依赖这些语义方法，不直接写 SQL。 */
 export interface LocalRepo {
   getConfig(key: string): Promise<string | null>;
@@ -158,6 +174,20 @@ export interface LocalRepo {
   listNotes(): Promise<Array<{ noteId: string; title: string; bodyMd: string; tags: string[]; updatedAt: string }>>;
   /** 删一篇私有笔记；不存在无副作用。 */
   deleteNote(noteId: string): Promise<void>;
+  // nodes 锚点：TOFU 首落 + 更新（更新保留已配 authority_order，除非显式传值）。
+  upsertNode(row: NodeRow, opts?: { keepAuthorityOrder?: boolean }): Promise<void>;
+  getNode(nodeId: string): Promise<NodeRow | null>;
+  listNodesByOrder(): Promise<NodeRow[]>; // authority_order ASC
+  touchNode(nodeId: string, at: string): Promise<void>;
+  // gossip 收件：event_id 先到先得；返回 false = 重复（幂等丢弃）。
+  insertGossipEvent(row: GossipRow): Promise<boolean>;
+  listGossipSince(cursorReceivedAt: number, cursorEventId: string, limit: number): Promise<GossipRow[]>;
+  countGossip(): Promise<number>;
+  /** 缓存上限（spec §4.2：500 条 / 7 天 LRU，双条件任一触顶驱逐最旧；已落本地库展示不受影响）。 */
+  evictGossip(maxRows: number, maxAgeMs: number, now: number): Promise<number>;
+  markGossipRelayed(eventId: string): Promise<void>;
+  /** catalog 合并同 rev 异 hash 时保留本地并置位（mesh 册 §3.4；终局仲裁在 core/mesh）。 */
+  markItemConflicted(itemId: string): Promise<void>;
 }
 
 /** 本地库建表语句（P0 只建用得到的 5 张表）。 */
@@ -167,7 +197,7 @@ export const SCHEMA_SQL: string[] = [
      item_id TEXT PRIMARY KEY, source TEXT, type TEXT, title TEXT, rev TEXT,
      content_hash TEXT, state TEXT, updated_at TEXT, tags_json TEXT NOT NULL DEFAULT '[]',
      author_id TEXT NOT NULL DEFAULT '', author_sig TEXT NOT NULL DEFAULT '',
-     like_count INTEGER NOT NULL DEFAULT 0)`,
+     like_count INTEGER NOT NULL DEFAULT 0, conflicted INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS articles(
      item_id TEXT PRIMARY KEY, title TEXT, digest TEXT, published_at TEXT,
      tags_json TEXT, body_md TEXT, content_hash TEXT, rev TEXT)`,
@@ -224,6 +254,18 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS notes(
      note_id TEXT PRIMARY KEY, title TEXT NOT NULL, body_md TEXT NOT NULL DEFAULT '',
      tags TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)`,
+  // #82 mesh 一期（spec §1.2/§2.2/§4.2）：节点锚点表（TOFU 双锚 + 权威序）。
+  `CREATE TABLE IF NOT EXISTS nodes(
+     node_id TEXT PRIMARY KEY, url TEXT NOT NULL, tls_fingerprint TEXT NOT NULL,
+     sign_pubkey TEXT NOT NULL, authority_order INTEGER NOT NULL DEFAULT 2147483647,
+     last_seen_at TEXT NOT NULL DEFAULT '')`,
+  // gossip 收件表：只存收到的他人事件（本机所发走 comment_out）。
+  `CREATE TABLE IF NOT EXISTS gossip_events(
+     event_id TEXT PRIMARY KEY, type TEXT NOT NULL, target_id TEXT NOT NULL,
+     actor TEXT NOT NULL, created_at INTEGER NOT NULL, received_at INTEGER NOT NULL,
+     payload_cid TEXT NOT NULL DEFAULT '', payload_path TEXT NOT NULL DEFAULT '',
+     sig TEXT NOT NULL, relayed INTEGER NOT NULL DEFAULT 0)`,
+  `CREATE INDEX IF NOT EXISTS idx_gossip_received ON gossip_events(received_at, event_id)`,
 ];
 
 /**
@@ -260,6 +302,9 @@ export async function ensureItemsColumns(db: LocalDb): Promise<void> {
   }
   if (!cols.has('like_count')) {
     await db.execute(`ALTER TABLE items ADD COLUMN like_count INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!cols.has('conflicted')) {
+    await db.execute(`ALTER TABLE items ADD COLUMN conflicted INTEGER NOT NULL DEFAULT 0`);
   }
 }
 
@@ -884,6 +929,91 @@ export class SqlRepo implements LocalRepo {
   async deleteNote(noteId: string): Promise<void> {
     await this.db.execute(`DELETE FROM notes WHERE note_id=?`, [noteId]);
   }
+
+  async upsertNode(row: NodeRow, opts?: { keepAuthorityOrder?: boolean }): Promise<void> {
+    // keepAuthorityOrder=true：更新不动 authority_order（TOFU 更新不覆盖人工配置的权威序位）
+    if (opts?.keepAuthorityOrder) {
+      await this.db.execute(
+        `INSERT INTO nodes(node_id,url,tls_fingerprint,sign_pubkey,authority_order,last_seen_at) VALUES(?,?,?,?,?,?)
+         ON CONFLICT(node_id) DO UPDATE SET url=excluded.url,tls_fingerprint=excluded.tls_fingerprint,
+           sign_pubkey=excluded.sign_pubkey,last_seen_at=excluded.last_seen_at`,
+        [row.nodeId, row.url, row.tlsFingerprint, row.signPubkey, row.authorityOrder, row.lastSeenAt],
+      );
+      return;
+    }
+    await this.db.execute(
+      `INSERT INTO nodes(node_id,url,tls_fingerprint,sign_pubkey,authority_order,last_seen_at) VALUES(?,?,?,?,?,?)
+       ON CONFLICT(node_id) DO UPDATE SET url=excluded.url,tls_fingerprint=excluded.tls_fingerprint,
+         sign_pubkey=excluded.sign_pubkey,authority_order=excluded.authority_order,last_seen_at=excluded.last_seen_at`,
+      [row.nodeId, row.url, row.tlsFingerprint, row.signPubkey, row.authorityOrder, row.lastSeenAt],
+    );
+  }
+
+  async getNode(nodeId: string): Promise<NodeRow | null> {
+    const rows = await this.db.select(
+      `SELECT node_id,url,tls_fingerprint,sign_pubkey,authority_order,last_seen_at FROM nodes WHERE node_id=?`,
+      [nodeId],
+    );
+    return rows.length > 0 ? toNodeRow(rows[0]) : null;
+  }
+
+  async listNodesByOrder(): Promise<NodeRow[]> {
+    const rows = await this.db.select(
+      `SELECT node_id,url,tls_fingerprint,sign_pubkey,authority_order,last_seen_at FROM nodes ORDER BY authority_order ASC`,
+    );
+    return rows.map(toNodeRow);
+  }
+
+  async touchNode(nodeId: string, at: string): Promise<void> {
+    await this.db.execute(`UPDATE nodes SET last_seen_at=? WHERE node_id=?`, [at, nodeId]);
+  }
+
+  async insertGossipEvent(row: GossipRow): Promise<boolean> {
+    // 先到先得：已存在即丢弃（同 event_id 重放不改首收行）
+    const dup = await this.db.select(`SELECT event_id FROM gossip_events WHERE event_id=?`, [row.eventId]);
+    if (dup.length > 0) return false;
+    await this.db.execute(
+      `INSERT OR IGNORE INTO gossip_events(event_id,type,target_id,actor,created_at,received_at,payload_cid,payload_path,sig,relayed)
+       VALUES(?,?,?,?,?,?,?,?,?,?)`,
+      [row.eventId, row.type, row.targetId, row.actor, row.createdAt, row.receivedAt, row.payloadCid, row.payloadPath, row.sig, row.relayed],
+    );
+    return true;
+  }
+
+  async listGossipSince(cursorReceivedAt: number, cursorEventId: string, limit: number): Promise<GossipRow[]> {
+    // 游标体例同 event-sync：(received_at, event_id) 双键序严格递增，翻页不重不漏
+    const rows = await this.db.select(
+      `SELECT event_id,type,target_id,actor,created_at,received_at,payload_cid,payload_path,sig,relayed
+       FROM gossip_events WHERE (received_at > ?) OR (received_at = ? AND event_id > ?)
+       ORDER BY received_at ASC, event_id ASC LIMIT ?`,
+      [cursorReceivedAt, cursorReceivedAt, cursorEventId, limit],
+    );
+    return rows.map(toGossipRow);
+  }
+
+  async countGossip(): Promise<number> {
+    const rows = await this.db.select(`SELECT COUNT(*) AS c FROM gossip_events`);
+    return Number((rows[0] as any)?.c ?? 0);
+  }
+
+  async evictGossip(maxRows: number, maxAgeMs: number, now: number): Promise<number> {
+    // 双条件任一触顶即驱逐：保留最新 maxRows 条，再逐过期行；LocalDb.execute 不回 affected rows，用前后计数差
+    const before = await this.countGossip();
+    await this.db.execute(
+      `DELETE FROM gossip_events WHERE event_id IN (SELECT event_id FROM gossip_events ORDER BY received_at DESC, event_id DESC LIMIT -1 OFFSET ?)`,
+      [maxRows],
+    );
+    await this.db.execute(`DELETE FROM gossip_events WHERE received_at < ?`, [now - maxAgeMs]);
+    return before - (await this.countGossip());
+  }
+
+  async markGossipRelayed(eventId: string): Promise<void> {
+    await this.db.execute(`UPDATE gossip_events SET relayed=1 WHERE event_id=?`, [eventId]);
+  }
+
+  async markItemConflicted(itemId: string): Promise<void> {
+    await this.db.execute(`UPDATE items SET conflicted=1 WHERE item_id=?`, [itemId]);
+  }
 }
 
 function toNullableString(v: unknown): string | null {
@@ -1019,5 +1149,31 @@ function toCheckinDayRow(r: Record<string, unknown>): CheckinDayRow {
     day: String(r.day),
     firstEventId: String(r.first_event_id ?? ''),
     createdAt: Number(r.created_at ?? 0),
+  };
+}
+
+function toNodeRow(r: Record<string, unknown>): NodeRow {
+  return {
+    nodeId: String(r.node_id),
+    url: String(r.url ?? ''),
+    tlsFingerprint: String(r.tls_fingerprint ?? ''),
+    signPubkey: String(r.sign_pubkey ?? ''),
+    authorityOrder: Number(r.authority_order ?? 2147483647),
+    lastSeenAt: String(r.last_seen_at ?? ''),
+  };
+}
+
+function toGossipRow(r: Record<string, unknown>): GossipRow {
+  return {
+    eventId: String(r.event_id),
+    type: String(r.type ?? ''),
+    targetId: String(r.target_id ?? ''),
+    actor: String(r.actor ?? ''),
+    createdAt: Number(r.created_at ?? 0),
+    receivedAt: Number(r.received_at ?? 0),
+    payloadCid: String(r.payload_cid ?? ''),
+    payloadPath: String(r.payload_path ?? ''),
+    sig: String(r.sig ?? ''),
+    relayed: Number(r.relayed ?? 0),
   };
 }

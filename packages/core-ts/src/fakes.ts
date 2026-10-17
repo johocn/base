@@ -3,7 +3,7 @@ import type { Adapters, FsAdapter, HttpAdapter, HttpResponse, LocalDb, PackReade
 import { computeStats, favoriteNext, readAtNext } from './state';
 import { searchPattern } from './search';
 import type { ArticleRow, CheckinDayRow, CommentOutRow, DmKeyRow, FavoriteRow, GroupKeyRow, GroupRow, ItemRow, LearningStats, MySubmissionRow, ProgressRow, QuizRow, SegmentRow, TagLinkRow, TombstoneRow } from './types';
-import type { LocalContainerInput, LocalRepo, PackApply } from './repo';
+import type { LocalContainerInput, LocalRepo, NodeRow, GossipRow, PackApply } from './repo';
 import type { SubmitSegmentRow } from '@base/protocol-ts';
 import { progressWins } from '@base/protocol-ts';
 
@@ -401,6 +401,63 @@ export class MemoryRepo implements LocalRepo {
   }
   async deleteNote(noteId: string): Promise<void> {
     this.notes.delete(noteId);
+  }
+
+  nodes = new Map<string, NodeRow>(); // nodeId -> row
+  gossip = new Map<string, GossipRow>(); // eventId -> row
+  conflictedItems = new Set<string>(); // items.conflicted=1 的条目
+
+  async upsertNode(row: NodeRow, opts?: { keepAuthorityOrder?: boolean }): Promise<void> {
+    const cur = this.nodes.get(row.nodeId);
+    // TOFU 首落；更新时 keepAuthorityOrder=true 不动已配序位（与 SqlRepo 的 ON CONFLICT 列表一致）
+    this.nodes.set(row.nodeId, cur && opts?.keepAuthorityOrder ? { ...row, authorityOrder: cur.authorityOrder } : { ...row });
+  }
+  async getNode(nodeId: string): Promise<NodeRow | null> {
+    return this.nodes.get(nodeId) ?? null;
+  }
+  async listNodesByOrder(): Promise<NodeRow[]> {
+    return [...this.nodes.values()].sort((a, b) => a.authorityOrder - b.authorityOrder);
+  }
+  async touchNode(nodeId: string, at: string): Promise<void> {
+    const cur = this.nodes.get(nodeId);
+    if (cur) this.nodes.set(nodeId, { ...cur, lastSeenAt: at });
+  }
+  async insertGossipEvent(row: GossipRow): Promise<boolean> {
+    // 先到先得：同 event_id 重复收不覆盖（与 SqlRepo 的 OR IGNORE 语义一致）
+    if (this.gossip.has(row.eventId)) return false;
+    this.gossip.set(row.eventId, { ...row });
+    return true;
+  }
+  async listGossipSince(cursorReceivedAt: number, cursorEventId: string, limit: number): Promise<GossipRow[]> {
+    return [...this.gossip.values()]
+      .filter((r) => r.receivedAt > cursorReceivedAt || (r.receivedAt === cursorReceivedAt && r.eventId > cursorEventId))
+      .sort((a, b) => (a.receivedAt - b.receivedAt) || (a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0))
+      .slice(0, limit);
+  }
+  async countGossip(): Promise<number> {
+    return this.gossip.size;
+  }
+  async evictGossip(maxRows: number, maxAgeMs: number, now: number): Promise<number> {
+    const before = this.gossip.size;
+    // 保留最新 maxRows 条（received_at DESC, event_id DESC），再逐 received_at 过期行
+    const keep = new Set(
+      [...this.gossip.values()]
+        .sort((a, b) => (b.receivedAt - a.receivedAt) || (b.eventId < a.eventId ? -1 : b.eventId > a.eventId ? 1 : 0))
+        .slice(0, maxRows)
+        .map((r) => r.eventId),
+    );
+    const cutoff = now - maxAgeMs;
+    for (const [id, r] of [...this.gossip]) {
+      if (!keep.has(id) || r.receivedAt < cutoff) this.gossip.delete(id);
+    }
+    return before - this.gossip.size;
+  }
+  async markGossipRelayed(eventId: string): Promise<void> {
+    const r = this.gossip.get(eventId);
+    if (r) this.gossip.set(eventId, { ...r, relayed: 1 });
+  }
+  async markItemConflicted(itemId: string): Promise<void> {
+    this.conflictedItems.add(itemId);
   }
 }
 
