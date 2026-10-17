@@ -5,6 +5,10 @@
       "style": { "navigationBarTitleText": "课程" }
     },
     {
+      "path": "pages/dev/nearby-spike",
+      "style": { "navigationBarTitleText": "R2保活验证" }
+    },
+    {
       "path": "pages/circle/circle",
       "style": { "navigationBarTitleText": "圈子" }
     },
