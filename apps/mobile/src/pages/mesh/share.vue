@@ -1,0 +1,477 @@
+<template>
+  <view class="wrap">
+    <text class="title">近场分享（源端）</text>
+
+    <view class="field">
+      <text class="label">节点签名私钥（BASE_SIGN_KEY，64 位 hex，部署者录入一次）</text>
+      <input v-model="seedInput" class="input" password placeholder="签名种子 hex64" />
+      <button size="mini" class="btn" @click="saveKey">保存私钥</button>
+      <text v-if="signKey" class="meta">node_id：{{ signKey.nodeId }}</text>
+    </view>
+
+    <view class="field row">
+      <text class="label">亮屏常亮（分享期间）</text>
+      <switch :checked="screenLock" @change="onLockChange" />
+    </view>
+
+    <button size="mini" class="btn" @click="onToggleShare">{{ sharing ? '停止分享' : '开始分享' }}</button>
+    <text class="meta">本机 IP：{{ localIp || '未获取' }}　端口：{{ sharing ? MESH_PORT : '-' }}</text>
+
+    <view v-if="sharing" class="field">
+      <text class="label">配对码（token 每 30 分钟自动续签，续签后请重新复制给接收端）</text>
+      <textarea :value="shareCode" class="code" :maxlength="-1" disabled auto-height />
+      <button size="mini" class="btn" @click="copyCode">复制配对码</button>
+    </view>
+
+    <view class="field">
+      <text class="label">状态</text>
+      <text class="meta">连接数：{{ activeConns }}　gossip 收到：{{ gossipStored }}（拒收 {{ gossipRejected }}）</text>
+      <text v-for="(l, i) in logs" :key="i" class="log">{{ l }}</text>
+    </view>
+  </view>
+</template>
+
+<script setup lang="ts">
+import { onUnmounted, ref } from 'vue';
+
+import { bootstrap } from '../../platform';
+import { bytesToBase64 } from '../../platform/uni';
+import {
+  GOSSIP_CACHE_MAX_AGE_MS,
+  GOSSIP_CACHE_MAX_ROWS,
+  buildMeshCatalogEntries,
+  verifyGossipMessage,
+} from '@base/core-ts';
+import { decodeUtf8 } from '@base/core-ts/sync';
+import { deriveIdentityId, signMeshCatalog, utf8 } from '@base/protocol-ts';
+import { MESH_PORT, startMeshServer, type MeshRouteHandler, type MeshServerHandle } from '../../mesh/nio-server';
+import { loadMeshSignKey, saveMeshSignKey, type MeshSignKey } from '../../mesh/sign-key';
+import { buildShareCode, createShareTokenBox, shareExpiresAt } from '../../mesh/share';
+
+function plusAny(): any {
+  return (globalThis as any).plus;
+}
+
+const CATALOG_PAGE = 1000;
+const EMPTY: Uint8Array = new Uint8Array(0);
+
+const signKey = ref<MeshSignKey | null>(null);
+const seedInput = ref('');
+const sharing = ref(false);
+const screenLock = ref(true);
+const shareCode = ref('');
+const localIp = ref('');
+const activeConns = ref(0);
+const gossipStored = ref(0);
+const gossipRejected = ref(0);
+const logs = ref<string[]>([]);
+
+/** 配对码静态部分（url/锚点在开始分享时定格） */
+let shareUrl = '';
+let shareTls = '';
+
+let server: MeshServerHandle | null = null;
+const tokenBox = createShareTokenBox({
+  onRenew: () => {
+    refreshShareCode();
+    pushLog('token 已续签，请让接收端重新复制配对码');
+  },
+});
+
+function pushLog(msg: string): void {
+  logs.value = [...logs.value.slice(-49), `${new Date().toISOString().slice(11, 19)} ${msg}`];
+}
+
+function isoNoMs(): string {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function applyWakelock(): void {
+  try {
+    plusAny()?.device?.setWakelock(screenLock.value && sharing.value);
+  } catch {
+    /* H5/老内核降级 */
+  }
+}
+
+function onLockChange(e: Event): void {
+  const detail = (e as unknown as { detail?: { value?: boolean } }).detail;
+  screenLock.value = detail?.value ?? screenLock.value;
+  applyWakelock();
+}
+
+async function loadKey(): Promise<void> {
+  try {
+    const { opts } = await bootstrap();
+    signKey.value = await loadMeshSignKey(opts.adapters.storage);
+  } catch (e) {
+    pushLog(`私钥加载失败：${(e as Error).message}`);
+  }
+}
+
+async function saveKey(): Promise<void> {
+  try {
+    const { opts } = await bootstrap();
+    signKey.value = await saveMeshSignKey(opts.adapters.storage, seedInput.value.trim());
+    seedInput.value = '';
+    pushLog(`签名私钥已保存，node_id=${signKey.value.nodeId}`);
+  } catch (e) {
+    uni.showToast({ title: (e as Error).message, icon: 'none' });
+  }
+}
+
+interface BatteryInfo {
+  level: number;
+  isCharging: boolean;
+}
+
+function checkBattery(): Promise<BatteryInfo | null> {
+  return new Promise((resolve) => {
+    try {
+      const plus = plusAny();
+      if (!plus?.device?.getBatteryInfo) {
+        resolve(null);
+        return;
+      }
+      plus.device.getBatteryInfo({
+        success: (info: { level?: number; isCharging?: boolean }) =>
+          resolve({ level: Number(info.level ?? 100), isCharging: info.isCharging === true }),
+        fail: () => resolve(null),
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function readLocalIp(): Promise<string> {
+  try {
+    return String(plusAny()?.networkinfo?.getCurrentIPAddress?.() ?? '');
+  } catch {
+    return '';
+  }
+}
+
+function refreshShareCode(): void {
+  const sign = signKey.value;
+  if (!sign) return;
+  shareCode.value = buildShareCode({
+    nodeId: sign.nodeId,
+    url: shareUrl,
+    signPubkey: sign.pubHex,
+    tlsFingerprint: shareTls,
+    token: tokenBox.token(),
+    ip: localIp.value,
+    port: MESH_PORT,
+    expiresAt: shareExpiresAt(),
+  });
+}
+
+async function startShare(): Promise<void> {
+  const sign = signKey.value;
+  if (!sign) {
+    uni.showToast({ title: '请先录入节点签名私钥', icon: 'none' });
+    return;
+  }
+  const bat = await checkBattery();
+  if (bat && !bat.isCharging) {
+    uni.showModal({ title: '请插电后分享', content: '近场分发耗电明显，请连接充电器后再开始。', showCancel: false });
+    return;
+  }
+  if (bat && bat.level < 20) {
+    uni.showToast({ title: `电量 ${bat.level}%，建议保持插电`, icon: 'none' });
+    pushLog(`电量偏低（${bat.level}%），未阻塞分享`);
+  }
+  const ip = await readLocalIp();
+  if (!ip) {
+    uni.showToast({ title: '无法获取本机 IP，请检查网络', icon: 'none' });
+    return;
+  }
+  localIp.value = ip;
+  const { repo } = await bootstrap();
+  shareUrl = (await repo.getConfig('node_base_url')) ?? '';
+  const anchor = await repo.getNode(sign.nodeId);
+  shareTls = anchor?.tlsFingerprint ?? '';
+  if (!shareUrl || !shareTls) {
+    pushLog('警告：缺少 node_base_url 或本节点锚点（tls_fingerprint），接收端将拒收配对码');
+  }
+  gossipStored.value = 0;
+  gossipRejected.value = 0;
+  tokenBox.start();
+  try {
+    server = startMeshServer(handlers, {
+      token: () => tokenBox.token(),
+      onLog: pushLog,
+      onStats: (s) => {
+        activeConns.value = s.activeConns;
+      },
+    });
+  } catch (e) {
+    tokenBox.stop();
+    uni.showToast({ title: (e as Error).message, icon: 'none' });
+    return;
+  }
+  sharing.value = true;
+  applyWakelock();
+  refreshShareCode();
+  pushLog(`分享中 http://${ip}:${MESH_PORT}`);
+}
+
+function stopShare(): void {
+  server?.stop();
+  server = null;
+  tokenBox.stop();
+  sharing.value = false;
+  activeConns.value = 0;
+  applyWakelock();
+  pushLog('已停止分享');
+}
+
+function onToggleShare(): void {
+  if (sharing.value) stopShare();
+  else void startShare();
+}
+
+function copyCode(): void {
+  uni.setClipboardData({
+    data: shareCode.value,
+    success: () => uni.showToast({ title: '已复制', icon: 'success' }),
+  });
+}
+
+const json = (obj: unknown): { status: number; body: Uint8Array; contentType: string } => ({
+  status: 200,
+  body: utf8(JSON.stringify(obj)),
+  contentType: 'application/json',
+});
+
+const notFound = (): { status: number; body: Uint8Array } => ({ status: 404, body: EMPTY });
+
+/** 六接口接线（计划 Task 5 Step 6 表格逐字） */
+const handlers: Record<string, MeshRouteHandler> = {
+  'GET /mesh/v1/hello': async () => {
+    const sign = signKey.value;
+    if (!sign) return { status: 500, body: EMPTY };
+    const { repo, db } = await bootstrap();
+    const rows = await db.select(
+      'SELECT received_at, event_id FROM gossip_events ORDER BY received_at DESC, event_id DESC LIMIT 1',
+    );
+    const cursor = rows.length > 0 ? `${Number(rows[0]!.received_at)}_${String(rows[0]!.event_id)}` : '0_';
+    const catalogVersion = Number((await repo.getConfig('content_version')) ?? '0');
+    return json({
+      node_id: sign.nodeId,
+      sign_pubkey: sign.pubHex,
+      protocol_version: 1,
+      catalog_version: catalogVersion,
+      gossip_cursor: cursor,
+    });
+  },
+
+  'GET /mesh/v1/catalog': async (ctx) => {
+    const sign = signKey.value;
+    if (!sign) return { status: 500, body: EMPTY };
+    const { repo, db } = await bootstrap();
+    const entries = await buildMeshCatalogEntries(repo);
+    const catalogVersion = Number((await repo.getConfig('content_version')) ?? '0');
+    const doc = signMeshCatalog(
+      {
+        type: 'mesh-catalog',
+        v: 1,
+        node_id: sign.nodeId,
+        catalog_version: catalogVersion,
+        entries,
+        signed_at: isoNoMs(),
+      },
+      sign.seedHex,
+    );
+    // 一期全量单页（entries < 1000 不分页，next_cursor=null；超 1000 按 item_id 切页）
+    const cur = ctx.query.cursor ?? '';
+    let start = 0;
+    if (cur !== '') {
+      const idx = entries.findIndex((e) => e.item_id > cur);
+      start = idx < 0 ? entries.length : idx;
+    }
+    const pageEntries = entries.slice(start, start + CATALOG_PAGE);
+    const nextCursor =
+      pageEntries.length > 0 && start + CATALOG_PAGE < entries.length
+        ? pageEntries[pageEntries.length - 1]!.item_id
+        : null;
+    // 传输层扩展（非签名对象，块哈希自证，spec §1.2）：按条目附块清单，接收端据此取块
+    const itemBlobs: Record<string, string[]> = {};
+    if (pageEntries.length > 0) {
+      const marks = pageEntries.map(() => '?').join(',');
+      const blobRows = await db.select(
+        `SELECT item_id, blob_id FROM blob_index WHERE item_id IN (${marks})`,
+        pageEntries.map((e) => e.item_id),
+      );
+      for (const r of blobRows) {
+        const k = String(r.item_id);
+        (itemBlobs[k] ??= []).push(String(r.blob_id));
+      }
+    }
+    return json({
+      node_id: doc.node_id,
+      catalog_version: doc.catalog_version,
+      signed_at: doc.signed_at,
+      signature: doc.signature,
+      entries: pageEntries,
+      next_cursor: nextCursor,
+      item_blobs: itemBlobs,
+    });
+  },
+
+  'GET /mesh/v1/blob/': async (ctx) => {
+    const id = ctx.path.slice('/mesh/v1/blob/'.length).toLowerCase();
+    if (!/^[0-9a-f]{32}$/.test(id)) return notFound();
+    const { db, opts } = await bootstrap();
+    const rows = await db.select('SELECT path FROM blob_index WHERE blob_id = ?', [id]);
+    const path = rows.length > 0 ? String(rows[0]!.path ?? '') : '';
+    if (!path) return notFound();
+    try {
+      const bytes = await opts.adapters.fs.readFile(path);
+      return { status: 200, body: bytes, contentType: 'application/octet-stream' };
+    } catch {
+      return notFound();
+    }
+  },
+
+  'POST /mesh/v1/gossip': async (ctx) => {
+    const { repo, opts } = await bootstrap();
+    const { adapters } = opts;
+    let parsed: { messages?: unknown };
+    try {
+      parsed = JSON.parse(decodeUtf8(ctx.body)) as { messages?: unknown };
+    } catch {
+      return { status: 400, body: EMPTY };
+    }
+    const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+    let stored = 0;
+    let rejected = 0;
+    const now = Date.now();
+    for (const m of messages) {
+      const v = verifyGossipMessage(m);
+      if (!v) {
+        rejected += 1;
+        continue;
+      }
+      const payloadPath = `_doc/gossip/${v.payloadCid}`;
+      try {
+        await adapters.fs.writeFile(payloadPath, utf8(v.payloadText));
+      } catch {
+        rejected += 1;
+        continue;
+      }
+      const body = (v.msg.event.body ?? {}) as Record<string, unknown>;
+      const ok = await repo.insertGossipEvent({
+        eventId: v.msg.event.event_id,
+        type: v.msg.event.type,
+        targetId: typeof body.target_id === 'string' ? body.target_id : '',
+        actor: deriveIdentityId(v.msg.actor_pubkey),
+        createdAt: v.msg.event.created_at,
+        receivedAt: now,
+        payloadCid: v.payloadCid,
+        payloadPath,
+        sig: v.msg.event.sig,
+        relayed: 0,
+      });
+      if (ok) {
+        stored += 1;
+        await repo.evictGossip(GOSSIP_CACHE_MAX_ROWS, GOSSIP_CACHE_MAX_AGE_MS, now);
+      }
+    }
+    gossipStored.value += stored;
+    gossipRejected.value += rejected;
+    return json({ stored, rejected });
+  },
+
+  'GET /mesh/v1/gossip': async (ctx) => {
+    const { repo, opts } = await bootstrap();
+    const { adapters } = opts;
+    const since = ctx.query.since ?? '0_';
+    const sep = since.indexOf('_');
+    const cursorReceived = sep < 0 ? 0 : Number(since.slice(0, sep)) || 0;
+    const cursorEvent = sep < 0 ? '' : since.slice(sep + 1);
+    const rows = await repo.listGossipSince(cursorReceived, cursorEvent, 200);
+    const messages: unknown[] = [];
+    for (const row of rows) {
+      let text = '';
+      try {
+        text = decodeUtf8(await adapters.fs.readFile(row.payloadPath));
+      } catch {
+        continue; // payload 丢失：跳过该行，游标仍前进
+      }
+      // 执行期定案 6：gossip_events 不存 actor_pubkey，收件缓存转发后置二期——
+      // 此处置空，对端 verifyGossipMessage 静默丢弃，不产生错误路径
+      messages.push({
+        event: {
+          event_id: row.eventId,
+          type: row.type,
+          created_at: row.createdAt,
+          body: { target_id: row.targetId, text },
+          sig: row.sig,
+        },
+        actor_pubkey: '',
+        payload_b64: bytesToBase64(utf8(text)),
+      });
+    }
+    const last = rows.length > 0 ? rows[rows.length - 1]! : null;
+    return json({ messages, next_cursor: last ? `${last.receivedAt}_${last.eventId}` : since });
+  },
+};
+
+onUnmounted(() => {
+  stopShare();
+});
+
+void loadKey();
+</script>
+
+<style scoped>
+.wrap {
+  padding: 24rpx;
+}
+.title {
+  font-size: 36rpx;
+  font-weight: bold;
+  margin-bottom: 24rpx;
+}
+.field {
+  margin: 20rpx 0;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+.label {
+  display: block;
+  font-size: 26rpx;
+  color: #666;
+  margin-bottom: 8rpx;
+}
+.input {
+  border: 1rpx solid #ddd;
+  border-radius: 8rpx;
+  padding: 12rpx;
+  margin-bottom: 12rpx;
+}
+.code {
+  border: 1rpx solid #ddd;
+  border-radius: 8rpx;
+  padding: 12rpx;
+  width: 100%;
+  word-break: break-all;
+}
+.btn {
+  margin: 12rpx 0;
+}
+.meta {
+  font-size: 24rpx;
+  color: #666;
+}
+.log {
+  display: block;
+  font-size: 22rpx;
+  color: #999;
+}
+</style>

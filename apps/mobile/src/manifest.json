@@ -3,7 +3,7 @@
     "appid" : "__UNI__936A667",
     "description" : "base 分布式学习系统手机端",
     "versionName" : "0.21.6",
-    "versionCode" : 47,
+    "versionCode" : 48,
     "transformPx" : false,
     "app-plus" : {
         "usingComponents" : true,
@@ -29,7 +29,8 @@
                     "<uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>",
                     "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>"
                 ],
-                "abiFilters" : [ "armeabi-v7a", "arm64-v8a", "x86" ]
+                "abiFilters" : [ "armeabi-v7a", "arm64-v8a", "x86" ],
+                "usesCleartextTraffic" : true
             },
             "ios" : {
                 "dSYMs" : false
