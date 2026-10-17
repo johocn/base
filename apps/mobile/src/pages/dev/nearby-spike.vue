@@ -18,6 +18,7 @@
     </button>
 
     <view class="stat">
+      <text>本机 IP：{{ localIp }}</text>
       <text>accept 计数：{{ acceptCount }}</text>
       <text>最近活动：{{ lastActivity }}</text>
       <text>当前时间：{{ now }}</text>
@@ -48,6 +49,7 @@ const screenLock = ref(false);
 const cpuLock = ref(false);
 const batteryOk = ref<boolean | null>(null);
 const serverOn = ref(false);
+const localIp = ref('查询中…');
 const acceptCount = ref(0);
 const lastActivity = ref('—');
 const now = ref('—');
@@ -212,10 +214,12 @@ function pollAccept() {
   pollBusy = true;
   try {
     const sock = server.accept();
+    // plus bridge 对 soTimeout 空转返回 null（不抛超时异常），静默跳过
+    if (!sock) return;
     log('accepted');
     serveSocket(sock);
   } catch {
-    // soTimeout 超时：正常轮询空转
+    // 真超时异常（部分内核行为）：正常轮询空转
   } finally {
     pollBusy = false;
   }
@@ -239,6 +243,13 @@ function stopServer() {
 clockTimer = setInterval(() => {
   now.value = new Date().toLocaleTimeString();
 }, 1000);
+
+try {
+  const ip = plusAny().networkinfo.getCurrentIPAddress();
+  localIp.value = ip || '未获取到（检查 Wi-Fi/热点）';
+} catch {
+  localIp.value = 'plus.networkinfo 不可用';
+}
 
 onUnmounted(() => {
   stopServer();
