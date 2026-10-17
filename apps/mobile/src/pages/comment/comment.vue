@@ -16,7 +16,7 @@
         @click="pickKind(k.key)"
       >{{ k.label }}</text>
     </scroll-view>
-    <input v-model="itemQuery" class="item-search" placeholder="搜索条目标题" />
+    <input v-model="commentKw" class="item-search" placeholder="搜索评论内容" />
     <scroll-view class="picker" scroll-x>
       <text
         v-for="t in visibleTargetChips"
@@ -51,6 +51,7 @@
       <text v-if="error" class="act" @click="reload">重试</text>
       <text v-if="error && pending.length > 0" class="hint">离线，仅显示待发送</text>
       <text v-if="!error && !loading && list.length === 0" class="hint">还没有评论</text>
+      <text v-else-if="!error && !loading && list.length > 0 && tree.length === 0" class="hint">没搜到</text>
 
       <view v-for="floor in tree" :key="floor.item.eventId" class="cmt-floor">
         <view class="cmt-head">
@@ -159,14 +160,15 @@ const opts = ref<CommentOptions | null>(null);
 const unconfigured = ref(false);
 const items = ref<ItemRow[]>([]);
 const target = ref('');
-/** 两级过滤（#80 §4.1）：类型 chips + 有评论条目搜索 chips */
+/** 两级过滤（#80 §4.1）：类型 chips + 有评论条目 chips 只是缩小范围；关键词只搜评论正文 */
 const KIND_CHIPS = [
   { key: 'course', label: '课程' },
   { key: 'lesson', label: '课时' },
   { key: 'article', label: '文章' },
 ] as const;
 const kindFilter = ref('');
-const itemQuery = ref('');
+/** 评论搜索关键字：匹配评论正文，与 chips 缩小范围叠加 */
+const commentKw = ref('');
 const targetRows = ref<CommentTargetRow[]>([]);
 const targetError = ref(false);
 const targetLoading = ref(false);
@@ -176,13 +178,10 @@ const targetMap = computed<Record<string, CommentTargetRow>>(() => {
   for (const t of targetRows.value) m[t.targetId] = t;
   return m;
 });
-/** 类型 + 标题关键字过滤后的条目 chips（只列有评论的条目，聚合接口一次到位） */
-const visibleTargetChips = computed(() => {
-  const kw = itemQuery.value.trim();
-  return targetRows.value
-    .filter((t) => kindFilter.value === '' || t.kind === kindFilter.value)
-    .filter((t) => kw === '' || (t.title || t.targetId).includes(kw));
-});
+/** 类型过滤后的条目 chips（只列有评论的条目，聚合接口一次到位）；chips 不受搜索关键词影响 */
+const visibleTargetChips = computed(() =>
+  targetRows.value.filter((t) => kindFilter.value === '' || t.kind === kindFilter.value),
+);
 const list = ref<Row[]>([]);
 const nextCursor = ref<string | null>(null);
 const error = ref('');
@@ -203,7 +202,12 @@ const REPORT_LABEL: Record<ReportReason, string> = {
 };
 
 /** 楼中楼：扁平投影 → 楼层根（含子回复）纯本地派生，零网络 */
-const tree = computed<CommentTreeNode<Row>[]>(() => buildCommentTree(list.value));
+/** 楼层树：搜索关键词只过滤评论正文，命中的回复降级为楼层根显示（buildCommentTree 孤儿规则） */
+const tree = computed<CommentTreeNode<Row>[]>(() => {
+  const kw = commentKw.value.trim();
+  const rows = kw === '' ? list.value : list.value.filter((r) => r.text.includes(kw));
+  return buildCommentTree(rows);
+});
 /** 昵称三级降级（名册 → profile 补查 → id[:8] 回退）；跨分页累积 */
 const { authorName, loadNames } = useActorNames();
 
