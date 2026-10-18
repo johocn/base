@@ -41,8 +41,10 @@
     <navigator url="/pages/favorite/favorite" class="link">我的收藏</navigator>
     <navigator url="/pages/help/help" class="link">使用帮助</navigator>
     <navigator url="/pages/setting/setting" class="link">设置</navigator>
-    <!-- R2 spike 临时入口：保活验证完成后随 pages/dev/nearby-spike 一并删除 -->
-    <navigator url="/pages/dev/nearby-spike" class="link">R2保活验证（临时）</navigator>
+    <!-- 近场互传（#82 一期）：源端分享（Android）/ 接收端（Android+iOS）；断网互传，源端须亮屏插电 -->
+    <text class="group">近场互传</text>
+    <navigator url="/pages/mesh/share" class="link">近场分享（做热点源）</navigator>
+    <navigator url="/pages/mesh/receive" class="link">近场接收（扫码/配对码）</navigator>
   </view>
 </template>
 
