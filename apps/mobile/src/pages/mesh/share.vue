@@ -3,10 +3,11 @@
     <text class="title">近场分享（源端）</text>
 
     <view class="field">
-      <text class="label">节点签名私钥（BASE_SIGN_KEY，64 位 hex，部署者录入一次）</text>
-      <input v-model="seedInput" class="input" password placeholder="签名种子 hex64" />
-      <button size="mini" class="btn" @click="saveKey">保存私钥</button>
-      <text v-if="signKey" class="meta">node_id：{{ signKey.nodeId }}</text>
+      <text class="label">签名口令（≥8 位；部署者可直接粘贴 64 位 hex 节点私钥）</text>
+      <input v-model="seedInput" class="input" password placeholder="至少 8 位口令" />
+      <button size="mini" class="btn" @click="saveKey">生成并保存</button>
+      <text class="meta">口令 + 本机设备号经 Argon2id 派生签名种子，同一设备同一口令可复现；生成约需数秒。</text>
+      <text v-if="signKey" class="meta">node_id：{{ signKey.nodeId }}（{{ signKey.derived ? '口令派生' : '节点私钥' }}）</text>
     </view>
 
     <view class="field row">
@@ -41,7 +42,7 @@ import { decodeUtf8 } from '@base/core-ts/sync';
 import { signMeshCatalog, utf8 } from '@base/protocol-ts';
 import { ingestGossip, outgoingGossip } from '../../mesh/gossip-engine';
 import { MESH_PORT, startMeshServer, type MeshRouteHandler, type MeshServerHandle } from '../../mesh/nio-server';
-import { loadMeshSignKey, saveMeshSignKey, type MeshSignKey } from '../../mesh/sign-key';
+import { derivedTlsFingerprint, loadMeshSignKey, saveMeshSignKey, type MeshSignKey } from '../../mesh/sign-key';
 import { buildShareCode, createShareTokenBox, shareExpiresAt } from '../../mesh/share';
 
 function plusAny(): any {
@@ -107,13 +108,23 @@ async function loadKey(): Promise<void> {
 }
 
 async function saveKey(): Promise<void> {
+  const raw = seedInput.value.trim();
+  if (raw === '') {
+    uni.showToast({ title: '请输入口令或 64 位 hex 私钥', icon: 'none' });
+    return;
+  }
+  uni.showLoading({ title: '生成签名种子…' });
+  // 派生为同步 CPU 计算（数秒）：先让 loading 渲染一帧再阻塞
+  await new Promise((resolve) => setTimeout(resolve, 30));
   try {
     const { opts } = await bootstrap();
-    signKey.value = await saveMeshSignKey(opts.adapters.storage, seedInput.value.trim());
+    signKey.value = await saveMeshSignKey(opts.adapters.storage, raw);
     seedInput.value = '';
-    pushLog(`签名私钥已保存，node_id=${signKey.value.nodeId}`);
+    pushLog(`签名私钥已保存（${signKey.value.derived ? '口令派生' : '节点私钥'}），node_id=${signKey.value.nodeId}`);
   } catch (e) {
     uni.showToast({ title: (e as Error).message, icon: 'none' });
+  } finally {
+    uni.hideLoading();
   }
 }
 
@@ -143,10 +154,26 @@ function checkBattery(): Promise<BatteryInfo | null> {
 
 async function readLocalIp(): Promise<string> {
   try {
-    return String(plusAny()?.networkinfo?.getCurrentIPAddress?.() ?? '');
+    const ip = String(plusAny()?.networkinfo?.getCurrentIPAddress?.() ?? '');
+    if (ip) return ip;
   } catch {
-    return '';
+    /* 落到 WifiManager */
   }
+  // plus.networkinfo 在新 Android 上常返回空：用 WifiManager 取当前 Wi-Fi 地址（小端 int）
+  try {
+    const plus = plusAny();
+    const main = plus.android.runtimeMainActivity();
+    const Context = plus.android.importClass('android.content.Context');
+    plus.android.importClass('android.net.wifi.WifiManager');
+    const wm = main.getSystemService(Context.WIFI_SERVICE);
+    const raw = Number(wm.getConnectionInfo().getIpAddress());
+    if (Number.isFinite(raw) && raw !== 0) {
+      return [raw & 255, (raw >> 8) & 255, (raw >> 16) & 255, (raw >>> 24) & 255].join('.');
+    }
+  } catch {
+    /* 无 Wi-Fi / 无权限 */
+  }
+  return '';
 }
 
 function refreshShareCode(): void {
@@ -187,11 +214,14 @@ async function startShare(): Promise<void> {
   localIp.value = ip;
   const { repo } = await bootstrap();
   shareUrl = (await repo.getConfig('node_base_url')) ?? '';
-  const anchor = await repo.getNode(sign.nodeId);
-  shareTls = anchor?.tlsFingerprint ?? '';
-  if (!shareUrl || !shareTls) {
-    pushLog('警告：缺少 node_base_url 或本节点锚点（tls_fingerprint），接收端将拒收配对码');
+  if (!shareUrl) {
+    uni.showToast({ title: '请先在设置里填写节点地址', icon: 'none' });
+    return;
   }
+  const anchor = await repo.getNode(sign.nodeId);
+  // 本机通常没有该 node_id 的锚点行：tls_fingerprint 按公钥确定性生成（接收端只落库不校验，
+  // mesh 明文传输，真锚是 sign_pubkey TOFU），否则配对码缺锚被 parseNodeEnroll 拒收
+  shareTls = anchor?.tlsFingerprint || derivedTlsFingerprint(sign.pubHex);
   gossipStored.value = 0;
   gossipRejected.value = 0;
   tokenBox.start();

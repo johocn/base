@@ -83,7 +83,8 @@ export function parseNodeEnroll(raw: string): NodeEnrollDoc | null {
   const m = p as Record<string, unknown>;
   if (m.v !== 1 || m.kind !== "base-node-enroll") return null;
   if (typeof m.node_id !== "string" || !isIdentityId(m.node_id)) return null;
-  if (typeof m.url !== "string" || !/^https:\/\/.+/.test(m.url)) return null;
+  // url 允许 http：线上节点按总纲 F1 走明文 HTTP，enroll 只做形态校验不做可达性判断
+  if (typeof m.url !== "string" || !/^https?:\/\/.+/.test(m.url)) return null;
   if (typeof m.sign_pubkey !== "string" || !HEX64.test(m.sign_pubkey)) return null;
   if (typeof m.tls_fingerprint !== "string" || !HEX64.test(m.tls_fingerprint)) return null;
   if (typeof m.expires_at !== "string" || !ISO_RE.test(m.expires_at)) return null;

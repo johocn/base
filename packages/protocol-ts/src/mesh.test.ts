@@ -54,6 +54,12 @@ describe("base-node-enroll", () => {
   it("合法 + 带 token 通过", () => {
     expect(parseNodeEnroll(JSON.stringify(ok))?.node_id).toBe(NODE_ID);
   });
+  it("明文 HTTP url 通过（线上部署按 F1 走 http）", () => {
+    expect(parseNodeEnroll(JSON.stringify({ ...ok, url: "http://118.190.217.242" }))?.url).toBe("http://118.190.217.242");
+  });
+  it("缺协议头的 url 拒收", () => {
+    expect(parseNodeEnroll(JSON.stringify({ ...ok, url: "node.example.com" }))).toBeNull();
+  });
   it("缺 tls_fingerprint 拒收（双锚缺一不收）", () => {
     const { tls_fingerprint: _drop, ...rest } = ok;
     expect(parseNodeEnroll(JSON.stringify(rest))).toBeNull();
