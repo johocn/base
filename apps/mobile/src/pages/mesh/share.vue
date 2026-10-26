@@ -19,7 +19,9 @@
     <text class="meta">本机 IP：{{ localIp || '未获取' }}　端口：{{ sharing ? MESH_PORT : '-' }}</text>
 
     <view v-if="sharing" class="field">
-      <text class="label">配对码（token 每 30 分钟自动续签，续签后请重新复制给接收端）</text>
+      <text class="label">配对码（token 每 30 分钟自动续签，续签后二维码与配对码同步刷新）</text>
+      <image v-if="qrDataUrl" class="qr" :src="qrDataUrl" mode="widthFix" />
+      <text class="meta">接收端进「近场接收」→ 点「扫码」扫上面二维码；也可复制下面的配对码粘贴。</text>
       <textarea :value="shareCode" class="code" :maxlength="-1" disabled auto-height />
       <button size="mini" class="btn" @click="copyCode">复制配对码</button>
     </view>
@@ -34,6 +36,7 @@
 
 <script setup lang="ts">
 import { onUnmounted, ref } from 'vue';
+import qrcode from 'qrcode-generator';
 
 import { bootstrap } from '../../platform';
 import { buildMeshCatalogEntries } from '@base/core-ts';
@@ -58,6 +61,7 @@ const seedInput = ref('');
 const sharing = ref(false);
 const screenLock = ref(true);
 const shareCode = ref('');
+const qrDataUrl = ref('');
 const localIp = ref('');
 const activeConns = ref(0);
 const gossipStored = ref(0);
@@ -152,14 +156,49 @@ function checkBattery(): Promise<BatteryInfo | null> {
   });
 }
 
+/** 枚举网卡取 IPv4（覆盖 Wi-Fi 与热点 AP 模式；WifiManager 在 AP 模式不报地址）。 */
+function interfaceIp(): string {
+  try {
+    const plus = plusAny();
+    if (!plus?.android) return '';
+    const NetworkInterface = plus.android.importClass('java.net.NetworkInterface');
+    const Collections = plus.android.importClass('java.util.Collections');
+    const ifaces = Collections.list(NetworkInterface.getNetworkInterfaces());
+    const found: string[] = [];
+    for (let i = 0; i < ifaces.size(); i += 1) {
+      const ni = ifaces.get(i);
+      try {
+        if (ni.isLoopback() || !ni.isUp()) continue;
+      } catch {
+        continue;
+      }
+      const addrs = Collections.list(ni.getInetAddresses());
+      for (let j = 0; j < addrs.size(); j += 1) {
+        const host = String(addrs.get(j).getHostAddress() ?? '');
+        if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) && !host.startsWith('127.')) found.push(host);
+      }
+    }
+    const rank = (ip: string): number =>
+      ip.startsWith('192.168.') ? 0 : ip.startsWith('10.') ? 1 : /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ? 2 : 3;
+    found.sort((a, b) => rank(a) - rank(b));
+    return found[0] ?? '';
+  } catch {
+    return '';
+  }
+}
+
 async function readLocalIp(): Promise<string> {
+  // 1) 网卡枚举：热点/同 Wi-Fi 都能拿到（192.168.x 优先）
+  const lan = interfaceIp();
+  if (lan) return lan;
+  // 2) plus.networkinfo
   try {
     const ip = String(plusAny()?.networkinfo?.getCurrentIPAddress?.() ?? '');
     if (ip) return ip;
   } catch {
     /* 落到 WifiManager */
   }
-  // plus.networkinfo 在新 Android 上常返回空：用 WifiManager 取当前 Wi-Fi 地址（小端 int）
+  // 3) WifiManager（仅普通 Wi-Fi 连接态有效，小端 int）
   try {
     const plus = plusAny();
     const main = plus.android.runtimeMainActivity();
@@ -189,6 +228,15 @@ function refreshShareCode(): void {
     port: MESH_PORT,
     expiresAt: shareExpiresAt(),
   });
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(shareCode.value);
+    qr.make();
+    qrDataUrl.value = qr.createDataURL(5, 8);
+  } catch {
+    qrDataUrl.value = '';
+    pushLog('二维码生成失败，请用复制配对码方式');
+  }
 }
 
 async function startShare(): Promise<void> {
@@ -208,7 +256,11 @@ async function startShare(): Promise<void> {
   }
   const ip = await readLocalIp();
   if (!ip) {
-    uni.showToast({ title: '无法获取本机 IP，请检查网络', icon: 'none' });
+    uni.showModal({
+      title: '未获取到局域网 IP',
+      content: '源端必须连 Wi-Fi，或先在系统设置里开启「个人热点」并让接收端连入。纯移动数据网络没有可供接收端访问的局域网地址。',
+      showCancel: false,
+    });
     return;
   }
   localIp.value = ip;
@@ -429,6 +481,11 @@ void loadKey();
   border-radius: 8rpx;
   padding: 12rpx;
   margin-bottom: 12rpx;
+}
+.qr {
+  display: block;
+  width: 420rpx;
+  margin: 12rpx auto;
 }
 .code {
   border: 1rpx solid #ddd;
