@@ -15,8 +15,15 @@
       <switch :checked="screenLock" @change="onLockChange" />
     </view>
 
+    <view class="field">
+      <text class="label">本机局域网 IP（自动获取失败时手动填写；热点通常为 192.168.43.1）</text>
+      <input v-model="manualIp" class="input" placeholder="如 192.168.43.1" />
+      <button size="mini" class="btn" @click="redetectIp">重新自动获取</button>
+      <text class="meta">当前使用：{{ effectiveIp() || '未获取' }}　端口：{{ sharing ? MESH_PORT : '-' }}</text>
+      <text v-if="netDiag" class="meta">网络诊断：{{ netDiag }}</text>
+    </view>
+
     <button size="mini" class="btn" @click="onToggleShare">{{ sharing ? '停止分享' : '开始分享' }}</button>
-    <text class="meta">本机 IP：{{ localIp || '未获取' }}　端口：{{ sharing ? MESH_PORT : '-' }}</text>
 
     <view v-if="sharing" class="field">
       <text class="label">配对码（token 每 30 分钟自动续签，续签后二维码与配对码同步刷新）</text>
@@ -63,6 +70,8 @@ const screenLock = ref(true);
 const shareCode = ref('');
 const qrDataUrl = ref('');
 const localIp = ref('');
+const manualIp = ref('');
+const netDiag = ref('');
 const activeConns = ref(0);
 const gossipStored = ref(0);
 const gossipRejected = ref(0);
@@ -156,7 +165,58 @@ function checkBattery(): Promise<BatteryInfo | null> {
   });
 }
 
-/** 枚举网卡取 IPv4（覆盖 Wi-Fi 与热点 AP 模式；WifiManager 在 AP 模式不报地址）。 */
+let diagParts: string[] = [];
+function diag(msg: string): void {
+  diagParts.push(msg);
+}
+
+function isIpv4(ip: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !ip.startsWith('127.');
+}
+
+/** UDP connect 不发包，只让内核按路由选出口网卡并回报本机地址（Wi-Fi 与热点 AP 均适用）。 */
+function udpProbe(target: string): string {
+  let socket: any = null;
+  try {
+    const plus = plusAny();
+    if (!plus?.android) return '';
+    const DatagramSocket = plus.android.importClass('java.net.DatagramSocket');
+    const InetAddress = plus.android.importClass('java.net.InetAddress');
+    socket = new DatagramSocket();
+    socket.connect(InetAddress.getByName(target), 80);
+    const ip = String(socket.getLocalAddress().getHostAddress());
+    if (isIpv4(ip)) return ip;
+    diag(`udp:${target}=空`);
+    return '';
+  } catch (e) {
+    diag(`udp:${target}=×`);
+    return '';
+  } finally {
+    try {
+      socket?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Wi-Fi 网关（热点 AP 模式下通常为 0） */
+function wifiGateway(): string {
+  try {
+    const plus = plusAny();
+    const main = plus.android.runtimeMainActivity();
+    const Context = plus.android.importClass('android.content.Context');
+    plus.android.importClass('android.net.wifi.WifiManager');
+    const wm = main.getSystemService(Context.WIFI_SERVICE);
+    const raw = Number(wm.getDhcpInfo().gateway);
+    if (!Number.isFinite(raw) || raw === 0) return '';
+    return [raw & 255, (raw >> 8) & 255, (raw >> 16) & 255, (raw >>> 24) & 255].join('.');
+  } catch {
+    return '';
+  }
+}
+
+/** 枚举网卡取 IPv4（覆盖 Wi-Fi / 热点 / 以太网；热点 AP 模式 WifiManager 不报地址）。 */
 function interfaceIp(): string {
   try {
     const plus = plusAny();
@@ -169,36 +229,57 @@ function interfaceIp(): string {
       const ni = ifaces.get(i);
       try {
         if (ni.isLoopback() || !ni.isUp()) continue;
+        const addrs = Collections.list(ni.getInetAddresses());
+        for (let j = 0; j < addrs.size(); j += 1) {
+          const host = String(addrs.get(j).getHostAddress() ?? '');
+          if (isIpv4(host)) found.push(host);
+        }
       } catch {
-        continue;
-      }
-      const addrs = Collections.list(ni.getInetAddresses());
-      for (let j = 0; j < addrs.size(); j += 1) {
-        const host = String(addrs.get(j).getHostAddress() ?? '');
-        if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) && !host.startsWith('127.')) found.push(host);
+        diag(`ni#${i}=×`);
       }
     }
+    if (found.length === 0) {
+      diag('网卡枚举=空');
+      return '';
+    }
+    diag(`网卡枚举=${found.join('/')}`);
     const rank = (ip: string): number =>
       ip.startsWith('192.168.') ? 0 : ip.startsWith('10.') ? 1 : /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ? 2 : 3;
     found.sort((a, b) => rank(a) - rank(b));
-    return found[0] ?? '';
-  } catch {
+    return found[0];
+  } catch (e) {
+    diag('网卡枚举=×');
     return '';
   }
 }
 
-async function readLocalIp(): Promise<string> {
-  // 1) 网卡枚举：热点/同 Wi-Fi 都能拿到（192.168.x 优先）
+/** 依次尝试：网关 UDP → 常见热点网段 UDP → 网卡枚举 → plus.networkinfo → WifiManager */
+async function detectIp(): Promise<string> {
+  diagParts = [];
+  const gw = wifiGateway();
+  if (gw) diag(`网关=${gw}`);
+  const targets: string[] = [];
+  if (gw) targets.push(gw);
+  for (const t of ['192.168.43.1', '192.168.1.1', '192.168.0.1']) if (!targets.includes(t)) targets.push(t);
+  for (const t of targets) {
+    const ip = udpProbe(t);
+    if (ip) {
+      diag(`udp:${t}=✓`);
+      return finishIp(ip);
+    }
+  }
   const lan = interfaceIp();
-  if (lan) return lan;
-  // 2) plus.networkinfo
+  if (lan) return finishIp(lan);
   try {
     const ip = String(plusAny()?.networkinfo?.getCurrentIPAddress?.() ?? '');
-    if (ip) return ip;
+    if (isIpv4(ip)) {
+      diag('networkinfo=✓');
+      return finishIp(ip);
+    }
+    diag('networkinfo=空');
   } catch {
-    /* 落到 WifiManager */
+    diag('networkinfo=×');
   }
-  // 3) WifiManager（仅普通 Wi-Fi 连接态有效，小端 int）
   try {
     const plus = plusAny();
     const main = plus.android.runtimeMainActivity();
@@ -207,12 +288,26 @@ async function readLocalIp(): Promise<string> {
     const wm = main.getSystemService(Context.WIFI_SERVICE);
     const raw = Number(wm.getConnectionInfo().getIpAddress());
     if (Number.isFinite(raw) && raw !== 0) {
-      return [raw & 255, (raw >> 8) & 255, (raw >> 16) & 255, (raw >>> 24) & 255].join('.');
+      diag('wifiManager=✓');
+      return finishIp([raw & 255, (raw >> 8) & 255, (raw >> 16) & 255, (raw >>> 24) & 255].join('.'));
     }
+    diag('wifiManager=空');
   } catch {
-    /* 无 Wi-Fi / 无权限 */
+    diag('wifiManager=×');
   }
+  netDiag.value = diagParts.join(' ');
+  localIp.value = '';
   return '';
+}
+
+function finishIp(ip: string): string {
+  localIp.value = ip;
+  netDiag.value = diagParts.join(' ');
+  return ip;
+}
+
+function effectiveIp(): string {
+  return manualIp.value.trim() || localIp.value;
 }
 
 function refreshShareCode(): void {
@@ -224,7 +319,7 @@ function refreshShareCode(): void {
     signPubkey: sign.pubHex,
     tlsFingerprint: shareTls,
     token: tokenBox.token(),
-    ip: localIp.value,
+    ip: effectiveIp(),
     port: MESH_PORT,
     expiresAt: shareExpiresAt(),
   });
@@ -254,16 +349,20 @@ async function startShare(): Promise<void> {
     uni.showToast({ title: `电量 ${bat.level}%，建议保持插电`, icon: 'none' });
     pushLog(`电量偏低（${bat.level}%），未阻塞分享`);
   }
-  const ip = await readLocalIp();
-  if (!ip) {
+  const manual = manualIp.value.trim();
+  if (manual && !/^\d{1,3}(\.\d{1,3}){3}$/.test(manual)) {
+    uni.showToast({ title: '手动填写的 IP 格式不对', icon: 'none' });
+    return;
+  }
+  const detected = manual ? manual : await detectIp();
+  if (!detected) {
     uni.showModal({
-      title: '未获取到局域网 IP',
-      content: '源端必须连 Wi-Fi，或先在系统设置里开启「个人热点」并让接收端连入。纯移动数据网络没有可供接收端访问的局域网地址。',
+      title: '未自动获取到局域网 IP',
+      content: `自动检测失败（${netDiag.value || '无诊断信息'}）。\n请在上方「本机局域网 IP」手动填写：热点通常是 192.168.43.1，家用 Wi-Fi 可在系统 WLAN 详情里查看。`,
       showCancel: false,
     });
     return;
   }
-  localIp.value = ip;
   const { repo } = await bootstrap();
   shareUrl = (await repo.getConfig('node_base_url')) ?? '';
   if (!shareUrl) {
@@ -293,7 +392,7 @@ async function startShare(): Promise<void> {
   sharing.value = true;
   applyWakelock();
   refreshShareCode();
-  pushLog(`分享中 http://${ip}:${MESH_PORT}`);
+  pushLog(`分享中 http://${detected}:${MESH_PORT}`);
 }
 
 function stopShare(): void {
@@ -304,6 +403,13 @@ function stopShare(): void {
   activeConns.value = 0;
   applyWakelock();
   pushLog('已停止分享');
+}
+
+async function redetectIp(): Promise<void> {
+  manualIp.value = '';
+  const ip = await detectIp();
+  pushLog(ip ? `自动检测到局域网 IP：${ip}` : `自动检测失败：${netDiag.value || '无诊断信息'}`);
+  if (!ip) uni.showToast({ title: '仍未取到，请手动填写 IP', icon: 'none' });
 }
 
 function onToggleShare(): void {
