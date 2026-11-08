@@ -15,6 +15,7 @@
     </view>
 
     <text v-if="groups.length === 0" class="empty">还没有圈子。可以新建一个，或粘贴伙伴给的邀请码入组。</text>
+    <text class="hint">圈子不随「近场接收」扫码同步——同步只带公开内容，圈子请用邀请码，或对开放圈子粘贴 32 位 ID 自助加入。</text>
     <!-- 卡片的 flex 必须落在 navigator 内侧：H5 端 navigator 会把子节点再包一层 `<a>`，
          直接给 navigator 加 display:flex 时它只剩这一个子元素，头像与正文会被竖排。 -->
     <navigator
@@ -192,6 +193,7 @@ onShow(() => {
 .t { display: block; font-size: var(--fs-body); }
 .meta { display: block; color: #888888; font-size: var(--fs-annotate); margin-top: 4px; }
 .empty { display: block; color: #999999; font-size: var(--fs-annotate); padding: 6px 0; line-height: 1.7; }
+.hint { display: block; color: #8a6d3b; font-size: var(--fs-annotate); padding: 4px 0 10px; line-height: 1.7; }
 .error { display: block; color: #c53030; font-size: var(--fs-annotate); margin-bottom: 8px; }
 .notice { display: block; color: #b7791f; font-size: var(--fs-annotate); margin-bottom: 8px; }
 </style>

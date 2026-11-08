@@ -17,6 +17,11 @@
       <text v-if="total > 0" class="meta">块下载：{{ done }}/{{ total }}（失败 {{ failed }}）</text>
       <text v-for="(l, i) in logs" :key="i" class="log">{{ l }}</text>
     </view>
+
+    <view class="field">
+      <text class="note">近场同步只带公开内容（课程/文章/评论），<b>圈子不随码同步</b>：请在「圈子」页用邀请码加入，或对开放圈子粘贴 32 位圈子 ID 自助加入。</text>
+      <button size="mini" class="btn" @click="goCircle">去圈子页</button>
+    </view>
   </view>
 </template>
 
@@ -43,6 +48,10 @@ const done = ref(0);
 const total = ref(0);
 const failed = ref(0);
 const logs = ref<string[]>([]);
+
+function goCircle(): void {
+  uni.navigateTo({ url: '/pages/circle/circle' });
+}
 
 /** gossip 交换循环状态：配对成功后每 30s 一轮（推送本机所发 + 拉取源端所发），卸载时清理 */
 let meshTarget: { baseUrl: string; token: string } | null = null;
@@ -310,6 +319,7 @@ async function onSync(): Promise<void> {
 
     statusLine.value = failed.value > 0 ? `完成（${failed.value} 块失败）` : '完成';
     uni.showToast({ title: failed.value > 0 ? `同步完成，${failed.value} 块失败` : '同步完成', icon: 'none' });
+    pushLog('提示：圈子不随码同步，需邀请码或圈子 ID 加入');
     // 回连代报（spec §4.3）：同步成功的分支上追加，不阻塞 UI、失败静默
     void flushRelay(opts).catch(() => {});
   } catch (e) {
@@ -362,5 +372,12 @@ async function onSync(): Promise<void> {
   display: block;
   font-size: 22rpx;
   color: #999;
+}
+.note {
+  display: block;
+  font-size: 24rpx;
+  color: #8a6d3b;
+  line-height: 1.7;
+  margin-bottom: 8rpx;
 }
 </style>
