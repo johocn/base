@@ -76,10 +76,10 @@
 
 **做**：
 1. 发布一致性校验一条命令：**落地页下载链接、`/v1/release` 版本与 `min_version`、APK 文件名与 sha256** 三者互校，任一处不一致即非零退出。
-2. 版本号强制校验：`pages.json` 与 `manifest.json` 的 `versionName` / `versionCode` 必须一致且单调递增，脚本校验。
+2. 版本号真源收敛：唯一真源 = `apps/mobile/src/manifest.json` 的 `versionName` / `versionCode`（`pages.json` 无版本字段）。脚本校验：APK 文件名必须为 `base-<versionName>-<versionCode>.apk`、线上落地页与 `/v1/release` 取到同一版本、`versionCode` 不低于线上版本。
 3. 生产线切版：`release.json` 与落地页同步到当前开发版（0.21.11 / 54），验收包与生产包不再并行。
 
-**闸门**：脚本在「故意改错其中一处」时能报错；生产线与开发线版本差 ≤ 1。
+**闸门**：脚本在「故意改错其中一处」时能报错；切版后本地与线上版本差为 0。
 
 ### 3.2 批次二 · 收口（P1）
 
