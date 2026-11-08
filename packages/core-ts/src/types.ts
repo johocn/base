@@ -163,6 +163,11 @@ export interface GroupRow {
   rosterRev: number;
   /** 完整名单快照（JSON 数组文本，元素为 32 hex 身份 id） */
   memberIdsJson: string;
+  /**
+   * 建圈/入圈时留存的邀请码原文（`base1:...`），供随时查看与复制。
+   * 存量行（老 DB 无该列）读出为空串。
+   */
+  inviteCode?: string;
   /** 入组时刻 ISO8601 */
   joinedAt: string;
 }

@@ -212,6 +212,8 @@ async function saveInvite(o: GroupOptions, inv: GroupInvite): Promise<GroupRow> 
     epoch: inv.epoch,
     encrypted: inv.encrypted ?? row.encrypted,
     rosterRev: Math.max(inv.rosterRev ?? 0, row.rosterRev),
+    // 留存邀请码原文（encodeInvite 对同字段确定性，等价于入圈时粘的那串）
+    inviteCode: encodeInvite(inv),
   };
   await o.repo.saveGroup(merged);
   return merged;
@@ -339,14 +341,6 @@ export async function createGroup(
     keyCipher: await sealKeyCipher(o.adapters.storage, hexToBytes(groupKeyHex)),
     createdAt: now,
   });
-  await o.repo.saveGroup(group);
-
-  const { eventId, wire } = buildEventWire(
-    ident,
-    'group.v1',
-    rosterBody(groupId, 1, [ident.id], opts.name, encrypted),
-  );
-  const { queued } = await submitWire(o, { eventId, wire, targetId: `group/${groupId}`, queueText: opts.name });
 
   const inviteCode = encodeInvite(
     signInvite(ident, {
@@ -364,6 +358,16 @@ export async function createGroup(
       rosterRev: 1,
     }),
   );
+  group.inviteCode = inviteCode;
+  await o.repo.saveGroup(group);
+
+  const { eventId, wire } = buildEventWire(
+    ident,
+    'group.v1',
+    rosterBody(groupId, 1, [ident.id], opts.name, encrypted),
+  );
+  const { queued } = await submitWire(o, { eventId, wire, targetId: `group/${groupId}`, queueText: opts.name });
+
   return { group, inviteCode, queued };
 }
 

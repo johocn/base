@@ -174,6 +174,8 @@ describe('group', () => {
     expect(created.group.groupId).toMatch(/^[0-9a-f]{32}$/); // 16 字节，与 event_id 同形
     expect(created.group.encrypted).toBe(1);
     expect(created.group.rosterRev).toBe(1);
+    // 邀请码随建圈落库（页面随时可查看/复制，不再只靠一次性剪贴板）
+    expect((await a.repo.getGroup(created.group.groupId))?.inviteCode).toBe(created.inviteCode);
 
     const b = fixture();
     gateOffline(b.o); // 入圈**全程零网络**
@@ -184,6 +186,8 @@ describe('group', () => {
     expect(joined.group.epoch).toBe(1);
     expect(joined.group.creatorId).toBe(created.group.creatorId);
     expect(joined.group.encrypted).toBe(1);
+    // 入圈同样留存邀请码原文（同字段确定性编码）
+    expect((await b.repo.getGroup(created.group.groupId))?.inviteCode).toBe(created.inviteCode);
 
     const ka = await a.repo.listGroupKeys(created.group.groupId);
     const kb = await b.repo.listGroupKeys(created.group.groupId);

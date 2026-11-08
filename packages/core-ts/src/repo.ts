@@ -253,6 +253,7 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS groups(
      group_id TEXT PRIMARY KEY, name TEXT NOT NULL, creator_id TEXT NOT NULL, epoch INTEGER NOT NULL,
      encrypted INTEGER NOT NULL DEFAULT 1, roster_rev INTEGER NOT NULL DEFAULT 0,
+     invite_code TEXT NOT NULL DEFAULT '',
      member_ids_json TEXT NOT NULL, joined_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS group_keys(
      group_id TEXT NOT NULL, epoch INTEGER NOT NULL, key_cipher TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -298,6 +299,9 @@ export async function ensureGroupColumns(db: LocalDb): Promise<void> {
   }
   if (!cols.has('roster_rev')) {
     await db.execute(`ALTER TABLE groups ADD COLUMN roster_rev INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!cols.has('invite_code')) {
+    await db.execute(`ALTER TABLE groups ADD COLUMN invite_code TEXT NOT NULL DEFAULT ''`);
   }
 }
 
@@ -741,23 +745,25 @@ export class SqlRepo implements LocalRepo {
   }
 
   async saveGroup(row: GroupRow): Promise<void> {
+    // invite_code 只在「本轮带值」时覆盖：名单/epoch 读回刷新（不带码）不能抹掉已留存的邀请码
     await this.db.execute(
-      `INSERT INTO groups(group_id,name,creator_id,epoch,encrypted,roster_rev,member_ids_json,joined_at)
-       VALUES(?,?,?,?,?,?,?,?)
+      `INSERT INTO groups(group_id,name,creator_id,epoch,encrypted,roster_rev,invite_code,member_ids_json,joined_at)
+       VALUES(?,?,?,?,?,?,?,?,?)
        ON CONFLICT(group_id) DO UPDATE SET name=excluded.name,creator_id=excluded.creator_id,
          epoch=excluded.epoch,encrypted=excluded.encrypted,roster_rev=excluded.roster_rev,
+         invite_code=CASE WHEN excluded.invite_code='' THEN groups.invite_code ELSE excluded.invite_code END,
          member_ids_json=excluded.member_ids_json`,
-      [row.groupId, row.name, row.creatorId, row.epoch, row.encrypted, row.rosterRev, row.memberIdsJson, row.joinedAt],
+      [row.groupId, row.name, row.creatorId, row.epoch, row.encrypted, row.rosterRev, row.inviteCode ?? '', row.memberIdsJson, row.joinedAt],
     );
   }
 
   async listGroups(): Promise<GroupRow[]> {
-    const rows = await this.db.select(`SELECT group_id,name,creator_id,epoch,encrypted,roster_rev,member_ids_json,joined_at FROM groups ORDER BY joined_at ASC`);
+    const rows = await this.db.select(`SELECT group_id,name,creator_id,epoch,encrypted,roster_rev,invite_code,member_ids_json,joined_at FROM groups ORDER BY joined_at ASC`);
     return rows.map(toGroupRow);
   }
 
   async getGroup(groupId: string): Promise<GroupRow | null> {
-    const rows = await this.db.select(`SELECT group_id,name,creator_id,epoch,encrypted,roster_rev,member_ids_json,joined_at FROM groups WHERE group_id=?`, [groupId]);
+    const rows = await this.db.select(`SELECT group_id,name,creator_id,epoch,encrypted,roster_rev,invite_code,member_ids_json,joined_at FROM groups WHERE group_id=?`, [groupId]);
     return rows.length > 0 ? toGroupRow(rows[0]) : null;
   }
 
@@ -1144,6 +1150,7 @@ function toGroupRow(r: Record<string, unknown>): GroupRow {
     encrypted: r.encrypted === undefined || r.encrypted === null ? 1 : Number(r.encrypted),
     rosterRev: r.roster_rev === undefined || r.roster_rev === null ? 0 : Number(r.roster_rev),
     memberIdsJson: String(r.member_ids_json ?? '[]'),
+    inviteCode: String(r.invite_code ?? ''),
     joinedAt: String(r.joined_at ?? ''),
   };
 }

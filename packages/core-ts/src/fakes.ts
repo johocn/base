@@ -273,8 +273,9 @@ export class MemoryRepo implements LocalRepo {
 
   async saveGroup(row: GroupRow): Promise<void> {
     const cur = this.groups.get(row.groupId);
-    // joined_at 保留首次值（与 SqlRepo 的 UPDATE 列表一致）
-    this.groups.set(row.groupId, cur ? { ...row, joinedAt: cur.joinedAt } : { ...row });
+    // joined_at 保留首次值；invite_code 只在带值时覆盖（与 SqlRepo 同规则）
+    const inviteCode = row.inviteCode !== undefined && row.inviteCode !== '' ? row.inviteCode : cur?.inviteCode ?? '';
+    this.groups.set(row.groupId, cur ? { ...row, inviteCode, joinedAt: cur.joinedAt } : { ...row, inviteCode });
   }
   async listGroups(): Promise<GroupRow[]> {
     return [...this.groups.values()].sort((a, b) => (a.joinedAt < b.joinedAt ? -1 : a.joinedAt > b.joinedAt ? 1 : 0));

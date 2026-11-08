@@ -14,6 +14,12 @@
       <text class="act" @click="selfJoin">自助加入</text>
     </view>
 
+    <view v-if="createdCode" class="invite">
+      <text class="invite-t">新圈子邀请码（发给要加入的人）</text>
+      <text class="invite-code" selectable>{{ createdCode }}</text>
+      <button size="mini" @click="copyCode(createdCode)">复制邀请码</button>
+    </view>
+
     <text v-if="groups.length === 0" class="empty">还没有圈子。可以新建一个，或粘贴伙伴给的邀请码入组。</text>
     <text class="hint">圈子不随「近场接收」扫码同步——同步只带公开内容，圈子请用邀请码，或对开放圈子粘贴 32 位 ID 自助加入。</text>
     <!-- 卡片的 flex 必须落在 navigator 内侧：H5 端 navigator 会把子节点再包一层 `<a>`，
@@ -28,6 +34,7 @@
         <view class="card-body">
           <text class="t">{{ g.name || '未命名圈子' }}</text>
           <text class="meta">{{ g.encrypted === 1 ? '封闭' : '开放' }} · 成员 {{ memberCount(g.memberIdsJson) }} · epoch {{ g.epoch }}</text>
+          <text class="link" @click.stop="showInvite(g)">邀请码</text>
         </view>
       </view>
     </navigator>
@@ -54,6 +61,31 @@ const opts = ref<GroupOptions | null>(null);
 const groups = ref<GroupRow[]>([]);
 const error = ref('');
 const notice = ref('');
+const createdCode = ref('');
+
+function copyCode(code: string): void {
+  uni.setClipboardData({
+    data: code,
+    success: () => uni.showToast({ title: '邀请码已复制', icon: 'none' }),
+  });
+}
+
+/** 查看邀请码：留存的是建圈/入圈时的原文；老数据没有留存则提示走续期码。 */
+function showInvite(g: GroupRow): void {
+  const code = g.inviteCode ?? '';
+  if (code === '') {
+    uni.showToast({ title: '该圈子没有留存邀请码（旧数据）', icon: 'none' });
+    return;
+  }
+  uni.showModal({
+    title: g.name || '邀请码',
+    content: code,
+    confirmText: '复制',
+    success: (r) => {
+      if (r.confirm) copyCode(code);
+    },
+  });
+}
 
 /** 我参与的圈子：零网络，只读本地 groups 表（册子 §5.5）。 */
 async function load() {
@@ -120,6 +152,7 @@ async function create() {
   if (encrypted === null) return;
   try {
     const r = await createGroup(opts.value, { name: name.trim(), encrypted });
+    createdCode.value = r.inviteCode;
     uni.setClipboardData({ data: r.inviteCode });
     const base = encrypted
       ? '封闭圈子已建好，邀请码已复制（含密钥，请只发给要拉进来的人）'
@@ -194,6 +227,10 @@ onShow(() => {
 .meta { display: block; color: #888888; font-size: var(--fs-annotate); margin-top: 4px; }
 .empty { display: block; color: #999999; font-size: var(--fs-annotate); padding: 6px 0; line-height: 1.7; }
 .hint { display: block; color: #8a6d3b; font-size: var(--fs-annotate); padding: 4px 0 10px; line-height: 1.7; }
+.invite { padding: 10px 0; border-bottom: 1px solid #eeeeee; }
+.invite-t { display: block; color: #2b6cb0; font-size: var(--fs-annotate); margin-bottom: 6px; }
+.invite-code { display: block; color: #444444; font-size: var(--fs-annotate); line-height: 1.6; word-break: break-all; margin-bottom: 8px; }
+.link { display: inline-block; color: #2b6cb0; font-size: var(--fs-annotate); margin-top: 6px; }
 .error { display: block; color: #c53030; font-size: var(--fs-annotate); margin-bottom: 8px; }
 .notice { display: block; color: #b7791f; font-size: var(--fs-annotate); margin-bottom: 8px; }
 </style>
