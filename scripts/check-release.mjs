@@ -3,6 +3,9 @@
 // 任一处不一致即非零退出。零依赖，Node 20 全局 fetch。
 
 import { basename } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_BASE_URL = 'http://118.190.217.242';
 
@@ -70,3 +73,51 @@ export function evaluateChecks({ manifest, landing, release, headSize, localApkS
   }
   return { ok: checks.every((c) => c.ok), checks, expectedApk };
 }
+
+async function getText(fetchImpl, url) {
+  const r = await fetchImpl(url);
+  if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
+  return r.text();
+}
+
+async function getContentLength(fetchImpl, url) {
+  const r = await fetchImpl(url, { method: 'HEAD' });
+  if (!r.ok) return null;
+  const n = Number(r.headers.get('content-length'));
+  return Number.isFinite(n) ? n : null;
+}
+
+export async function runCheck({ fetchImpl, baseUrl = DEFAULT_BASE_URL, manifestText, localApkSha256 }) {
+  const manifest = parseManifest(manifestText);
+  const landing = parseLanding(await getText(fetchImpl, `${baseUrl}/dl/`));
+  const release = parseReleaseDoc(await getText(fetchImpl, `${baseUrl}/v1/release`));
+  const apkFile = landing?.apkFile ?? `base-${manifest.versionName}-${manifest.versionCode}.apk`;
+  const headSize = await getContentLength(fetchImpl, `${baseUrl}/dl/${apkFile}`);
+  return evaluateChecks({ manifest, landing, release, headSize, localApkSha256 });
+}
+
+function argValue(args, name, fallback) {
+  const i = args.indexOf(name);
+  return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback;
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  const manifestPath = argValue(args, '--manifest', 'apps/mobile/src/manifest.json');
+  const apkPath = argValue(args, '--apk', '');
+  const baseUrl = argValue(args, '--base-url', process.env.BASE_URL ?? DEFAULT_BASE_URL);
+
+  const manifestText = await readFile(manifestPath, 'utf8');
+  const localApkSha256 = apkPath
+    ? createHash('sha256').update(await readFile(apkPath)).digest('hex')
+    : undefined;
+
+  const result = await runCheck({ fetchImpl: globalThis.fetch, baseUrl, manifestText, localApkSha256 });
+  for (const c of result.checks) {
+    console.log(`[${c.ok ? 'ok  ' : 'FAIL'}] ${c.id.padEnd(16)} ${c.detail}`);
+  }
+  console.log(result.ok ? '\n发布一致性：通过' : '\n发布一致性：不一致（见上）');
+  process.exitCode = result.ok ? 0 : 1;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) await main();

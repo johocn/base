@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseManifest, parseLanding, parseReleaseDoc, compareVersion, evaluateChecks } from './check-release.mjs';
+import { parseManifest, parseLanding, parseReleaseDoc, compareVersion, evaluateChecks, runCheck } from './check-release.mjs';
 
 test('parseManifest 取 versionName / versionCode', () => {
   const m = parseManifest('{"versionName":"0.21.11","versionCode":54}');
@@ -94,4 +94,43 @@ test('evaluateChecks min_version 高于当前版本即失败', () => {
     headSize: RELEASE.apkSize,
   });
   assert.deepEqual(r.checks.filter((c) => !c.ok).map((c) => c.id), ['min.version']);
+});
+
+function fakeFetch({ landingHtml, releaseJson, size, headStatus = 200 }) {
+  return async (url, init = {}) => {
+    if (init.method === 'HEAD') {
+      return { ok: headStatus === 200, status: headStatus, headers: { get: () => String(size) } };
+    }
+    if (url.endsWith('/dl/')) return { ok: true, status: 200, text: async () => landingHtml };
+    if (url.endsWith('/v1/release')) return { ok: true, status: 200, text: async () => releaseJson };
+    throw new Error(`unexpected ${url}`);
+  };
+}
+
+test('runCheck 四处一致时通过', async () => {
+  const r = await runCheck({
+    fetchImpl: fakeFetch({
+      landingHtml: '<a href=./base-0.21.11-54.apk>下载</a>',
+      releaseJson: JSON.stringify({ payload: { ...RELEASE, version_name: RELEASE.versionName, apk_url: RELEASE.apkUrl, apk_size: RELEASE.apkSize, apk_sha256: RELEASE.apkSha256, min_version_name: RELEASE.minVersionName } }),
+      size: RELEASE.apkSize,
+    }),
+    baseUrl: 'http://x',
+    manifestText: JSON.stringify(MANIFEST),
+  });
+  assert.equal(r.ok, true, JSON.stringify(r.checks.filter((c) => !c.ok)));
+});
+
+test('runCheck 线上仍是旧版时失败并给出可读原因', async () => {
+  const r = await runCheck({
+    fetchImpl: fakeFetch({
+      landingHtml: '<a href=./base-0.21.10-53.apk>下载</a>',
+      releaseJson: JSON.stringify({ payload: { version_name: '0.21.6', apk_url: 'http://x/dl/base-0.21.6.apk', apk_size: 27585454, apk_sha256: 'a'.repeat(64), min_version_name: '0.8.0' } }),
+      size: 27585454,
+    }),
+    baseUrl: 'http://x',
+    manifestText: JSON.stringify(MANIFEST),
+  });
+  assert.equal(r.ok, false);
+  const ids = r.checks.filter((c) => !c.ok).map((c) => c.id);
+  assert.deepEqual(ids, ['landing.version', 'landing.code', 'landing.file', 'release.version', 'release.url']);
 });
