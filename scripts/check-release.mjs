@@ -2,6 +2,8 @@
 // 发布一致性校验：本地 manifest.json ↔ 线上落地页 ↔ /v1/release ↔ APK
 // 任一处不一致即非零退出。零依赖，Node 20 全局 fetch。
 
+import { basename } from 'node:path';
+
 export const DEFAULT_BASE_URL = 'http://118.190.217.242';
 
 export function parseManifest(text) {
@@ -37,4 +39,34 @@ export function compareVersion(a, b) {
     if (x !== y) return x < y ? -1 : 1;
   }
   return 0;
+}
+
+export function evaluateChecks({ manifest, landing, release, headSize, localApkSha256 }) {
+  const expectedApk = `base-${manifest.versionName}-${manifest.versionCode}.apk`;
+  const checks = [];
+  const add = (id, ok, detail) => checks.push({ id, ok, detail });
+
+  add(
+    'manifest.format',
+    /^\d+\.\d+\.\d+$/.test(manifest.versionName) && Number.isInteger(manifest.versionCode) && manifest.versionCode > 0,
+    `本地 ${manifest.versionName} / ${manifest.versionCode}`,
+  );
+  add('landing.present', landing !== null, landing ? `线上落地页 ${landing.apkFile}` : '落地页未找到 base-<版本>-<code>.apk 链接');
+  if (landing) {
+    add('landing.version', landing.versionName === manifest.versionName, `线上 ${landing.versionName} ≠ 本地 ${manifest.versionName}`);
+    add('landing.code', landing.versionCode === manifest.versionCode, `线上 ${landing.versionCode} ≠ 本地 ${manifest.versionCode}`);
+    add('landing.file', landing.apkFile === expectedApk, `线上 ${landing.apkFile} ≠ 期望 ${expectedApk}`);
+  }
+  add('release.version', release.versionName === manifest.versionName, `release ${release.versionName} ≠ 本地 ${manifest.versionName}`);
+  add('release.url', basename(release.apkUrl) === expectedApk, `release ${basename(release.apkUrl)} ≠ 期望 ${expectedApk}`);
+  add('release.size', headSize !== null && release.apkSize === headSize, `HEAD ${headSize ?? '不可用'} ≠ release ${release.apkSize}`);
+  add('min.version', compareVersion(release.minVersionName, manifest.versionName) <= 0, `min ${release.minVersionName} > 当前 ${manifest.versionName}`);
+  if (localApkSha256) {
+    add(
+      'release.sha256',
+      release.apkSha256 === localApkSha256,
+      `release ${release.apkSha256.slice(0, 12)}… ≠ 本地 ${localApkSha256.slice(0, 12)}…`,
+    );
+  }
+  return { ok: checks.every((c) => c.ok), checks, expectedApk };
 }
